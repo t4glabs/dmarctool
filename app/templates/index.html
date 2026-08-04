@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}DMARCTool - Overview{% endblock %}
+{% block content %}
+
+<p class="muted" style="margin-top:0">
+  This tracks whether email sent from your domains is passing authentication checks, and tells you
+  what to do next for each one.
+</p>
+
+<details class="section" style="margin-bottom:1.2rem">
+  <summary style="cursor:pointer; font-weight:600">What do these terms mean?</summary>
+  <ul style="margin:0.7rem 0 0 0; padding-left:1.2rem; font-size:0.88rem;">
+    <li><strong>p=none</strong> -- just watching, nothing is blocked or sent to spam yet.</li>
+    <li><strong>p=quarantine</strong> -- suspicious mail (failing checks) is sent to spam.</li>
+    <li><strong>p=reject</strong> -- suspicious mail is blocked outright, doesn't arrive at all.</li>
+    <li><strong>pct=</strong> -- what percentage of your mail this rule applies to. You normally start low (e.g. 10%) and raise it gradually once you've confirmed your real mail keeps passing.</li>
+    <li><strong>Pass rate</strong> -- the percentage of your mail that's passing authentication (DKIM/SPF). Higher is better; this is what "safe to move forward" is based on.</li>
+    <li><strong>Live DNS vs. Reports</strong> -- "Live DNS" is what's actually published right now; "Reports" is what mail providers have told us they've seen. These can disagree for a few days after you make a change -- that's normal, not necessarily a problem.</li>
+  </ul>
+</details>
+
+<div class="top-actions">
+  <h1>Domains</h1>
+  <div class="formrow">
+    <form action="/ingest" method="post" enctype="multipart/form-data" class="formrow">
+      <div class="field">
+        <label>Add new reports (upload the .zip or .mbox export)</label>
+        <input type="file" name="file" required>
+      </div>
+      <button type="submit">Ingest</button>
+    </form>
+    <form action="/run_checks" method="post">
+      <button type="submit" title="Re-checks live DNS and re-calculates recommendations right now, instead of waiting for the automatic 6-hourly refresh">Refresh now</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid">
+  {% for d in domains %}
+  <div class="card">
+    <h3><a href="/domain/{{ d.name }}">{{ d.name }}</a></h3>
+
+    <div class="row">
+      <span class="label" title="What's actually published in DNS right now">Live DNS</span>
+      <span>
+        {% if d.dns_status == 'ok' %}
+          <span class="badge {{ 'ok' if d.dns_match else 'warn' }}" title="{{ explain_policy(d.dns_p, d.dns_pct) }}">p={{ d.dns_p }} pct={{ d.dns_pct }}</span>
+        {% elif d.dns_status == 'missing' %}
+          <span class="badge bad" title="{{ dns_status_help(d.dns_status) }}">no record</span>
+        {% elif d.dns_status == 'multiple' %}
+          <span class="badge bad" title="{{ dns_status_help(d.dns_status) }}">conflicting records</span>
+        {% elif d.dns_status == 'lookup_failed' %}
+          <span class="badge muted" title="{{ dns_status_help(d.dns_status) }}">couldn't check</span>
+        {% else %}
+          <span class="badge muted" title="{{ dns_status_help('unknown') }}">not checked yet</span>
+        {% endif %}
+      </span>
+    </div>
+
+    <div class="row">
+      <span class="label" title="What mail providers have reported seeing, which can lag a few days behind a real DNS change">Reports say</span>
+      <span>
+        {% if d.report_p %}
+          <span title="{{ explain_policy(d.report_p, d.report_pct) }}">p={{ d.report_p }} pct={{ d.report_pct }}</span> <span class="muted">(since {{ d.report_since }})</span>
+        {% else %}
+          <span class="muted">no reports yet</span>
+        {% endif %}
+      </span>
+    </div>
+
+    <div class="row">
+      <span class="label" title="% of your mail that passed authentication in this window">Pass rate ({{ d.window_days }}d)</span>
+      <span>
+        {% if d.window_rate is not none %}
+          <span class="badge {{ 'ok' if d.window_rate >= 0.99 else ('warn' if d.window_rate >= 0.95 else 'bad') }}">
+            {{ "%.1f"|format(d.window_rate * 100) }}%
+          </span>
+          <span class="muted">({{ d.window_total }} msgs)</span>
+        {% else %}
+          <span class="muted">not enough recent mail to tell</span>
+        {% endif %}
+      </span>
+    </div>
+
+    <div class="row">
+      <span class="label" title="The most recent report data we have on file for this domain">Last ingested</span>
+      <span class="muted">{{ d.last_ingested or "never" }}</span>
+    </div>
+
+    {% if d.open_counts %}
+    <div class="row">
+      <span class="label">Needs attention</span>
+      <span>
+        {% for cat, n in d.open_counts.items() %}
+          <span class="badge muted" title="{{ category_help(cat) }}">{{ category_label(cat) }}: {{ n }}</span>
+        {% endfor %}
+      </span>
+    </div>
+    {% endif %}
+
+    {% if d.rec_title %}
+    <div class="rec">{{ d.rec_title }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

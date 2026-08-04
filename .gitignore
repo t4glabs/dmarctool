@@ -1,0 +1,20 @@
+# Secrets -- API keys, OAuth tokens, AWS credentials. Never commit this.
+secrets.env
+
+# Real production data: ingested DMARC reports, bounce/complaint email addresses,
+# business domain info. This is a live personal ops database, not sample data.
+data/
+
+# Runtime logs (may include addresses/domains from processing)
+logs/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Local Claude Code tool config -- not project source
+.claude/
+
+# macOS
+.DS_Store

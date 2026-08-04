@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Settings - DMARCTool{% endblock %}
+{% block content %}
+
+<h1>Settings</h1>
+<p class="muted">
+  These control when the tool tells you "it's safe to tighten enforcement" vs. "hold on and keep watching."
+  You don't need to understand DMARC deeply to use these -- each one below has a plain-language explanation
+  and an example. Changes take effect the next time analysis runs (automatically every 6 hours, or click
+  "Refresh now" on the overview page).
+</p>
+
+<form action="/settings" method="post">
+  {% for f in fields %}
+  <div class="section">
+    <div class="field">
+      <label style="font-size:1rem; color:var(--fg); margin-bottom:0.3rem">{{ f.label }}</label>
+      <input type="text" name="{{ f.key }}" value="{{ f.value }}" style="width: 220px">
+    </div>
+    <p class="muted" style="margin:0.4rem 0 0.2rem 0">{{ f.help }}</p>
+    {% if f.example %}<p class="muted" style="margin:0; font-size:0.8rem"><em>Example: {{ f.example }}</em></p>{% endif %}
+    <p class="muted" style="margin:0.3rem 0 0 0; font-size:0.75rem">Internal name: <code>{{ f.key }}</code></p>
+  </div>
+  {% endfor %}
+  <button type="submit">Save settings</button>
+</form>
+
+{% endblock %}

@@ -1,0 +1,101 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --border: #e2e2e2;
+  --card: #fafafa;
+  --ok: #1a7f37;
+  --warn: #b25000;
+  --bad: #c0362c;
+  --accent: #2563eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #eaeaea;
+    --muted: #9aa0aa;
+    --border: #2c2f36;
+    --card: #1b1e24;
+    --ok: #4fd17a;
+    --warn: #e0a24b;
+    --bad: #ef6a5f;
+    --accent: #6ea8fe;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+  margin: 0;
+  line-height: 1.45;
+}
+nav {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.9rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+nav .brand { font-weight: 600; text-decoration: none; color: var(--fg); }
+nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; }
+nav a:hover { color: var(--fg); }
+main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+.flash {
+  background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.6rem 1rem; margin-bottom: 1rem; font-size: 0.9rem;
+}
+h1, h2, h3 { font-weight: 600; }
+h1 { font-size: 1.4rem; }
+h2 { font-size: 1.1rem; margin-top: 2rem; }
+a { color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+.card {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+  padding: 1rem 1.1rem;
+}
+.card h3 { margin: 0 0 0.5rem 0; }
+.card h3 a { color: var(--fg); text-decoration: none; }
+.badge {
+  display: inline-block; font-size: 0.72rem; padding: 0.12rem 0.5rem; border-radius: 999px;
+  border: 1px solid var(--border); margin-right: 0.3rem; white-space: nowrap;
+}
+.badge.ok { color: var(--ok); border-color: var(--ok); }
+.badge.warn { color: var(--warn); border-color: var(--warn); }
+.badge.bad { color: var(--bad); border-color: var(--bad); }
+.badge.muted { color: var(--muted); }
+.row { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.88rem; margin: 0.15rem 0; }
+.row .label { color: var(--muted); }
+.rec {
+  font-size: 0.9rem; margin-top: 0.6rem; padding: 0.5rem 0.7rem; border-radius: 6px;
+  background: rgba(37,99,235,0.08); border-left: 3px solid var(--accent);
+}
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; }
+tr:hover td { background: rgba(127,127,127,0.06); }
+.section { border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.2rem; margin-bottom: 1.2rem; background: var(--card); }
+.actions-list .item { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.actions-list .item:last-child { border-bottom: none; }
+.item .title { font-weight: 500; }
+.item .detail { color: var(--muted); font-size: 0.85rem; }
+form.inline { display: inline; }
+button, input[type=submit] {
+  font: inherit; padding: 0.3rem 0.7rem; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--fg); cursor: pointer;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.small { font-size: 0.75rem; padding: 0.15rem 0.5rem; }
+input[type=text], input[type=number], input[type=date], select, textarea {
+  font: inherit; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--fg);
+}
+label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.2rem; }
+.field { margin-bottom: 0.7rem; }
+.formrow { display: flex; gap: 0.8rem; flex-wrap: wrap; align-items: flex-end; }
+.muted { color: var(--muted); }
+.top-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 1rem; flex-wrap: wrap;}
+.sparkline { color: var(--accent); }
+.back { font-size: 0.85rem; }
+code { background: rgba(127,127,127,0.15); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85em; }
