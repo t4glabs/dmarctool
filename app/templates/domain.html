@@ -84,6 +84,8 @@
         <div class="item">
           <div class="title"><span class="badge muted" title="{{ category_help(item.category) }}">{{ category_label(item.category) }}</span> {{ item.title }}</div>
           {% if item.detail %}<div class="detail">{{ item.detail }}</div>{% endif %}
+          {% set fix = postmaster_remediation(item.ref_key) if item.category == 'postmaster_compliance' else category_remediation(item.category) %}
+          {% if fix %}<div class="fix">💡 <strong>How to fix:</strong> {{ fix | urlize(40, target="_blank", rel="noopener") }}</div>{% endif %}
           <form class="inline" action="/action_items/{{ item.id }}/resolve" method="post">
             <input type="hidden" name="redirect_to" value="/domain/{{ domain.name }}">
             <input type="hidden" name="status" value="done">
@@ -242,6 +244,62 @@
   <div class="tab-panel" data-tab="senders">
 
     <div class="section">
+      <h2 class="first">🏢 Reputation by provider ({{ window_days }}d window)</h2>
+      <p class="muted" style="margin-top:0">
+        How each mailbox provider (Gmail, Yahoo, Microsoft, etc.) is seeing your mail. This is the closest thing to a
+        reputation signal that lives in DMARC reports themselves -- if one provider's pass rate is much worse than the
+        others, or is quarantining/rejecting a lot of mail your policy didn't ask it to, that's a provider-specific
+        problem worth digging into (deliverability, not just authentication). Full engagement/spam-complaint data still
+        only lives in that provider's own tools (e.g. Google Postmaster Tools -- see the Deliverability &amp; Spam tab).
+      </p>
+      {% if providers %}
+      <div class="table-wrap">
+      <table>
+        <tr><th>Provider</th><th>Msgs</th><th>Pass rate</th><th>None</th><th>Quarantine</th><th>Reject</th></tr>
+        {% for p in providers %}
+        <tr>
+          <td>{{ p.org_name }}</td>
+          <td>{{ p.total }}</td>
+          <td>{{ "%.0f"|format(100 * p.rate) if p.rate is not none else "-" }}%</td>
+          <td>{{ p.disp_none }}</td>
+          <td>{{ p.disp_quarantine }}</td>
+          <td>{{ p.disp_reject }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      {% else %}
+      <p class="muted">No reports in this window yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2 class="first">🔀 Reputation by sending stream ({{ window_days }}d window)</h2>
+      <p class="muted" style="margin-top:0">
+        If this domain sends through more than one channel (e.g. regular Google Workspace mail plus an Amazon
+        SES/Mailgun bulk-campaign stream), a single blended pass rate can hide a problem confined to just one of them.
+        This splits volume and pass rate by how you've labeled each sender below, under "Known senders" -- label
+        unclassified senders there to sharpen this breakdown.
+      </p>
+      {% if streams %}
+      <div class="table-wrap">
+      <table>
+        <tr><th>Sending stream</th><th>Msgs</th><th>Pass rate</th></tr>
+        {% for s in streams %}
+        <tr>
+          <td title="{{ classification_help(s.classification) }}">{{ classification_label(s.classification) }}</td>
+          <td>{{ s.total }}</td>
+          <td>{{ "%.0f"|format(100 * s.rate) if s.rate is not none else "-" }}%</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      {% else %}
+      <p class="muted">No reports in this window yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
       <h2 class="first">📇 Known senders ({{ senders|length }})</h2>
       <p class="muted" style="margin-top:0">
         Every mail source we've seen for this domain. Use the dropdown to label a sender once you know what it is
@@ -299,62 +357,6 @@
       </div>
     </div>
 
-    <div class="section">
-      <h2 class="first">🏢 Reputation by provider ({{ window_days }}d window)</h2>
-      <p class="muted" style="margin-top:0">
-        How each mailbox provider (Gmail, Yahoo, Microsoft, etc.) is seeing your mail. This is the closest thing to a
-        reputation signal that lives in DMARC reports themselves -- if one provider's pass rate is much worse than the
-        others, or is quarantining/rejecting a lot of mail your policy didn't ask it to, that's a provider-specific
-        problem worth digging into (deliverability, not just authentication). Full engagement/spam-complaint data still
-        only lives in that provider's own tools (e.g. Google Postmaster Tools -- see the Deliverability &amp; Spam tab).
-      </p>
-      {% if providers %}
-      <div class="table-wrap">
-      <table>
-        <tr><th>Provider</th><th>Msgs</th><th>Pass rate</th><th>None</th><th>Quarantine</th><th>Reject</th></tr>
-        {% for p in providers %}
-        <tr>
-          <td>{{ p.org_name }}</td>
-          <td>{{ p.total }}</td>
-          <td>{{ "%.0f"|format(100 * p.rate) if p.rate is not none else "-" }}%</td>
-          <td>{{ p.disp_none }}</td>
-          <td>{{ p.disp_quarantine }}</td>
-          <td>{{ p.disp_reject }}</td>
-        </tr>
-        {% endfor %}
-      </table>
-      </div>
-      {% else %}
-      <p class="muted">No reports in this window yet.</p>
-      {% endif %}
-    </div>
-
-    <div class="section">
-      <h2 class="first">🔀 Reputation by sending stream ({{ window_days }}d window)</h2>
-      <p class="muted" style="margin-top:0">
-        If this domain sends through more than one channel (e.g. regular Google Workspace mail plus an Amazon
-        SES/Mailgun bulk-campaign stream), a single blended pass rate can hide a problem confined to just one of them.
-        This splits volume and pass rate by how you've labeled each sender above, under "Known senders" -- label
-        unclassified senders there to sharpen this breakdown.
-      </p>
-      {% if streams %}
-      <div class="table-wrap">
-      <table>
-        <tr><th>Sending stream</th><th>Msgs</th><th>Pass rate</th></tr>
-        {% for s in streams %}
-        <tr>
-          <td title="{{ classification_help(s.classification) }}">{{ classification_label(s.classification) }}</td>
-          <td>{{ s.total }}</td>
-          <td>{{ "%.0f"|format(100 * s.rate) if s.rate is not none else "-" }}%</td>
-        </tr>
-        {% endfor %}
-      </table>
-      </div>
-      {% else %}
-      <p class="muted">No reports in this window yet.</p>
-      {% endif %}
-    </div>
-
   </div>
 
   <div class="tab-panel" data-tab="deliverability">
@@ -385,8 +387,16 @@
       </table>
       </div>
 
+      <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Spam rate trend</h3>
+      <p class="muted" style="margin:0 0 0.4rem 0; font-size:0.8rem">
+        Built from our own daily pulls, so history only goes back to when this domain was first checked here.
+        Google's day-by-day breakdown lags 1-3 days behind the current headline rate above -- if the table shows a
+        spike but the chart still looks flat at the right edge, that's why, not a discrepancy.
+      </p>
+      <div class="sparkline">{{ postmaster_spam_sparkline | safe }}</div>
+
       <div class="table-wrap">
-      <table style="margin-top:1rem">
+      <table style="margin-top:1.2rem">
         <tr><th>Postmaster domain</th><th>Requirement</th><th>Status</th></tr>
         {% for c in postmaster_compliance %}
         <tr>
@@ -455,6 +465,9 @@
         {% endfor %}
       </table>
       </div>
+
+      <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
+      <div class="sparkline">{{ ses_rate_sparkline | safe }}</div>
     </div>
     {% endif %}
 

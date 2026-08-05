@@ -38,6 +38,52 @@ CATEGORY_HELP = {
     "ses_new_suppressions": "SES recorded new bounces or complaints since the last check for this domain's configuration set -- these addresses are effectively dead ends; worth pruning from Listmonk too.",
 }
 
+# Concrete "what to actually do about it" guidance per action-item category --
+# separate from CATEGORY_HELP (which explains *what the problem is*) so alerts
+# don't just tell you something's wrong without telling you how to fix it.
+CATEGORY_REMEDIATION = {
+    "ramp_recommendation": "Update your domain's DMARC TXT record (_dmarc.<domain>) with the new p=/pct= values yourself, then log the change in the Manual Log tab so DMARCTool can track it against live DNS.",
+    "new_sender": "Check the Senders tab for this IP's reverse DNS (PTR) and volume. If it's a service you actually use, label it there so it stops getting flagged. If you don't recognize it, someone may be spoofing your domain -- consider tightening your DMARC policy (raise pct, or move toward p=reject).",
+    "failure_investigation": "In the Senders tab, check whether this IP's hostname (PTR) matches a service you use, and whether it's covered by your SPF record's includes or signs with a DKIM selector your DNS actually publishes (Authentication tab). Consistent, high-volume failures from one source are usually a misconfigured ESP integration, not spoofing.",
+    "dns_drift": "Update your DMARC TXT record to match what you intended. If you changed it on purpose, log it in the Manual Log tab so this stops being flagged as unexpected drift.",
+    "data_stale": "Go to the Overview page and upload a fresh DMARC report export (Google Takeout or your provider's equivalent) to bring this domain's data current.",
+    "blocklist": "Request delisting directly: Spamhaus -> https://check.spamhaus.org/ (look up the IP, follow its removal link) -- Barracuda -> https://www.barracudacentral.org/rbl/removal-request . Before requesting removal, check for a real cause (compromised sender, sudden spam complaints, or a shared IP with a bad neighbor) or it may relist quickly.",
+    "ptr_issue": "If this is your own dedicated IP (not a shared ESP pool), add or fix its reverse DNS (PTR) record via your hosting/cloud provider's control panel -- for AWS EC2/SES dedicated IPs this means opening an AWS Support case to set a custom PTR. Shared ESP pool IPs (SES, Mailgun) already have this managed for you; this only needs action if it's your own infrastructure.",
+    "spf_lookup_limit": "Reduce nested `include:` mechanisms in your SPF record -- remove ESP includes you no longer use, or replace static IP ranges with direct ip4:/ip6: entries instead of an include. Check the Authentication tab for the current lookup count.",
+    "dkim_weak_key": "Regenerate this DKIM key at 2048-bit: in Google Workspace, Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email. For Mailgun/SES-hosted keys, use that provider's domain/DKIM settings to rotate the key.",
+    "mailgun_reputation": "Check the Deliverability & Spam tab for which addresses recently bounced or complained, prune them from your Listmonk subscriber list, and review your opt-in practices and sending frequency before your next campaign.",
+    "mailgun_new_suppressions": "These addresses are now suppressed in Mailgun and won't receive mail -- remove them from your Listmonk list too, so future campaigns don't keep counting them as valid recipients.",
+    "ses_reputation": "Check the Deliverability & Spam tab for this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
+    "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- remove them from your Listmonk list too.",
+}
+
+# postmaster_compliance items all share one category, but the fix depends on
+# *which* Postmaster requirement failed -- that's embedded in the action
+# item's ref_key ("<postmaster_domain>:<REQUIREMENT>"), not the category itself.
+POSTMASTER_REQUIREMENT_REMEDIATION = {
+    "SPF_AND_DKIM": "Check the Authentication tab -- make sure SPF and DKIM are both published and passing for your actual sending infrastructure, not just your primary domain.",
+    "DMARC_ALIGNMENT": "Your DKIM or SPF signing domain doesn't align closely enough with your header From: domain. Check the Authentication tab's SPF/DKIM entries -- the signing/envelope domain should be your domain or a subdomain of it.",
+    "DMARC_POLICY": "Publish a DMARC policy in DNS if you haven't yet (p=none is a fine starting point), or check the DNS vs. reports section in the Authentication tab if you already have one -- Google may be seeing something different than you expect.",
+    "ENCRYPTION": "Some of your mail isn't using TLS in transit. In Google Workspace: Admin Console -> Apps -> Google Workspace -> Gmail -> Compliance -> Require TLS. For SES/Mailgun, set the sending configuration set's TLS policy to Required.",
+    "USER_REPORTED_SPAM_RATE": "Gmail users are marking your mail as spam more than recommended. Check the Deliverability & Spam tab for bounce/complaint detail, review consent/opt-in practices, sending frequency, and prune non-engaged or complaining recipients from Listmonk.",
+    "DNS_RECORDS": "Your sending IP's reverse DNS (PTR) isn't set up correctly -- see the PTR/rDNS column under Known Senders in the Senders tab for which IP and what's wrong.",
+    "ONE_CLICK_UNSUBSCRIBE": "Make sure your bulk sender (Listmonk/Mailgun/SES) includes both List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers on every campaign message.",
+    "HONOR_UNSUBSCRIBE": "Confirm unsubscribe requests from Listmonk/Mailgun/SES are actually being processed and suppressed promptly, not just recorded.",
+    "DELIVERABILITY": "This is Google's overall verdict combining every requirement above -- fix whichever specific one(s) are flagged NEEDS_WORK and this should clear on its own.",
+}
+
+
+def category_remediation(category):
+    return CATEGORY_REMEDIATION.get(category)
+
+
+def postmaster_remediation(ref_key):
+    if not ref_key or ":" not in ref_key:
+        return None
+    requirement = ref_key.rsplit(":", 1)[-1]
+    return POSTMASTER_REQUIREMENT_REMEDIATION.get(requirement)
+
+
 POSTMASTER_REQUIREMENT_LABELS = {
     "SPF_AND_DKIM": "SPF and DKIM",
     "DMARC_ALIGNMENT": "DMARC alignment",

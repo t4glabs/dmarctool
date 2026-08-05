@@ -101,6 +101,10 @@ tr:hover td { background: rgba(127,127,127,0.06); }
 .actions-list .item:last-child { border-bottom: none; }
 .item .title { font-weight: 600; }
 .item .detail { color: var(--muted); font-size: 0.83rem; margin-top: 0.15rem; }
+.item .fix {
+  font-size: 0.83rem; margin: 0.45rem 0; padding: 0.5rem 0.7rem; border-radius: 6px;
+  background: var(--accent-bg); border-left: 3px solid var(--accent);
+}
 form.inline { display: inline; }
 button, input[type=submit] {
   font: inherit; padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid var(--border);

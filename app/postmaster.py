@@ -143,6 +143,48 @@ def fetch_stats(domain, access_token, window_days):
     return values, None
 
 
+def fetch_daily_spam_rate(domain, access_token, window_days):
+    """Day-by-day SPAM_RATE (not the OVERALL aggregate from fetch_stats) so we
+    can build our own trend history -- Postmaster Tools has no separate
+    "history" endpoint, just this same query with DAILY granularity.
+
+    Note: Google's daily breakdown lags behind the OVERALL rolling number by a
+    day or two (and skips days without enough volume to report), so the most
+    recent 1-3 days here may look better than the current headline spam rate
+    actually is -- the headline (fetch_stats) number stays authoritative.
+    """
+    today = datetime.date.today()
+    start = today - datetime.timedelta(days=window_days)
+    date_range = {
+        "start": {"year": start.year, "month": start.month, "day": start.day},
+        "end": {"year": today.year, "month": today.month, "day": today.day},
+    }
+    days, page_token = [], None
+    while True:
+        body = {
+            "metricDefinitions": [{"name": "spam_rate", "baseMetric": {"standardMetric": "SPAM_RATE"}}],
+            "timeQuery": {"dateRanges": {"dateRanges": [date_range]}},
+            "aggregationGranularity": "DAILY",
+            "pageSize": 200,
+        }
+        if page_token:
+            body["pageToken"] = page_token
+        data, err = _post(f"{API_BASE}/domains/{domain}/domainStats:query", body, access_token)
+        if err:
+            return None, err
+        for stat in data.get("domainStats", []):
+            date = stat.get("date")
+            if date is None:
+                continue
+            value = stat.get("value", {})
+            day_str = f"{date['year']:04d}-{date['month']:02d}-{date['day']:02d}"
+            days.append((day_str, value.get("floatValue")))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return days, None
+
+
 def fetch_compliance(domain, access_token):
     data, err = _get(f"{API_BASE}/domains/{domain}/complianceStatus", access_token)
     if err:
@@ -177,7 +219,8 @@ def _stale(conn, postmaster_domain, recheck_hours):
 def _fetch_all(domain, access_token, window_days):
     stats, stats_err = fetch_stats(domain, access_token, window_days)
     compliance, compliance_err = fetch_compliance(domain, access_token)
-    return {"stats": (stats, stats_err), "compliance": (compliance, compliance_err)}
+    daily, daily_err = fetch_daily_spam_rate(domain, access_token, window_days)
+    return {"stats": (stats, stats_err), "compliance": (compliance, compliance_err), "daily": (daily, daily_err)}
 
 
 def run_postmaster_checks(conn, verbose: bool = True) -> None:
@@ -234,6 +277,19 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
             if verbose:
                 pct = f"{spam_rate:.3%}" if spam_rate is not None else "?"
                 print(f"[postmaster] {postmaster_domain} ({domain_name}): spam rate {pct} (last {window_days}d)")
+
+        daily, daily_err = fetched[postmaster_domain]["daily"]
+        if daily_err:
+            if verbose:
+                print(f"[postmaster] {postmaster_domain}: daily history fetch failed -- {daily_err}")
+        else:
+            for day_str, day_rate in daily:
+                conn.execute(
+                    """INSERT INTO postmaster_daily_stats (domain_id, postmaster_domain, day, spam_rate)
+                       VALUES (?,?,?,?)
+                       ON CONFLICT(postmaster_domain, day) DO UPDATE SET spam_rate=excluded.spam_rate""",
+                    (domain_id, postmaster_domain, day_str, day_rate),
+                )
 
         compliance, comp_err = fetched[postmaster_domain]["compliance"]
         if comp_err:

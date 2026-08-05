@@ -241,6 +241,20 @@ CREATE TABLE IF NOT EXISTS postmaster_compliance (
 
 CREATE INDEX IF NOT EXISTS idx_postmaster_compliance_domain ON postmaster_compliance(domain_id, requirement, checked_at);
 
+-- Our own accumulated daily spam-rate history, built up one poll at a time
+-- since Postmaster Tools' API itself only ever returns a rolling window --
+-- upserted so recent days can be corrected as Google backfills/revises them.
+CREATE TABLE IF NOT EXISTS postmaster_daily_stats (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    postmaster_domain TEXT NOT NULL,
+    day               TEXT NOT NULL,  -- YYYY-MM-DD
+    spam_rate         REAL,
+    UNIQUE(postmaster_domain, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_postmaster_daily_stats_domain ON postmaster_daily_stats(domain_id, day);
+
 -- Amazon SES bounce/complaint/delivery events, consumed from an SQS queue fed by
 -- one SNS topic that every per-domain configuration set publishes to. SES has no
 -- per-domain read API -- this is the only way to get separated stats/suppressions.

@@ -23,12 +23,12 @@ from fastapi.templating import Jinja2Templates
 
 from app.analysis import (
     all_domains, current_policy_run, daily_pass_series, domain_window_stats,
-    day_to_date, epoch_day, ensure_default_settings, provider_breakdown,
-    run_analysis, sending_stream_breakdown,
+    day_to_date, epoch_day, ensure_default_settings, postmaster_daily_series,
+    provider_breakdown, run_analysis, ses_daily_series, sending_stream_breakdown,
 )
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
-from app.charts import pass_rate_sparkline
+from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_sparkline
 from app.compliance import run_compliance_checks
 from app.db import get_connection, init_db
 from app.dns_check import run_dns_checks
@@ -37,9 +37,9 @@ from app.postmaster import run_postmaster_checks
 from app.ses_events import run_ses_event_ingest
 from app.ingest import ingest_source
 from app.labels import (
-    SETTINGS_META, category_help, category_label, classification_help,
+    SETTINGS_META, category_help, category_label, category_remediation, classification_help,
     classification_label, dns_status_help, dns_status_label, explain_policy,
-    postmaster_requirement_label,
+    postmaster_remediation, postmaster_requirement_label,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -53,6 +53,8 @@ templates.env.globals.update({
     "dns_status_label": dns_status_label,
     "dns_status_help": dns_status_help,
     "postmaster_requirement_label": postmaster_requirement_label,
+    "category_remediation": category_remediation,
+    "postmaster_remediation": postmaster_remediation,
 })
 
 CLASSIFICATIONS = ["unclassified", "ses_newsletter", "ses_pool", "workspace", "primary_domain", "ignored"]
@@ -258,6 +260,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
            ORDER BY postmaster_domain, requirement""",
         (domain_id,),
     ).fetchall()
+    postmaster_spam_sparkline = spam_rate_sparkline(postmaster_daily_series(conn, domain_id, days=60))
 
     ses_window_days = int(settings["ses_stats_window_days"])
     ses_cutoff = (_date.today() - _timedelta(days=ses_window_days)).isoformat()
@@ -275,6 +278,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ):
         ses_suppression_counts.setdefault(row["configuration_set"], {})[row["kind"]] = row["n"]
+    ses_rate_sparkline = dual_rate_sparkline(ses_daily_series(conn, domain_id, days=60))
 
     manual_log_items = conn.execute(
         "SELECT * FROM action_items WHERE domain_id=? AND kind='manual_log' ORDER BY created_at DESC LIMIT 20",
@@ -303,9 +307,11 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mailgun_suppression_counts": mailgun_suppression_counts,
         "postmaster_stats": postmaster_stats,
         "postmaster_compliance": postmaster_compliance,
+        "postmaster_spam_sparkline": postmaster_spam_sparkline,
         "ses_stats": ses_stats,
         "ses_window_days": ses_window_days,
         "ses_suppression_counts": ses_suppression_counts,
+        "ses_rate_sparkline": ses_rate_sparkline,
         "open_items": open_items,
         "senders": senders,
         "classifications": CLASSIFICATIONS,
