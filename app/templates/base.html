@@ -16,5 +16,28 @@
 {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
 {% block content %}{% endblock %}
 </main>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".tabs").forEach(function (tabs) {
+    var buttons = Array.prototype.slice.call(tabs.querySelectorAll(".tab-btn"));
+    var panels = Array.prototype.slice.call(tabs.querySelectorAll(".tab-panel"));
+    var ids = buttons.map(function (b) { return b.dataset.tab; });
+
+    function activate(id) {
+      buttons.forEach(function (b) { b.classList.toggle("active", b.dataset.tab === id); });
+      panels.forEach(function (p) { p.classList.toggle("active", p.dataset.tab === id); });
+    }
+    buttons.forEach(function (b) {
+      b.addEventListener("click", function () {
+        activate(b.dataset.tab);
+        history.replaceState(null, "", "#" + b.dataset.tab);
+      });
+    });
+
+    var hash = location.hash.replace("#", "");
+    activate(ids.indexOf(hash) !== -1 ? hash : ids[0]);
+  });
+});
+</script>
 </body>
 </html>

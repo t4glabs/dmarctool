@@ -8,7 +8,7 @@
 </p>
 
 <details class="section" style="margin-bottom:1.2rem">
-  <summary style="cursor:pointer; font-weight:600">What do these terms mean?</summary>
+  <summary style="cursor:pointer; font-weight:600">❓ What do these terms mean?</summary>
   <ul style="margin:0.7rem 0 0 0; padding-left:1.2rem; font-size:0.88rem;">
     <li><strong>p=none</strong> -- just watching, nothing is blocked or sent to spam yet.</li>
     <li><strong>p=quarantine</strong> -- suspicious mail (failing checks) is sent to spam.</li>
@@ -18,6 +18,21 @@
     <li><strong>Live DNS vs. Reports</strong> -- "Live DNS" is what's actually published right now; "Reports" is what mail providers have told us they've seen. These can disagree for a few days after you make a change -- that's normal, not necessarily a problem.</li>
   </ul>
 </details>
+
+{% set ns = namespace(total_open=0, domains_with_issues=0) %}
+{% for d in domains %}
+  {% if d.open_counts %}
+    {% set ns.domains_with_issues = ns.domains_with_issues + 1 %}
+    {% for cat, n in d.open_counts.items() %}
+      {% set ns.total_open = ns.total_open + n %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+{% if ns.total_open > 0 %}
+<div class="portfolio-banner bad">🚨 {{ ns.total_open }} open action item{{ 's' if ns.total_open != 1 else '' }} across {{ ns.domains_with_issues }} domain{{ 's' if ns.domains_with_issues != 1 else '' }} -- click into a domain to see what's up.</div>
+{% else %}
+<div class="portfolio-banner ok">✅ No open action items across any domain right now.</div>
+{% endif %}
 
 <div class="top-actions">
   <h1>Domains</h1>
@@ -30,15 +45,26 @@
       <button type="submit">Ingest</button>
     </form>
     <form action="/run_checks" method="post">
-      <button type="submit" title="Re-checks live DNS and re-calculates recommendations right now, instead of waiting for the automatic 6-hourly refresh">Refresh now</button>
+      <button type="submit" title="Re-checks live DNS and re-calculates recommendations right now, instead of waiting for the automatic 6-hourly refresh">🔄 Refresh now</button>
     </form>
   </div>
 </div>
 
 <div class="grid">
   {% for d in domains %}
+  {% set has_issues = d.open_counts and d.open_counts.values()|sum > 0 %}
+  {% set dns_bad = d.dns_status in ('missing', 'multiple') or (d.dns_status == 'ok' and not d.dns_match) %}
+  {% set rate_bad = d.window_rate is not none and d.window_rate < 0.95 %}
+  {% set rate_warn = d.window_rate is not none and d.window_rate < 0.99 %}
+  {% if dns_bad or has_issues or rate_bad %}
+    {% set dot = 'bad' %}
+  {% elif rate_warn %}
+    {% set dot = 'warn' %}
+  {% else %}
+    {% set dot = 'ok' %}
+  {% endif %}
   <div class="card">
-    <h3><a href="/domain/{{ d.name }}">{{ d.name }}</a></h3>
+    <h3><span class="status-dot {{ dot }}"></span><a href="/domain/{{ d.name }}">{{ d.name }}</a></h3>
 
     <div class="row">
       <span class="label" title="What's actually published in DNS right now">Live DNS</span>
@@ -99,7 +125,7 @@
     {% endif %}
 
     {% if d.rec_title %}
-    <div class="rec">{{ d.rec_title }}</div>
+    <div class="rec">🧭 {{ d.rec_title }}</div>
     {% endif %}
   </div>
   {% endfor %}
