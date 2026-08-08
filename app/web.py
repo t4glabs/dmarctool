@@ -192,6 +192,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         window_total, window_rate = total, (rate if total else None)
         providers = provider_breakdown(conn, domain_id, window_start, latest_report["latest"])
         streams = sending_stream_breakdown(conn, domain_id, window_start, latest_report["latest"])
+    google_volume = next((p["total"] for p in providers if p["org_name"] == "google.com"), None)
 
     series = daily_pass_series(conn, domain_id, days=60)
     sparkline_svg = pass_rate_sparkline(series, threshold=float(settings["min_pass_rate"]))
@@ -262,6 +263,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
            ORDER BY postmaster_domain, requirement""",
         (domain_id,),
     ).fetchall()
+    postmaster_reason_by_ref_key = {
+        f"{row['postmaster_domain']}:{row['requirement']}": row["reason"] for row in postmaster_compliance
+    }
     postmaster_spam_sparkline = spam_rate_sparkline(postmaster_daily_series(conn, domain_id, days=60))
 
     ses_window_days = int(settings["ses_stats_window_days"])
@@ -303,12 +307,14 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "sparkline_svg": sparkline_svg,
         "providers": providers,
         "streams": streams,
+        "google_volume": google_volume,
         "spf_checks": spf_checks,
         "dkim_checks": dkim_checks,
         "mailgun_stats": mailgun_stats,
         "mailgun_suppression_counts": mailgun_suppression_counts,
         "postmaster_stats": postmaster_stats,
         "postmaster_compliance": postmaster_compliance,
+        "postmaster_reason_by_ref_key": postmaster_reason_by_ref_key,
         "postmaster_spam_sparkline": postmaster_spam_sparkline,
         "ses_stats": ses_stats,
         "ses_window_days": ses_window_days,

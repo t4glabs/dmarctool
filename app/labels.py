@@ -67,7 +67,8 @@ POSTMASTER_REQUIREMENT_REMEDIATION = {
     "DNS_RECORDS": "Your sending IP's reverse DNS (PTR) isn't set up correctly -- see the PTR/rDNS column under Known Senders in the Senders tab for which IP and what's wrong.",
     "ONE_CLICK_UNSUBSCRIBE": "Make sure your bulk sender (Listmonk/Mailgun/SES) includes both List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers on every campaign message.",
     "HONOR_UNSUBSCRIBE": "Confirm unsubscribe requests from Listmonk/Mailgun/SES are actually being processed and suppressed promptly, not just recorded.",
-    "DELIVERABILITY": "This is Google's overall verdict combining every requirement above -- fix whichever specific one(s) are flagged NEEDS_WORK and this should clear on its own.",
+    # DELIVERABILITY is handled entirely in postmaster_remediation() below -- its
+    # advice depends on the specific reason code, not a single static message.
 }
 
 
@@ -75,12 +76,19 @@ def category_remediation(category):
     return CATEGORY_REMEDIATION.get(category)
 
 
-def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_spam_rate=None):
-    """DMARC_POLICY and USER_REPORTED_SPAM_RATE get a domain-specific answer built
-    from what DMARCTool already knows (live DNS policy, current spam rate) instead
-    of generic boilerplate -- e.g. "publish a policy" is actively wrong advice for
-    a domain that already has one, which is a common real case (Google's bar here
-    is *enforcing at a meaningful percentage*, not merely "a record exists")."""
+def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_spam_rate=None,
+                            reason=None, google_volume=None, window_days=None):
+    """DMARC_POLICY, USER_REPORTED_SPAM_RATE, and DELIVERABILITY get a domain-specific
+    answer built from what DMARCTool already knows (live DNS policy, current spam rate,
+    actual Gmail-seen message volume, and -- for DELIVERABILITY -- the specific reason
+    code) instead of generic boilerplate. Two real gaps this closes:
+      - "publish a policy" is wrong advice for a domain that already has one (Google's
+        bar is *enforcing at a meaningful percentage*, not merely "a record exists").
+      - "fix whichever requirement is flagged" is circular/useless when DELIVERABILITY
+        is the *only* thing flagged and every other requirement is already COMPLIANT --
+        which is exactly what MESSAGE_VOLUME_LOW means: nothing is misconfigured, Gmail
+        just hasn't seen enough mail from this domain to score it confidently yet.
+    """
     if not ref_key or ":" not in ref_key:
         return None
     requirement = ref_key.rsplit(":", 1)[-1]
@@ -103,6 +111,22 @@ def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_sp
         return (f"Gmail users are marking your mail as spam more than recommended{rate_note}. Check the "
                 f"Deliverability & Spam tab for bounce/complaint detail, review consent/opt-in practices, "
                 f"sending frequency, and prune non-engaged or complaining recipients from Listmonk.")
+
+    if requirement == "DELIVERABILITY":
+        if reason == "MESSAGE_VOLUME_LOW":
+            volume_note = ""
+            if google_volume is not None and window_days is not None:
+                volume_note = f" Gmail has seen about {google_volume} message(s) from this domain in the last {window_days} days -- "
+            return (f"This isn't a misconfiguration -- it means Gmail doesn't have enough sustained volume from "
+                    f"this domain yet to confidently score its deliverability.{volume_note}Google doesn't publish "
+                    f"an exact threshold, but consistent, regular sending (not just occasional bursts) is what "
+                    f"builds that confidence over time. If every other requirement above is Compliant, there's "
+                    f"nothing to actively fix here -- it typically clears on its own as real volume accumulates, "
+                    f"or you can safely ignore it if this domain isn't meant to send much.")
+        if reason == "SENDER_NOT_COMPLIANT":
+            return ("This is Google's overall verdict combining every requirement above -- check which specific "
+                    "one(s) in the table are marked Needs work and fix those; this clears on its own once they do.")
+        return "This is Google's overall verdict combining every requirement above -- fix whichever specific one(s) are flagged NEEDS_WORK and this should clear on its own."
 
     return POSTMASTER_REQUIREMENT_REMEDIATION.get(requirement)
 
