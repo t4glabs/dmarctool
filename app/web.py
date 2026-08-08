@@ -43,6 +43,10 @@ from app.labels import (
     classification_label, dns_status_help, dns_status_label, explain_policy,
     postmaster_remediation, postmaster_requirement_label,
 )
+from app.verdicts import (
+    dns_history_verdict, mailgun_verdict, postmaster_verdict, provider_verdict,
+    senders_verdict, ses_verdict, spf_dkim_verdict, stream_verdict,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -291,6 +295,17 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ).fetchall()
 
+    verdicts = {
+        "senders": senders_verdict(senders),
+        "providers": provider_verdict(providers),
+        "streams": stream_verdict(streams),
+        "spf_dkim": spf_dkim_verdict(spf_checks, dkim_checks),
+        "dns_history": dns_history_verdict(dns_history),
+        "mailgun": mailgun_verdict(mailgun_stats, float(settings["mailgun_bounce_rate_warn"]), float(settings["mailgun_complaint_rate_warn"])),
+        "ses": ses_verdict(ses_stats, float(settings["ses_bounce_rate_warn"]), float(settings["ses_complaint_rate_warn"])),
+        "postmaster": postmaster_verdict(postmaster_compliance),
+    }
+
     return templates.TemplateResponse(request, "domain.html", {
         "flash": flash,
         "domain": domain,
@@ -325,6 +340,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "classifications": CLASSIFICATIONS,
         "manual_log_items": manual_log_items,
         "dns_history": dns_history,
+        "verdicts": verdicts,
     })
 
 

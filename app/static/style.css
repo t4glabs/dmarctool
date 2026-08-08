@@ -96,6 +96,14 @@ th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: 
 tr:hover td { background: rgba(127,127,127,0.06); }
 .table-wrap { overflow-x: auto; }
 .section { border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem 1.25rem; margin-bottom: 1.2rem; background: var(--card); }
+.verdict {
+  font-size: 0.86rem; font-weight: 600; margin: 0.6rem 0 1rem 0; padding: 0.55rem 0.8rem;
+  border-radius: 6px; border: 1px solid var(--border); background: var(--card-raised);
+}
+.verdict.ok { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); }
+.verdict.warn { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+.verdict.bad { border-color: var(--bad); background: var(--bad-bg); color: var(--bad); }
+.verdict.muted { color: var(--muted); font-weight: 500; border-style: dashed; }
 .section h2:first-child, .section h2.first { margin-top: 0; }
 .actions-list .item { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
 .actions-list .item:last-child { border-bottom: none; }

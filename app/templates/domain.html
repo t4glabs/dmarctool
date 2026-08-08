@@ -176,6 +176,7 @@
         DKIM keys must be at least 1024 bits (Google recommends 2048). Only checked for domains/selectors your
         own reports show real, ongoing volume from -- not one-off historical stragglers.
       </p>
+      <div class="verdict {{ verdicts.spf_dkim[0] }}">{{ verdicts.spf_dkim[1] }}</div>
       <div class="table-wrap">
       <table>
         <tr><th>SPF domain</th><th>DNS lookups (of 10)</th><th>Status</th></tr>
@@ -220,6 +221,7 @@
     <div class="section">
       <h2 class="first">🕰️ DNS check history</h2>
       <p class="muted" style="margin-top:0">A log of every time we've checked your live DNS record, so you can see when it last changed and whether it's matched expectations.</p>
+      <div class="verdict {{ verdicts.dns_history[0] }}">{{ verdicts.dns_history[1] }}</div>
       <div class="table-wrap">
       <table>
         <tr><th>Checked at</th><th>Setting found</th><th>Match</th><th>Note</th></tr>
@@ -252,6 +254,7 @@
         problem worth digging into (deliverability, not just authentication). Full engagement/spam-complaint data still
         only lives in that provider's own tools (e.g. Google Postmaster Tools -- see the Deliverability &amp; Spam tab).
       </p>
+      <div class="verdict {{ verdicts.providers[0] }}">{{ verdicts.providers[1] }}</div>
       {% if providers %}
       <div class="table-wrap">
       <table>
@@ -281,6 +284,7 @@
         This splits volume and pass rate by how you've labeled each sender below, under "Known senders" -- label
         unclassified senders there to sharpen this breakdown.
       </p>
+      <div class="verdict {{ verdicts.streams[0] }}">{{ verdicts.streams[1] }}</div>
       {% if streams %}
       <div class="table-wrap">
       <table>
@@ -306,6 +310,7 @@
         (e.g. your bulk email system, or Google Workspace) -- unrecognized senders with a lot of failing mail are
         also called out under "Open action items" in the Overview tab.
       </p>
+      <div class="verdict {{ verdicts.senders[0] }}">{{ verdicts.senders[1] }}</div>
       <div class="table-wrap">
       <table>
         <tr><th>Source IP</th><th>Msgs</th><th>Pass rate</th><th>First seen</th><th>Last seen</th><th>Blocklist</th><th>PTR/rDNS</th><th>What is this?</th></tr>
@@ -380,6 +385,7 @@
         Straight from Google -- your real Gmail-reported spam rate, and Google's own compliance verdict against its
         published sender guidelines. Gmail's guidance: keep the spam rate below 0.30%, ideally below 0.10%.
       </p>
+      <div class="verdict {{ verdicts.postmaster[0] }}">{{ verdicts.postmaster[1] }}</div>
       <div class="table-wrap">
       <table>
         <tr><th>Postmaster domain</th><th>Spam rate ({{ postmaster_stats[0].window_days if postmaster_stats else "?" }}d)</th><th>Delivery error rate</th></tr>
@@ -435,6 +441,7 @@
         back to third-party senders the way Yahoo does. Suppressed addresses won't receive mail from Mailgun again;
         worth removing from Listmonk too.
       </p>
+      <div class="verdict {{ verdicts.mailgun[0] }}">{{ verdicts.mailgun[1] }}</div>
       <div class="table-wrap">
       <table>
         <tr><th>Mailgun domain</th><th>Accepted ({{ mailgun_stats[0].window_days if mailgun_stats else "?" }}d)</th><th>Bounce rate</th><th>Complaint rate</th><th>Bounces</th><th>Complaints</th><th>Unsubscribes</th></tr>
@@ -462,6 +469,7 @@
         set (SES itself has no per-domain stats API). Counts only cover activity since the SNS/SQS pipeline was set
         up -- there's no historical backfill.
       </p>
+      <div class="verdict {{ verdicts.ses[0] }}">{{ verdicts.ses[1] }}</div>
       <div class="table-wrap">
       <table>
         <tr><th>Configuration set</th><th>Delivered ({{ ses_window_days }}d)</th><th>Bounce rate</th><th>Complaint rate</th><th>Bounces</th><th>Complaints</th></tr>
