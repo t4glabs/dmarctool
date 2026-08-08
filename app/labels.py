@@ -42,19 +42,19 @@ CATEGORY_HELP = {
 # separate from CATEGORY_HELP (which explains *what the problem is*) so alerts
 # don't just tell you something's wrong without telling you how to fix it.
 CATEGORY_REMEDIATION = {
-    "ramp_recommendation": "Update your domain's DMARC TXT record (_dmarc.<domain>) with the new p=/pct= values yourself, then log the change in the Manual Log tab so DMARCTool can track it against live DNS.",
-    "new_sender": "Check the Senders tab for this IP's reverse DNS (PTR) and volume. If it's a service you actually use, label it there so it stops getting flagged. If you don't recognize it, someone may be spoofing your domain -- consider tightening your DMARC policy (raise pct, or move toward p=reject).",
-    "failure_investigation": "In the Senders tab, check whether this IP's hostname (PTR) matches a service you use, and whether it's covered by your SPF record's includes or signs with a DKIM selector your DNS actually publishes (Authentication tab). Consistent, high-volume failures from one source are usually a misconfigured ESP integration, not spoofing.",
-    "dns_drift": "Update your DMARC TXT record to match what you intended. If you changed it on purpose, log it in the Manual Log tab so this stops being flagged as unexpected drift.",
-    "data_stale": "Go to the Overview page and upload a fresh DMARC report export (Google Takeout or your provider's equivalent) to bring this domain's data current.",
-    "blocklist": "Request delisting directly: Spamhaus -> https://check.spamhaus.org/ (look up the IP, follow its removal link) -- Barracuda -> https://www.barracudacentral.org/rbl/removal-request . Before requesting removal, check for a real cause (compromised sender, sudden spam complaints, or a shared IP with a bad neighbor) or it may relist quickly.",
-    "ptr_issue": "If this is your own dedicated IP (not a shared ESP pool), add or fix its reverse DNS (PTR) record via your hosting/cloud provider's control panel -- for AWS EC2/SES dedicated IPs this means opening an AWS Support case to set a custom PTR. Shared ESP pool IPs (SES, Mailgun) already have this managed for you; this only needs action if it's your own infrastructure.",
-    "spf_lookup_limit": "Reduce nested `include:` mechanisms in your SPF record -- remove ESP includes you no longer use, or replace static IP ranges with direct ip4:/ip6: entries instead of an include. Check the Authentication tab for the current lookup count.",
-    "dkim_weak_key": "Regenerate this DKIM key at 2048-bit: in Google Workspace, Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email. For Mailgun/SES-hosted keys, use that provider's domain/DKIM settings to rotate the key.",
-    "mailgun_reputation": "Check the Deliverability & Spam tab for which addresses recently bounced or complained, prune them from your Listmonk subscriber list, and review your opt-in practices and sending frequency before your next campaign.",
-    "mailgun_new_suppressions": "These addresses are now suppressed in Mailgun and won't receive mail -- remove them from your Listmonk list too, so future campaigns don't keep counting them as valid recipients.",
-    "ses_reputation": "Check the Deliverability & Spam tab for this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
-    "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- remove them from your Listmonk list too.",
+    "ramp_recommendation": "Update your domain's DMARC TXT record (_dmarc.<domain>) with the new p=/pct= values yourself, then log the change under Log a manual action in the Manual Log tab so DMARCTool can track it against live DNS.",
+    "new_sender": "Check the Known senders table in the Senders tab for this IP's reverse DNS (PTR) and volume. If it's a service you actually use, label it with the \"What is this?\" dropdown there so it stops getting flagged. If you don't recognize it, someone may be spoofing your domain -- consider tightening your DMARC policy (raise pct, or move toward p=reject).",
+    "failure_investigation": "In the Known senders table (Senders tab), check whether this IP's hostname (PTR) matches a service you use, and whether it's covered by your SPF record's includes or signs with a DKIM selector your DNS actually publishes (Gmail sender requirements table, Authentication tab). Consistent, high-volume failures from one source are usually a misconfigured ESP integration, not spoofing.",
+    "dns_drift": "Update your DMARC TXT record to match what you intended. If you changed it on purpose, log it under Log a manual action in the Manual Log tab so this stops being flagged as unexpected drift.",
+    "data_stale": "Go to the Overview page (the domain list) and use the \"Add new reports\" upload form to bring this domain's data current.",
+    "blocklist": "Request delisting directly: Spamhaus -> https://check.spamhaus.org/ (look up the IP, follow its removal link) -- Barracuda -> https://www.barracudacentral.org/rbl/removal-request . Before requesting removal, check for a real cause (compromised sender, sudden spam complaints, or a shared IP with a bad neighbor) or it may relist quickly. Once delisted, the Blocklist column under Known senders (Senders tab) will show Clean again within a few hours.",
+    "ptr_issue": "If this is your own dedicated IP (not a shared ESP pool), add or fix its reverse DNS (PTR) record via your hosting/cloud provider's control panel -- for AWS EC2/SES dedicated IPs this means opening an AWS Support case to set a custom PTR. Shared ESP pool IPs (SES, Mailgun) already have this managed for you; this only needs action if it's your own infrastructure. See the PTR/rDNS column under Known senders (Senders tab) for which IP this is.",
+    "spf_lookup_limit": "Reduce nested `include:` mechanisms in your SPF record -- remove ESP includes you no longer use, or replace static IP ranges with direct ip4:/ip6: entries instead of an include. See the Gmail sender requirements table in the Authentication tab for the current lookup count.",
+    "dkim_weak_key": "Regenerate this DKIM key at 2048-bit: in Google Workspace, Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email. For Mailgun/SES-hosted keys, use that provider's domain/DKIM settings to rotate the key. See the Gmail sender requirements table in the Authentication tab for exactly which selector and signing domain this is.",
+    "mailgun_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of exactly which addresses recently bounced or complained, prune them from your Listmonk subscriber list, and review your opt-in practices and sending frequency before your next campaign.",
+    "mailgun_new_suppressions": "These addresses are now suppressed in Mailgun and won't receive mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list (with reasons and dates) and remove them from your Listmonk list too.",
+    "ses_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
+    "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list and remove them from Listmonk too.",
 }
 
 # postmaster_compliance items all share one category, but the fix depends on
@@ -108,9 +108,10 @@ def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_sp
 
     if requirement == "USER_REPORTED_SPAM_RATE":
         rate_note = f" (currently {current_spam_rate:.3%})" if current_spam_rate is not None else ""
-        return (f"Gmail users are marking your mail as spam more than recommended{rate_note}. Check the "
-                f"Deliverability & Spam tab for bounce/complaint detail, review consent/opt-in practices, "
-                f"sending frequency, and prune non-engaged or complaining recipients from Listmonk.")
+        return (f"Gmail users are marking your mail as spam more than recommended{rate_note}. Use the "
+                f"\"Download suppressions\" button in this Deliverability & Spam tab (if you send via Mailgun/SES) "
+                f"to see which addresses are bouncing or complaining, review consent/opt-in practices and sending "
+                f"frequency, and prune non-engaged or complaining recipients from Listmonk.")
 
     if requirement == "DELIVERABILITY":
         if reason == "MESSAGE_VOLUME_LOW":
