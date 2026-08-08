@@ -361,6 +361,18 @@
 
   <div class="tab-panel" data-tab="deliverability">
 
+    {% if mailgun_suppression_counts or ses_suppression_counts %}
+    <div class="section">
+      <h2 class="first">📥 Download suppressions</h2>
+      <p class="muted" style="margin-top:0">
+        Every bounced/complained/unsubscribed address captured for this domain across Mailgun and SES, with the
+        reason and dates -- one CSV, ready to cross-check against your Listmonk subscriber list instead of digging
+        through the Mailgun/SES consoles by hand.
+      </p>
+      <a href="/domain/{{ domain.name }}/suppressions.csv"><button type="button">⬇️ Download CSV</button></a>
+    </div>
+    {% endif %}
+
     {% if postmaster_stats or postmaster_compliance %}
     <div class="section">
       <h2 class="first">📮 Google Postmaster Tools</h2>

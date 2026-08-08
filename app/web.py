@@ -10,14 +10,16 @@ process is up, in addition to the explicit "run now" button and automatic re-run
 after each ingest.
 """
 
+import csv
+import io
 import shutil
 import tempfile
 from datetime import date as _date, timedelta as _timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -318,6 +320,41 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "manual_log_items": manual_log_items,
         "dns_history": dns_history,
     })
+
+
+@app.get("/domain/{name}/suppressions.csv")
+def download_suppressions(name: str):
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    domain_id = domain["id"]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["source", "source_domain", "email", "kind", "bounce_type", "reason", "first_seen", "last_seen"])
+
+    for r in conn.execute(
+        """SELECT mailgun_domain, email, kind, reason, first_seen_at, last_checked_at
+           FROM mailgun_suppressions WHERE domain_id=? ORDER BY kind, email""",
+        (domain_id,),
+    ):
+        writer.writerow(["mailgun", r["mailgun_domain"], r["email"], r["kind"], "",
+                          r["reason"] or "", r["first_seen_at"], r["last_checked_at"]])
+
+    for r in conn.execute(
+        """SELECT configuration_set, email, kind, bounce_type, reason, first_seen_at, last_seen_at
+           FROM ses_suppressions WHERE domain_id=? ORDER BY kind, email""",
+        (domain_id,),
+    ):
+        writer.writerow(["ses", r["configuration_set"], r["email"], r["kind"], r["bounce_type"] or "",
+                          r["reason"] or "", r["first_seen_at"], r["last_seen_at"]])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}_suppressions.csv"'},
+    )
 
 
 @app.post("/domain/{name}/senders/{ip}/classify")
