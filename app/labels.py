@@ -63,9 +63,7 @@ CATEGORY_REMEDIATION = {
 POSTMASTER_REQUIREMENT_REMEDIATION = {
     "SPF_AND_DKIM": "Check the Authentication tab -- make sure SPF and DKIM are both published and passing for your actual sending infrastructure, not just your primary domain.",
     "DMARC_ALIGNMENT": "Your DKIM or SPF signing domain doesn't align closely enough with your header From: domain. Check the Authentication tab's SPF/DKIM entries -- the signing/envelope domain should be your domain or a subdomain of it.",
-    "DMARC_POLICY": "Publish a DMARC policy in DNS if you haven't yet (p=none is a fine starting point), or check the DNS vs. reports section in the Authentication tab if you already have one -- Google may be seeing something different than you expect.",
     "ENCRYPTION": "Some of your mail isn't using TLS in transit. In Google Workspace: Admin Console -> Apps -> Google Workspace -> Gmail -> Compliance -> Require TLS. For SES/Mailgun, set the sending configuration set's TLS policy to Required.",
-    "USER_REPORTED_SPAM_RATE": "Gmail users are marking your mail as spam more than recommended. Check the Deliverability & Spam tab for bounce/complaint detail, review consent/opt-in practices, sending frequency, and prune non-engaged or complaining recipients from Listmonk.",
     "DNS_RECORDS": "Your sending IP's reverse DNS (PTR) isn't set up correctly -- see the PTR/rDNS column under Known Senders in the Senders tab for which IP and what's wrong.",
     "ONE_CLICK_UNSUBSCRIBE": "Make sure your bulk sender (Listmonk/Mailgun/SES) includes both List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers on every campaign message.",
     "HONOR_UNSUBSCRIBE": "Confirm unsubscribe requests from Listmonk/Mailgun/SES are actually being processed and suppressed promptly, not just recorded.",
@@ -77,10 +75,35 @@ def category_remediation(category):
     return CATEGORY_REMEDIATION.get(category)
 
 
-def postmaster_remediation(ref_key):
+def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_spam_rate=None):
+    """DMARC_POLICY and USER_REPORTED_SPAM_RATE get a domain-specific answer built
+    from what DMARCTool already knows (live DNS policy, current spam rate) instead
+    of generic boilerplate -- e.g. "publish a policy" is actively wrong advice for
+    a domain that already has one, which is a common real case (Google's bar here
+    is *enforcing at a meaningful percentage*, not merely "a record exists")."""
     if not ref_key or ":" not in ref_key:
         return None
     requirement = ref_key.rsplit(":", 1)[-1]
+
+    if requirement == "DMARC_POLICY":
+        if current_p:
+            if current_p == "none" or (current_pct is not None and current_pct < 100):
+                detail = f"p={current_p}" + (f", pct={current_pct}" if current_pct is not None else "")
+                return (f"You already have a DMARC policy ({detail}) -- Google's bar for this requirement is "
+                        f"actively enforcing at a meaningful percentage, not just having a record published. "
+                        f"Check the Overview tab's recommendation for whether it's safe to raise enforcement "
+                        f"(move off p=none, or ramp pct toward 100).")
+            return (f"You already have an enforcing DMARC policy (p={current_p}, pct={current_pct}) -- if Google "
+                    f"still flags this, it may be seeing a different record than expected (reporting lag, or a "
+                    f"stale cached lookup). Check the Authentication tab's DNS vs. reports section for a mismatch.")
+        return "No DMARC record found for this domain. Publish one in DNS -- p=none is a fine starting point (see the Authentication tab)."
+
+    if requirement == "USER_REPORTED_SPAM_RATE":
+        rate_note = f" (currently {current_spam_rate:.3%})" if current_spam_rate is not None else ""
+        return (f"Gmail users are marking your mail as spam more than recommended{rate_note}. Check the "
+                f"Deliverability & Spam tab for bounce/complaint detail, review consent/opt-in practices, "
+                f"sending frequency, and prune non-engaged or complaining recipients from Listmonk.")
+
     return POSTMASTER_REQUIREMENT_REMEDIATION.get(requirement)
 
 
