@@ -577,10 +577,13 @@
       </p>
       <div class="table-wrap">
       <table>
-        <tr><th>Sent</th><th>Subject</th><th>Delivered</th><th>Opened</th><th>Clicked</th><th>Bounced</th><th>Complained</th></tr>
+        <tr><th>Sent</th><th>From name</th><th>Subject</th><th>Delivered</th><th>Opened</th><th>Clicked</th><th>Bounced</th><th>Complained</th></tr>
         {% for c in newsletter_campaigns %}
         <tr>
           <td>{{ c.send_day or "-" }}</td>
+          <td>{{ c.from_display_name or "-" }}
+            {% if c.display_name_issues %}<br>{% for issue in c.display_name_issues %}<span style="color:var(--warn)">⚠ {{ issue }}</span><br>{% endfor %}{% endif %}
+          </td>
           <td>{{ c.subject }}</td>
           <td>{{ c.delivered }}</td>
           <td>{{ c.opened }}{% if c.open_rate is not none %} ({{ "%.0f"|format(100 * c.open_rate) }}%){% endif %}</td>
@@ -593,6 +596,13 @@
         {% endfor %}
       </table>
       </div>
+      {% if display_names.names %}
+        {% if display_names.consistent %}
+        <div class="verdict ok">✅ Consistent sender name across newsletters: "{{ display_names.names[0] }}"</div>
+        {% else %}
+        <div class="verdict warn">⚠ Inconsistent sender name across newsletters: {{ display_names.names|join(', ') }} -- Gmail's guidelines call for "a consistent, clear, and accurate statement of the sender's identity."</div>
+        {% endif %}
+      {% endif %}
     </div>
     {% endif %}
 

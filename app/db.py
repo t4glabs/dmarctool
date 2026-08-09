@@ -30,6 +30,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         "bounced": "INTEGER NOT NULL DEFAULT 0",
         "bounce_reason": "TEXT",
     })
+    _ensure_columns(conn, "ses_campaigns", {
+        "from_display_name": "TEXT",
+    })
     conn.commit()
 
 

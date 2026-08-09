@@ -467,6 +467,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
     Listmonk's -- the two can disagree since Listmonk tracks opens/clicks
     itself via pixel/link rewriting, while this reads what SES actually saw."""
     from app.bounce_reasons import categorize_bounce
+    from app.display_name_checks import check_display_name
 
     rows = conn.execute(
         """SELECT * FROM ses_campaigns WHERE domain_id=?
@@ -487,6 +488,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
         out.append({
             "campaign_id": r["campaign_id"],
             "subject": r["subject"] or "(no subject captured)",
+            "from_display_name": r["from_display_name"],
             "send_day": r["send_day"],
             "delivered": delivered,
             "opened": r["opened"] or 0,
@@ -498,8 +500,21 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "bounce_rate": (r["bounced"] or 0) / delivered if delivered else None,
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
             "bounce_breakdown": bounce_breakdown.most_common(),
+            "display_name_issues": check_display_name(r["from_display_name"]),
         })
     return out
+
+
+def display_name_summary(conn, domain_id: int):
+    """Distinct sender display names seen across this domain's newsletters,
+    plus a consistency flag -- Gmail's guidelines call for "a consistent,
+    clear, and accurate statement of the sender's identity", which is only
+    checkable in aggregate across campaigns, not from a single one."""
+    from app.display_name_checks import display_name_consistency
+
+    campaigns = recent_campaigns(conn, domain_id, limit=50)
+    names = display_name_consistency(campaigns)
+    return {"names": names, "consistent": len(names) <= 1}
 
 
 def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):

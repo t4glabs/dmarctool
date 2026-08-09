@@ -319,6 +319,7 @@ CREATE TABLE IF NOT EXISTS ses_campaigns (
     configuration_set TEXT NOT NULL,
     campaign_id       TEXT NOT NULL,  -- Listmonk campaign UUID
     subject           TEXT,
+    from_display_name TEXT,           -- e.g. "PATTIC" from "PATTIC <hello@pattic.org>" -- not visible in DMARC reports at all
     send_day          TEXT,           -- earliest event day seen for this campaign
     delivered         INTEGER NOT NULL DEFAULT 0,
     opened            INTEGER NOT NULL DEFAULT 0,

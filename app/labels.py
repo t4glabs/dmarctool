@@ -22,6 +22,8 @@ CATEGORY_LABELS = {
     "ses_new_suppressions": "New SES suppressions",
     "ses_account_health": "SES account-wide issue",
     "ses_identity_unverified": "SES domain identity not verified",
+    "display_name_issue": "Sender display name issue",
+    "display_name_inconsistent": "Inconsistent sender display name",
     "volume_spike": "Sudden volume increase",
     "safe_browsing_flagged": "Domain flagged unsafe",
 }
@@ -44,6 +46,8 @@ CATEGORY_HELP = {
     "ses_new_suppressions": "SES recorded new bounces or complaints since the last check for this domain's configuration set -- these addresses are effectively dead ends; worth pruning from Listmonk too.",
     "ses_account_health": "A problem with the SES account itself (not one specific domain) -- e.g. its enforcement status isn't Healthy, sending is disabled account-wide, or automatic bounce/complaint suppression is turned off. Affects every domain sending through this SES account.",
     "ses_identity_unverified": "This domain's SES sending identity isn't fully verified. Mail sent through an unverified identity can be rejected outright or sent without proper authentication.",
+    "display_name_issue": "A recent newsletter's \"From\" display name looks like it may not follow Gmail's sender guidelines (https://support.google.com/mail/answer/81126) -- e.g. it reads like subject-line/urgency content, is in all caps, contains emoji, or resembles a threaded-reply count.",
+    "display_name_inconsistent": "This domain's newsletters have used more than one \"From\" display name. Gmail's guidelines call for \"a consistent, clear, and accurate statement of the sender's identity\" -- inconsistency can look less trustworthy to recipients and spam filters alike.",
     "volume_spike": "Your recent daily sending volume is well above your own trailing average. Gmail's guidance is to ramp volume up gradually -- a sudden jump (even of genuinely good mail) can trigger rate limiting or hurt reputation.",
     "safe_browsing_flagged": "Google Safe Browsing has flagged this domain (or a URL on it) as unsafe -- e.g. malware or phishing. This can independently hurt email deliverability and trust, separate from your DMARC/authentication setup.",
 }
@@ -68,6 +72,8 @@ CATEGORY_REMEDIATION = {
     "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list and remove them from Listmonk too.",
     "ses_account_health": "Check the AWS SES Console -> Account dashboard / Reputation for the specifics. If enforcement status isn't Healthy, AWS Support can usually clarify why. If auto-suppression is off, turn it back on under Account dashboard -> Suppression list settings.",
     "ses_identity_unverified": "Check AWS SES Console -> Identities for this domain. If verification is pending, confirm the required DNS records (TXT/CNAME/MX depending on method) are actually published. If sending is disabled, check for a policy violation notice from AWS.",
+    "display_name_issue": "In Listmonk, edit this campaign's (or the default) \"From\" name to be a plain, consistent statement of who you are -- e.g. your organization name -- rather than subject-line wording, all-caps, emoji, or a reply-count-style suffix.",
+    "display_name_inconsistent": "In Listmonk, standardize the \"From\" name used across all campaigns for this domain (Settings -> Mailserver, or per-campaign if overridden) to one consistent name.",
     "volume_spike": "If this jump was intentional (a planned campaign), no action needed -- it should stop flagging once your baseline catches up. If it wasn't intentional, check for a misconfigured automation/loop in Listmonk or your ESP that's resending or duplicating messages. Either way, avoid stacking another big increase on top of this one until it settles.",
     "safe_browsing_flagged": "Check https://transparencyreport.google.com/safe-browsing/search for the specific flagged URL/reason. If it's your own website, scan for and remove malware/injected content, then request a review in Google Search Console. If it's a third-party link in a footer/widget you don't control, remove it.",
 }

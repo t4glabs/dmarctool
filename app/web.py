@@ -24,10 +24,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.analysis import (
-    all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, domain_window_stats,
-    day_to_date, epoch_day, ensure_default_settings, mailgun_daily_series, postmaster_daily_series,
-    provider_breakdown, recent_campaigns, run_analysis, ses_daily_series, sending_stream_breakdown,
-    subscriber_engagement_summary,
+    all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
+    domain_window_stats, day_to_date, epoch_day, ensure_default_settings, mailgun_daily_series,
+    postmaster_daily_series, provider_breakdown, recent_campaigns, run_analysis, ses_daily_series,
+    sending_stream_breakdown, subscriber_engagement_summary,
 )
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
@@ -312,6 +312,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10)
     engagement = subscriber_engagement_summary(conn, domain_id)
     bounce_categories = bounce_category_breakdown(conn, domain_id)
+    display_names = display_name_summary(conn, domain_id)
 
     ses_account_status = conn.execute(
         "SELECT * FROM ses_account_status ORDER BY checked_at DESC LIMIT 1"
@@ -373,6 +374,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "newsletter_campaigns": newsletter_campaigns,
         "engagement": engagement,
         "bounce_categories": bounce_categories,
+        "display_names": display_names,
         "ses_account_status": ses_account_status,
         "ses_identity": ses_identity,
         "open_items": open_items,
