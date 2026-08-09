@@ -478,6 +478,38 @@
     </div>
     {% endif %}
 
+    {% if ses_account_status or ses_identity %}
+    <div class="section">
+      <h2 class="first">🩺 SES account &amp; identity health</h2>
+      <p class="muted" style="margin-top:0">
+        Straight from AWS SES's own account/identity APIs -- separate from the event-derived numbers below.
+        Account-wide items (enforcement status, sending quota, suppression settings) are shared across every domain
+        sending through this same SES account, not specific to this one.
+      </p>
+      <div class="table-wrap">
+      <table>
+        {% if ses_account_status %}
+        <tr><th>Account enforcement status</th><td>{{ ses_account_status.enforcement_status or "unknown" }}</td></tr>
+        <tr><th>Account-wide sending enabled</th><td>{{ "Yes" if ses_account_status.sending_enabled else "No" }}</td></tr>
+        <tr><th>Daily sending quota used</th>
+          <td>{{ ses_account_status.sent_last_24h | int }} of {{ ses_account_status.max_24h_send | int }}
+            ({{ "%.1f"|format(100 * ses_account_status.sent_last_24h / ses_account_status.max_24h_send) if ses_account_status.max_24h_send else "-" }}%),
+            max {{ ses_account_status.max_send_rate | int }}/sec</td>
+        </tr>
+        <tr><th>Auto-suppression enabled</th>
+          <td>Bounces: {{ "Yes" if ses_account_status.suppress_bounce else "No" }}, Complaints: {{ "Yes" if ses_account_status.suppress_complaint else "No" }}</td>
+        </tr>
+        {% endif %}
+        {% if ses_identity %}
+        <tr><th>This domain's identity verification</th>
+          <td>{{ ses_identity.verification_status or "unknown" }} (sending {{ "enabled" if ses_identity.sending_enabled else "disabled" }})</td>
+        </tr>
+        {% endif %}
+      </table>
+      </div>
+    </div>
+    {% endif %}
+
     {% if ses_stats or ses_suppression_counts %}
     <div class="section">
       <h2 class="first">☁️ Amazon SES reputation &amp; list hygiene</h2>
@@ -489,7 +521,7 @@
       <div class="verdict {{ verdicts.ses[0] }}">{{ verdicts.ses[1] }}</div>
       <div class="table-wrap">
       <table>
-        <tr><th>Configuration set</th><th>Delivered ({{ ses_window_days }}d)</th><th>Bounce rate</th><th>Complaint rate</th><th>Bounces</th><th>Complaints</th></tr>
+        <tr><th>Configuration set</th><th>Delivered ({{ ses_window_days }}d)</th><th>Bounce rate</th><th>Complaint rate</th><th>Bounces</th><th title="Non-existent/rejecting addresses -- these need blocklisting in Listmonk. Transient bounces are temporary and may succeed on retry.">Permanent bounces (needs cleanup)</th><th>Complaints</th></tr>
         {% for s in ses_stats %}
         <tr>
           <td>{{ s.configuration_set }}</td>
@@ -497,6 +529,7 @@
           <td>{{ "%.2f"|format(100 * s.bounced / s.delivered) if s.delivered else "-" }}%</td>
           <td>{{ "%.2f"|format(100 * s.complained / s.delivered) if s.delivered else "-" }}%</td>
           <td>{{ ses_suppression_counts.get(s.configuration_set, {}).get('bounce', 0) }}</td>
+          <td>{{ ses_bounce_type_counts.get(s.configuration_set, {}).get('Permanent', 0) }}</td>
           <td>{{ ses_suppression_counts.get(s.configuration_set, {}).get('complaint', 0) }}</td>
         </tr>
         {% endfor %}
@@ -542,7 +575,31 @@
     </div>
     {% endif %}
 
-    {% if not (postmaster_stats or postmaster_compliance or mailgun_stats or mailgun_suppression_counts or ses_stats or ses_suppression_counts or newsletter_campaigns) %}
+    {% if engagement and engagement.total_subscribers > 0 %}
+    <div class="section">
+      <h2 class="first">💤 Inactive subscribers</h2>
+      <p class="muted" style="margin-top:0">
+        Same idea as the "9+ campaigns received, zero opens" check the team runs by hand against Listmonk -- built
+        here from SES's own delivery/open events instead. {{ engagement.total_subscribers }} subscriber(s) tracked
+        in total; below are the ones who've received at least {{ engagement.threshold }} newsletters but never
+        opened a single one. Worth re-engaging or removing from the list.
+      </p>
+      {% if engagement.inactive %}
+      <div class="table-wrap">
+      <table>
+        <tr><th>Email</th><th>Newsletters received</th></tr>
+        {% for s in engagement.inactive %}
+        <tr><td>{{ s.email }}</td><td>{{ s.received }}</td></tr>
+        {% endfor %}
+      </table>
+      </div>
+      {% else %}
+      <p class="muted">No one has crossed {{ engagement.threshold }} received newsletters with zero opens yet.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if not (postmaster_stats or postmaster_compliance or mailgun_stats or mailgun_suppression_counts or ses_stats or ses_suppression_counts or newsletter_campaigns or ses_account_status or ses_identity) %}
     <div class="section">
       <h2 class="first">🧹 Deliverability &amp; Spam</h2>
       <p class="muted" style="margin-top:0">No Postmaster Tools, Mailgun, or SES data connected for this domain yet.</p>

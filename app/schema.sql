@@ -331,6 +331,59 @@ CREATE TABLE IF NOT EXISTS ses_campaigns (
 
 CREATE INDEX IF NOT EXISTS idx_ses_campaigns_domain ON ses_campaigns(domain_id, send_day);
 
+-- Per-recipient-per-campaign record, needed to answer "who received N
+-- newsletters but never opened a single one" -- a per-campaign total alone
+-- can't distinguish "the same 5 people opened every campaign" from "5
+-- different people opened one each". This does mean storing individual
+-- subscriber email addresses (not stored anywhere else in DMARCTool, which
+-- otherwise only keeps bounce/complaint addresses for suppression purposes) --
+-- a deliberate scope expansion, decided after discussing the tradeoff.
+CREATE TABLE IF NOT EXISTS ses_campaign_recipients (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    configuration_set TEXT NOT NULL,
+    campaign_id       TEXT NOT NULL,
+    email             TEXT NOT NULL,
+    delivered         INTEGER NOT NULL DEFAULT 0,  -- 0/1
+    opened            INTEGER NOT NULL DEFAULT 0,  -- 0/1 (opened at least once)
+    clicked           INTEGER NOT NULL DEFAULT 0,  -- 0/1 (clicked at least once)
+    first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(configuration_set, campaign_id, email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ses_campaign_recipients_email ON ses_campaign_recipients(domain_id, email);
+
+-- Account-wide SES health (sesv2 GetAccount) -- not tied to any one tracked
+-- domain, since it's one shared AWS account, but affects deliverability for
+-- all of them equally. History kept (like postmaster_stats) so a status
+-- change is visible, not just the latest snapshot.
+CREATE TABLE IF NOT EXISTS ses_account_status (
+    id                 INTEGER PRIMARY KEY,
+    checked_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    enforcement_status TEXT,     -- 'HEALTHY'|'PROBATION'|'SHUTDOWN' etc
+    sending_enabled    INTEGER,  -- 0/1
+    sent_last_24h      REAL,
+    max_24h_send       REAL,
+    max_send_rate      REAL,
+    suppress_bounce    INTEGER,  -- 0/1 -- account-level auto-suppression setting
+    suppress_complaint INTEGER   -- 0/1
+);
+
+-- Per-domain SES identity verification (sesv2 ListEmailIdentities) -- a
+-- domain sending mail through SES needs its identity verified, separate
+-- from DNS/DMARC compliance.
+CREATE TABLE IF NOT EXISTS ses_identity_checks (
+    id                  INTEGER PRIMARY KEY,
+    domain_id           INTEGER NOT NULL REFERENCES domains(id),
+    identity_name       TEXT NOT NULL,
+    verification_status TEXT,    -- 'SUCCESS'|'PENDING'|'FAILED'|'NOT_STARTED' etc
+    sending_enabled     INTEGER, -- 0/1
+    checked_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ses_identity_checks_domain ON ses_identity_checks(domain_id, identity_name, checked_at);
+
 -- Google Safe Browsing check -- is this domain's own website flagged for
 -- malware/phishing? Independent of DMARC/authentication, but a real
 -- deliverability/trust signal per Gmail's own sender guidelines.

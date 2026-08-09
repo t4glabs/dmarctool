@@ -58,9 +58,13 @@ DEFAULT_SETTINGS = {
     "postmaster_recheck_hours": "24",     # Postmaster Tools data itself lags/aggregates daily
     "postmaster_stats_window_days": "30", # lookback window for the SPAM_RATE / delivery-error metrics
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
+    "ses_bounce_rate_watch": "0.02",       # bounce rate (of delivered) that triggers an early "watch" flag
     "ses_bounce_rate_warn": "0.05",       # bounce rate (of delivered) that triggers a flag
+    "ses_complaint_rate_watch": "0.0008", # complaint rate (of delivered) that triggers an early "watch" flag
     "ses_complaint_rate_warn": "0.001",   # complaint rate (of delivered) that triggers a flag
     "ses_max_messages_per_run": "3000",   # cap SQS messages drained per check so a big backlog can't block a request; the rest drain on the next run
+    "ses_account_recheck_hours": "24",    # don't re-poll SES account health/identity verification more often than this
+    "newsletter_inactive_campaigns": "9",  # campaigns received with zero opens across all of them => flagged inactive
     "volume_spike_recent_days": "3",       # "recent" window averaged for the spike comparison
     "volume_spike_baseline_days": "7",     # "before" window averaged as the baseline
     "volume_spike_min_baseline_avg": "10", # baseline must average at least this many msgs/day to count
@@ -485,6 +489,30 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
         })
     return out
+
+
+def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
+    """Replaces the manual monthly SQL query the team runs directly against
+    Listmonk's DB ('received 9+ campaigns, opened zero') -- built from the
+    same per-recipient SES event data as recent_campaigns, so it's the same
+    trusted source, just aggregated differently."""
+    if threshold is None:
+        settings = ensure_default_settings(conn)
+        threshold = int(settings["newsletter_inactive_campaigns"])
+    per_email = conn.execute(
+        """SELECT email, COUNT(DISTINCT campaign_id) as received, MAX(opened) as ever_opened
+           FROM ses_campaign_recipients WHERE domain_id=? AND delivered=1
+           GROUP BY email""",
+        (domain_id,),
+    ).fetchall()
+    inactive = sorted(
+        (
+            {"email": r["email"], "received": r["received"]}
+            for r in per_email if r["received"] >= threshold and not r["ever_opened"]
+        ),
+        key=lambda x: -x["received"],
+    )
+    return {"total_subscribers": len(per_email), "inactive": inactive, "threshold": threshold}
 
 
 def mailgun_daily_series(conn, domain_id: int, days: int = 60):

@@ -17,8 +17,11 @@ CATEGORY_LABELS = {
     "mailgun_reputation": "Mailgun bounce/complaint rate",
     "mailgun_new_suppressions": "New Mailgun suppressions",
     "postmaster_compliance": "Gmail Postmaster compliance",
+    "ses_reputation_watch": "SES bounce/complaint rate trending up",
     "ses_reputation": "SES bounce/complaint rate",
     "ses_new_suppressions": "New SES suppressions",
+    "ses_account_health": "SES account-wide issue",
+    "ses_identity_unverified": "SES domain identity not verified",
     "volume_spike": "Sudden volume increase",
     "safe_browsing_flagged": "Domain flagged unsafe",
 }
@@ -36,8 +39,11 @@ CATEGORY_HELP = {
     "mailgun_reputation": "Mailgun's reported bounce or complaint rate for this domain crossed the warning threshold -- worth checking your list quality before sending more. Note: this only reflects providers that feed complaints back to Mailgun (e.g. Yahoo) -- Gmail generally doesn't, so a low number here doesn't mean Gmail recipients are happy too.",
     "mailgun_new_suppressions": "Mailgun automatically suppressed new addresses (bounced or complained) since the last check -- these won't receive mail from you again unless removed from Mailgun's suppression list, and are worth pruning from your Listmonk list too.",
     "postmaster_compliance": "Google's own verdict (from Postmaster Tools) on one of its published sender requirements for this domain -- this is Gmail telling you directly what's wrong, not an inference from DMARC reports.",
+    "ses_reputation_watch": "Amazon SES's own bounce or complaint rate for this domain has crossed the earlier \"watch\" threshold -- not yet at the danger line, but trending the wrong way.",
     "ses_reputation": "Amazon SES's own bounce or complaint rate for this domain crossed the warning threshold, based on real bounce/complaint events from its dedicated configuration set -- worth checking list quality before sending more.",
     "ses_new_suppressions": "SES recorded new bounces or complaints since the last check for this domain's configuration set -- these addresses are effectively dead ends; worth pruning from Listmonk too.",
+    "ses_account_health": "A problem with the SES account itself (not one specific domain) -- e.g. its enforcement status isn't Healthy, sending is disabled account-wide, or automatic bounce/complaint suppression is turned off. Affects every domain sending through this SES account.",
+    "ses_identity_unverified": "This domain's SES sending identity isn't fully verified. Mail sent through an unverified identity can be rejected outright or sent without proper authentication.",
     "volume_spike": "Your recent daily sending volume is well above your own trailing average. Gmail's guidance is to ramp volume up gradually -- a sudden jump (even of genuinely good mail) can trigger rate limiting or hurt reputation.",
     "safe_browsing_flagged": "Google Safe Browsing has flagged this domain (or a URL on it) as unsafe -- e.g. malware or phishing. This can independently hurt email deliverability and trust, separate from your DMARC/authentication setup.",
 }
@@ -57,8 +63,11 @@ CATEGORY_REMEDIATION = {
     "dkim_weak_key": "Regenerate this DKIM key at 2048-bit: in Google Workspace, Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email. For Mailgun/SES-hosted keys, use that provider's domain/DKIM settings to rotate the key. See the Gmail sender requirements table in the Authentication tab for exactly which selector and signing domain this is.",
     "mailgun_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of exactly which addresses recently bounced or complained, prune them from your Listmonk subscriber list, and review your opt-in practices and sending frequency before your next campaign.",
     "mailgun_new_suppressions": "These addresses are now suppressed in Mailgun and won't receive mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list (with reasons and dates) and remove them from your Listmonk list too.",
+    "ses_reputation_watch": "No urgent action yet -- but check the \"Download suppressions\" CSV for this configuration set to see if a pattern is forming, and consider slowing send frequency until the rate settles back down.",
     "ses_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
     "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list and remove them from Listmonk too.",
+    "ses_account_health": "Check the AWS SES Console -> Account dashboard / Reputation for the specifics. If enforcement status isn't Healthy, AWS Support can usually clarify why. If auto-suppression is off, turn it back on under Account dashboard -> Suppression list settings.",
+    "ses_identity_unverified": "Check AWS SES Console -> Identities for this domain. If verification is pending, confirm the required DNS records (TXT/CNAME/MX depending on method) are actually published. If sending is disabled, check for a policy violation notice from AWS.",
     "volume_spike": "If this jump was intentional (a planned campaign), no action needed -- it should stop flagging once your baseline catches up. If it wasn't intentional, check for a misconfigured automation/loop in Listmonk or your ESP that's resending or duplicating messages. Either way, avoid stacking another big increase on top of this one until it settles.",
     "safe_browsing_flagged": "Check https://transparencyreport.google.com/safe-browsing/search for the specific flagged URL/reason. If it's your own website, scan for and remove malware/injected content, then request a review in Google Search Console. If it's a third-party link in a footer/widget you don't control, remove it.",
 }
@@ -304,20 +313,40 @@ SETTINGS_META = {
         "help": "How many days of DMARCTool's own accumulated SES event counts to sum when computing the rate shown (SES itself has no on-demand stats API -- this is built entirely from events we've captured).",
         "example": "30 means the rate reflects the last 30 days of events DMARCTool has seen since you set up the SNS/SQS pipeline.",
     },
+    "ses_bounce_rate_watch": {
+        "label": "SES bounce rate that triggers an early watch flag",
+        "help": "A softer, earlier warning than the main bounce flag below -- worth keeping an eye on, not yet urgent.",
+        "example": "0.02 means a soft flag once 2% or more of your mail bounces.",
+    },
     "ses_bounce_rate_warn": {
         "label": "SES bounce rate that triggers a flag",
         "help": "If the share of delivered mail that bounced (for a domain's dedicated configuration set) goes above this, you'll get an action item.",
         "example": "0.05 means a flag once 5% or more of your mail bounces.",
+    },
+    "ses_complaint_rate_watch": {
+        "label": "SES complaint rate that triggers an early watch flag",
+        "help": "A softer, earlier warning than the main complaint flag below -- worth keeping an eye on, not yet urgent.",
+        "example": "0.0008 means a soft flag once 0.08% or more of your mail gets marked as spam.",
     },
     "ses_complaint_rate_warn": {
         "label": "SES complaint rate that triggers a flag",
         "help": "If the share of delivered mail marked as spam goes above this, you'll get an action item.",
         "example": "0.001 means a flag once 0.1% or more of your mail gets marked as spam.",
     },
+    "ses_account_recheck_hours": {
+        "label": "SES account health recheck frequency (hours)",
+        "help": "How often to re-poll SES for account-wide health (enforcement status, sending quota, suppression settings) and per-domain identity verification. This is a small, cheap API call, but no need to hit it constantly.",
+        "example": "24 means account health refreshes at most once a day.",
+    },
     "ses_max_messages_per_run": {
         "label": "Max SES events drained per check",
         "help": "SES publishes an event for every single delivered/bounced/complained message, so a busy sender can build a large backlog. This caps how many get processed in one check so it can't block a request for a long time -- the rest just get picked up on the next run.",
         "example": "3000 means at most 3000 queued events get processed each time; a bigger backlog drains over several runs.",
+    },
+    "newsletter_inactive_campaigns": {
+        "label": "Newsletters received before someone counts as inactive",
+        "help": "A subscriber who has received at least this many newsletters, but never opened a single one of them, gets flagged as inactive -- worth re-engaging or removing from the list.",
+        "example": "9 means someone needs 9 delivered newsletters with zero opens before being flagged.",
     },
     "volume_spike_recent_days": {
         "label": "\"Recent\" window for volume-spike detection (days)",

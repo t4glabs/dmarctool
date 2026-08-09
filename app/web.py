@@ -27,6 +27,7 @@ from app.analysis import (
     all_domains, current_policy_run, daily_pass_series, domain_window_stats,
     day_to_date, epoch_day, ensure_default_settings, mailgun_daily_series, postmaster_daily_series,
     provider_breakdown, recent_campaigns, run_analysis, ses_daily_series, sending_stream_breakdown,
+    subscriber_engagement_summary,
 )
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
@@ -36,6 +37,7 @@ from app.db import get_connection, init_db
 from app.dns_check import run_dns_checks
 from app.mailgun import run_mailgun_checks
 from app.postmaster import run_postmaster_checks
+from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest
 from app.safe_browsing import run_safe_browsing_checks
 from app.watchlist import build_watchlist
@@ -88,6 +90,7 @@ def _startup():
         run_mailgun_checks(c, verbose=False)
         run_postmaster_checks(c, verbose=False)
         run_ses_event_ingest(c, verbose=False)
+        run_ses_account_checks(c, verbose=False)
         run_safe_browsing_checks(c, verbose=False)
 
     _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
@@ -295,10 +298,27 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ):
         ses_suppression_counts.setdefault(row["configuration_set"], {})[row["kind"]] = row["n"]
+    ses_bounce_type_counts = {}
+    for row in conn.execute(
+        """SELECT configuration_set, bounce_type, COUNT(*) as n FROM ses_suppressions
+           WHERE domain_id=? AND kind='bounce' GROUP BY configuration_set, bounce_type""",
+        (domain_id,),
+    ):
+        ses_bounce_type_counts.setdefault(row["configuration_set"], {})[row["bounce_type"] or "Undetermined"] = row["n"]
     ses_series = ses_daily_series(conn, domain_id, days=60)
     ses_rate_sparkline = dual_rate_sparkline(ses_series)
     ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10)
+    engagement = subscriber_engagement_summary(conn, domain_id)
+
+    ses_account_status = conn.execute(
+        "SELECT * FROM ses_account_status ORDER BY checked_at DESC LIMIT 1"
+    ).fetchone()
+    ses_identity = conn.execute(
+        """SELECT * FROM ses_identity_checks WHERE domain_id=?
+           ORDER BY checked_at DESC LIMIT 1""",
+        (domain_id,),
+    ).fetchone()
 
     manual_log_items = conn.execute(
         "SELECT * FROM action_items WHERE domain_id=? AND kind='manual_log' ORDER BY created_at DESC LIMIT 20",
@@ -345,9 +365,13 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_stats": ses_stats,
         "ses_window_days": ses_window_days,
         "ses_suppression_counts": ses_suppression_counts,
+        "ses_bounce_type_counts": ses_bounce_type_counts,
         "ses_rate_sparkline": ses_rate_sparkline,
         "ses_volume_chart": ses_volume_chart,
         "newsletter_campaigns": newsletter_campaigns,
+        "engagement": engagement,
+        "ses_account_status": ses_account_status,
+        "ses_identity": ses_identity,
         "open_items": open_items,
         "senders": senders,
         "classifications": CLASSIFICATIONS,
@@ -456,6 +480,7 @@ def run_checks():
     run_mailgun_checks(conn, verbose=False)
     run_postmaster_checks(conn, verbose=False)
     run_ses_event_ingest(conn, verbose=False)
+    run_ses_account_checks(conn, verbose=False)
     run_safe_browsing_checks(conn, verbose=False)
     return RedirectResponse(
         "/?flash=Analysis, DNS, blocklist, compliance, Mailgun, Postmaster, SES, and Safe Browsing checks refreshed.",

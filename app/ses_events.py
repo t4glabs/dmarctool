@@ -150,6 +150,26 @@ def _upsert_campaign_event(conn, domain_id, config_set, campaign_id, subject, da
     )
 
 
+RECIPIENT_COLUMN = {"delivery": "delivered", "open": "opened", "click": "clicked"}
+
+
+def _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, recipients):
+    """Per-recipient-per-campaign record, needed to tell 'the same 5 people
+    opened every campaign' apart from '5 different people opened one each' --
+    a per-campaign total alone can't do that. Only called for
+    delivery/open/click (the events that mean something at recipient level);
+    bounce/complaint recipients didn't get delivered so they don't belong here."""
+    column = RECIPIENT_COLUMN[kind]
+    for r in recipients:
+        conn.execute(
+            f"""INSERT INTO ses_campaign_recipients (domain_id, configuration_set, campaign_id, email, {column})
+                VALUES (?,?,?,?,1)
+                ON CONFLICT(configuration_set, campaign_id, email) DO UPDATE SET
+                  {column}=1, last_seen_at=datetime('now')""",
+            (domain_id, config_set, campaign_id, r["email"]),
+        )
+
+
 def run_ses_event_ingest(conn, verbose: bool = True) -> None:
     settings_now = ensure_default_settings(conn)
     sqs, queue_url = _client_and_queue()
@@ -202,6 +222,8 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
 
                 if campaign_id:
                     _upsert_campaign_event(conn, domain_id, config_set, campaign_id, subject, event_day, kind, len(recipients))
+                    if kind in RECIPIENT_COLUMN:
+                        _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, recipients)
 
                 if kind in ("bounce", "complaint"):
                     supp_key = (domain_id, config_set)
@@ -253,7 +275,9 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                   f"+{c['bounced']} bounced, +{c['complained']} complained")
 
     window_days = int(settings_now["ses_stats_window_days"])
+    bounce_watch = float(settings_now["ses_bounce_rate_watch"])
     bounce_warn = float(settings_now["ses_bounce_rate_warn"])
+    complaint_watch = float(settings_now["ses_complaint_rate_watch"])
     complaint_warn = float(settings_now["ses_complaint_rate_warn"])
     cutoff = (datetime.date.today() - datetime.timedelta(days=window_days)).isoformat()
 
@@ -276,10 +300,30 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                 f"{bounce_rate:.2%} bounced, {complaint_rate:.2%} complained over the last {window_days}d "
                 f"({delivered} delivered). Check list quality before sending more.",
             )
-        else:
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='ses_reputation_watch' AND ref_key=? AND status='open'""",
+                (config_set,),
+            )
+        elif delivered and (bounce_rate >= bounce_watch or complaint_rate >= complaint_watch):
+            # Softer, earlier tier -- matches the team's own documented two-tier
+            # thresholds (e.g. bounce: watch at 2%, danger at 5%), which a single
+            # cutoff at the danger line was missing entirely.
+            upsert_system_action(
+                conn, domain_id, "ses_reputation_watch", config_set,
+                f"{domain_name}: SES bounce/complaint rate is trending up ({config_set})",
+                f"{bounce_rate:.2%} bounced, {complaint_rate:.2%} complained over the last {window_days}d "
+                f"({delivered} delivered). Not urgent yet, but worth watching before it crosses the danger line.",
+            )
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                    WHERE category='ses_reputation' AND ref_key=? AND status='open'""",
+                (config_set,),
+            )
+        else:
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category IN ('ses_reputation', 'ses_reputation_watch') AND ref_key=? AND status='open'""",
                 (config_set,),
             )
 
