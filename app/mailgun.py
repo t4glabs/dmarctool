@@ -21,6 +21,7 @@ is a no-op (so the rest of the check pipeline isn't blocked on it).
 import argparse
 import base64
 import datetime
+import email.utils
 import json
 import urllib.error
 import urllib.request
@@ -80,23 +81,39 @@ def match_tracked_domains(conn, mailgun_domains):
     return matches
 
 
+def _bucket_totals(bucket):
+    return {
+        "accepted": bucket.get("accepted", {}).get("total", 0),
+        "delivered": bucket.get("delivered", {}).get("total", 0),
+        "failed_perm": bucket.get("failed", {}).get("permanent", {}).get("total", 0),
+        "failed_temp": bucket.get("failed", {}).get("temporary", {}).get("total", 0),
+        "complained": bucket.get("complained", {}).get("total", 0),
+        "unsubscribed": bucket.get("unsubscribed", {}).get("total", 0),
+    }
+
+
 def fetch_stats(mailgun_domain: str, api_key: str, window_days: int):
-    """Summed accepted/delivered/failed/complained/unsubscribed over the window."""
+    """Returns (totals, daily, error). Mailgun's stats/total endpoint already
+    buckets by day within the window -- `daily` is [(day_str, day_totals), ...]
+    pulled from the same response instead of throwing that breakdown away."""
     url = f"{API_BASE}/{mailgun_domain}/stats/total?duration={window_days}d&" + "&".join(
         f"event={e}" for e in ("accepted", "delivered", "failed", "complained", "unsubscribed")
     )
     data, err = _get(url, api_key)
     if err:
-        return None, err
+        return None, None, err
     totals = {"accepted": 0, "delivered": 0, "failed_perm": 0, "failed_temp": 0, "complained": 0, "unsubscribed": 0}
+    daily = []
     for bucket in data.get("stats", []):
-        totals["accepted"] += bucket.get("accepted", {}).get("total", 0)
-        totals["delivered"] += bucket.get("delivered", {}).get("total", 0)
-        totals["failed_perm"] += bucket.get("failed", {}).get("permanent", {}).get("total", 0)
-        totals["failed_temp"] += bucket.get("failed", {}).get("temporary", {}).get("total", 0)
-        totals["complained"] += bucket.get("complained", {}).get("total", 0)
-        totals["unsubscribed"] += bucket.get("unsubscribed", {}).get("total", 0)
-    return totals, None
+        day_totals = _bucket_totals(bucket)
+        for k, v in day_totals.items():
+            totals[k] += v
+        try:
+            day_str = email.utils.parsedate_to_datetime(bucket["time"]).date().isoformat()
+            daily.append((day_str, day_totals))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return totals, daily, None
 
 
 def fetch_suppressions(mailgun_domain: str, kind: str, api_key: str):
@@ -125,12 +142,12 @@ def _stale(conn, mailgun_domain, recheck_hours):
 
 def _fetch_all(mailgun_domain, api_key, window_days):
     """All network I/O for one domain -- no DB access, safe to run concurrently."""
-    stats, stats_err = fetch_stats(mailgun_domain, api_key, window_days)
+    stats, daily, stats_err = fetch_stats(mailgun_domain, api_key, window_days)
     suppressions = {}
     for endpoint, kind in SUPPRESSION_KINDS.items():
         items, err = fetch_suppressions(mailgun_domain, endpoint, api_key)
         suppressions[kind] = (items, err)
-    return {"stats": (stats, stats_err), "suppressions": suppressions}
+    return {"stats": (stats, stats_err), "daily": daily, "suppressions": suppressions}
 
 
 def run_mailgun_checks(conn, verbose: bool = True) -> None:
@@ -191,6 +208,21 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
             if verbose:
                 print(f"[mailgun] {mailgun_domain} ({domain_name}): {accepted} accepted, "
                       f"{bounce_rate:.2%} bounced, {complaint_rate:.2%} complained (last {window_days}d)")
+
+            for day_str, day_totals in fetched[mailgun_domain]["daily"] or []:
+                conn.execute(
+                    """INSERT INTO mailgun_daily_stats
+                       (domain_id, mailgun_domain, day, accepted, delivered, failed_perm, failed_temp,
+                        complained, unsubscribed)
+                       VALUES (?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(mailgun_domain, day) DO UPDATE SET
+                         accepted=excluded.accepted, delivered=excluded.delivered,
+                         failed_perm=excluded.failed_perm, failed_temp=excluded.failed_temp,
+                         complained=excluded.complained, unsubscribed=excluded.unsubscribed""",
+                    (domain_id, mailgun_domain, day_str, day_totals["accepted"], day_totals["delivered"],
+                     day_totals["failed_perm"], day_totals["failed_temp"], day_totals["complained"],
+                     day_totals["unsubscribed"]),
+                )
 
             if accepted and (bounce_rate >= bounce_warn or complaint_rate >= complaint_warn):
                 upsert_system_action(

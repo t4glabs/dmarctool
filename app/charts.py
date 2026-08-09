@@ -175,3 +175,43 @@ def dual_rate_sparkline(series, width: int = 640, height: int = 140,
   <circle cx="{pad_l + 90}" cy="{height - 8}" r="3" style="fill:var(--bad)"/>
   <text x="{pad_l + 98}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.8">{label_b} rate</text>
 </svg>'''
+
+
+def volume_bar_chart(series, width: int = 640, height: int = 140) -> str:
+    """series: list of (date_str, count). A bar per day of raw volume (not a
+    rate) -- for spotting *when* you sent and how big each campaign was, which
+    a rate chart can't show (a tiny test send and a 10,000-message campaign can
+    have the identical 0% bounce rate)."""
+    pad_l, pad_r, pad_t, pad_b = 30, 8, 16, 20
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+
+    points_with_data = [(i, c) for i, (_, c) in enumerate(series) if c is not None]
+    if len(series) < 2 or not any(c for _, c in points_with_data):
+        return '<svg width="{}" height="{}"><text x="10" y="20" fill="currentColor" opacity="0.6">not enough history yet</text></svg>'.format(width, height)
+
+    n = len(series)
+    slot_w = plot_w / n
+    bar_w = max(slot_w * 0.65, 1)
+    observed_max = max(c for _, c in points_with_data)
+    y_max = max(observed_max * 1.15, 1)
+
+    bars = []
+    for i, c in points_with_data:
+        h = (max(0, min(y_max, c)) / y_max) * plot_h
+        x = pad_l + i * slot_w + (slot_w - bar_w) / 2
+        y = pad_t + plot_h - h
+        bars.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{h:.1f}" '
+            f'fill="currentColor" opacity="0.75"><title>{series[i][0]}: {c}</title></rect>'
+        )
+
+    first_date, last_date = series[0][0], series[-1][0]
+
+    return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
+  <text x="2" y="{pad_t}" font-size="10" fill="currentColor" opacity="0.6">{observed_max}</text>
+  <line x1="{pad_l}" y1="{pad_t + plot_h:.1f}" x2="{width - pad_r}" y2="{pad_t + plot_h:.1f}" stroke="currentColor" stroke-opacity="0.15" stroke-width="1"/>
+  {''.join(bars)}
+  <text x="{pad_l}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6">{first_date}</text>
+  <text x="{width - pad_r}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6" text-anchor="end">{last_date}</text>
+</svg>'''

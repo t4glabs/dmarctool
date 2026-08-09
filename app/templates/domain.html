@@ -472,6 +472,9 @@
         {% endfor %}
       </table>
       </div>
+
+      <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
+      <div class="sparkline">{{ mailgun_rate_sparkline | safe }}</div>
     </div>
     {% endif %}
 
@@ -502,6 +505,13 @@
 
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
       <div class="sparkline">{{ ses_rate_sparkline | safe }}</div>
+
+      <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Daily delivered volume</h3>
+      <p class="muted" style="margin-top:0">
+        Useful for spotting newsletter sends -- a rate chart alone can't show the difference between a small test
+        send and a large campaign, since both can have the same 0% bounce rate.
+      </p>
+      <div class="sparkline">{{ ses_volume_chart | safe }}</div>
     </div>
     {% endif %}
 

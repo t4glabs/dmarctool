@@ -106,7 +106,7 @@ def build_watchlist(conn):
     for d in domains:
         info = entries[d]
         mg_bounce_rate = None
-        stats, err = mg_stats.get(d, (None, None))
+        stats, daily, err = mg_stats.get(d, (None, None, None))
         if stats and stats.get("accepted"):
             mg_bounce_rate = (stats.get("failed_perm") or 0) / stats["accepted"]
 

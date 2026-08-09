@@ -211,6 +211,27 @@ CREATE TABLE IF NOT EXISTS mailgun_suppressions (
 
 CREATE INDEX IF NOT EXISTS idx_mailgun_suppressions_domain ON mailgun_suppressions(domain_id, kind);
 
+-- Our own accumulated daily history, since Mailgun's stats/total endpoint only
+-- ever returns a rolling window per query -- upserted so recent days can be
+-- corrected as Mailgun finalizes them. The API actually already buckets by day
+-- within that window; this just keeps the per-day breakdown instead of
+-- discarding it into a single summed total the way mailgun_stats does.
+CREATE TABLE IF NOT EXISTS mailgun_daily_stats (
+    id             INTEGER PRIMARY KEY,
+    domain_id      INTEGER NOT NULL REFERENCES domains(id),
+    mailgun_domain TEXT NOT NULL,
+    day            TEXT NOT NULL,  -- YYYY-MM-DD
+    accepted       INTEGER NOT NULL DEFAULT 0,
+    delivered      INTEGER NOT NULL DEFAULT 0,
+    failed_perm    INTEGER NOT NULL DEFAULT 0,
+    failed_temp    INTEGER NOT NULL DEFAULT 0,
+    complained     INTEGER NOT NULL DEFAULT 0,
+    unsubscribed   INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(mailgun_domain, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailgun_daily_stats_domain ON mailgun_daily_stats(domain_id, day);
+
 -- Google Postmaster Tools v2 (real Gmail-reported spam rate + compliance verdicts) --
 -- only for domains DMARCTool tracks and that are VERIFIED in Postmaster Tools,
 -- matched dynamically each run the same way as Mailgun.

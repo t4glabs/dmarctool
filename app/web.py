@@ -25,12 +25,12 @@ from fastapi.templating import Jinja2Templates
 
 from app.analysis import (
     all_domains, current_policy_run, daily_pass_series, domain_window_stats,
-    day_to_date, epoch_day, ensure_default_settings, postmaster_daily_series,
+    day_to_date, epoch_day, ensure_default_settings, mailgun_daily_series, postmaster_daily_series,
     provider_breakdown, run_analysis, ses_daily_series, sending_stream_breakdown,
 )
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
-from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_sparkline
+from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_sparkline, volume_bar_chart
 from app.compliance import run_compliance_checks
 from app.db import get_connection, init_db
 from app.dns_check import run_dns_checks
@@ -258,6 +258,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ):
         mailgun_suppression_counts.setdefault(row["mailgun_domain"], {})[row["kind"]] = row["n"]
+    mailgun_rate_sparkline = dual_rate_sparkline(mailgun_daily_series(conn, domain_id, days=60))
 
     postmaster_stats = conn.execute(
         """SELECT * FROM postmaster_stats WHERE domain_id=?
@@ -294,7 +295,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ):
         ses_suppression_counts.setdefault(row["configuration_set"], {})[row["kind"]] = row["n"]
-    ses_rate_sparkline = dual_rate_sparkline(ses_daily_series(conn, domain_id, days=60))
+    ses_series = ses_daily_series(conn, domain_id, days=60)
+    ses_rate_sparkline = dual_rate_sparkline(ses_series)
+    ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
 
     manual_log_items = conn.execute(
         "SELECT * FROM action_items WHERE domain_id=? AND kind='manual_log' ORDER BY created_at DESC LIMIT 20",
@@ -333,6 +336,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "dkim_checks": dkim_checks,
         "mailgun_stats": mailgun_stats,
         "mailgun_suppression_counts": mailgun_suppression_counts,
+        "mailgun_rate_sparkline": mailgun_rate_sparkline,
         "postmaster_stats": postmaster_stats,
         "postmaster_compliance": postmaster_compliance,
         "postmaster_reason_by_ref_key": postmaster_reason_by_ref_key,
@@ -341,6 +345,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_window_days": ses_window_days,
         "ses_suppression_counts": ses_suppression_counts,
         "ses_rate_sparkline": ses_rate_sparkline,
+        "ses_volume_chart": ses_volume_chart,
         "open_items": open_items,
         "senders": senders,
         "classifications": CLASSIFICATIONS,

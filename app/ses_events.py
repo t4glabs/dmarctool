@@ -55,20 +55,36 @@ def _config_set_domain_map(conn):
     }
 
 
+def _event_day(timestamp: str):
+    """SES timestamps are ISO8601 UTC, e.g. '2026-08-07T12:34:56.789Z'. Returns
+    the date portion, or None if missing/unparseable."""
+    if not timestamp:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
 def parse_event(raw_body: str):
-    """Returns (kind, configuration_set, recipients) for a real SES event, or
-    (None, None, None) for anything else (e.g. SNS's "Successfully validated
-    SNS topic..." confirmation, which isn't JSON and isn't a send event)."""
+    """Returns (kind, configuration_set, recipients, day) for a real SES event,
+    or (None, None, None, None) for anything else (e.g. SNS's "Successfully
+    validated SNS topic..." confirmation, which isn't JSON and isn't a send
+    event). `day` is the event's own timestamp (when it actually happened),
+    not the date this function happens to run -- a backlog drained days or
+    weeks late must still land on the day the mail was actually
+    sent/bounced/complained about, not the day the queue got drained."""
     envelope = json.loads(raw_body)
     inner_raw = envelope.get("Message", "")
     try:
         event = json.loads(inner_raw)
     except json.JSONDecodeError:
-        return None, None, None
+        return None, None, None, None
 
     event_type = event.get("eventType")
     mail = event.get("mail", {})
     config_set = (mail.get("tags", {}) or {}).get("ses:configuration-set", [None])[0]
+    mail_day = _event_day(mail.get("timestamp"))
 
     if event_type == "Bounce":
         bounce = event.get("bounce", {})
@@ -76,18 +92,21 @@ def parse_event(raw_body: str):
             {"email": r["emailAddress"], "reason": r.get("diagnosticCode"), "bounce_type": bounce.get("bounceType")}
             for r in bounce.get("bouncedRecipients", [])
         ]
-        return "bounce", config_set, recipients
+        day = _event_day(bounce.get("timestamp")) or mail_day
+        return "bounce", config_set, recipients, day
     if event_type == "Complaint":
         complaint = event.get("complaint", {})
         recipients = [
             {"email": r["emailAddress"], "reason": complaint.get("complaintFeedbackType")}
             for r in complaint.get("complainedRecipients", [])
         ]
-        return "complaint", config_set, recipients
+        day = _event_day(complaint.get("timestamp")) or mail_day
+        return "complaint", config_set, recipients, day
     if event_type == "Delivery":
         delivery = event.get("delivery", {})
-        return "delivery", config_set, [{"email": r} for r in delivery.get("recipients", [])]
-    return None, config_set, None
+        day = _event_day(delivery.get("timestamp")) or mail_day
+        return "delivery", config_set, [{"email": r} for r in delivery.get("recipients", [])], day
+    return None, config_set, None, None
 
 
 def run_ses_event_ingest(conn, verbose: bool = True) -> None:
@@ -102,7 +121,7 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
 
     domain_map = _config_set_domain_map(conn)
     today = datetime.date.today().isoformat()
-    counts = {}  # (domain_id, config_set) -> {"delivered": n, "bounced": n, "complained": n}
+    counts = {}  # (domain_id, config_set, day) -> {"delivered": n, "bounced": n, "complained": n}
     new_suppressions = {}  # (domain_id, config_set) -> {"bounce": n, "complaint": n}
     processed = 0
 
@@ -126,18 +145,19 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
 
         for msg in messages:
             try:
-                kind, config_set, recipients = parse_event(msg["Body"])
+                kind, config_set, recipients, day = parse_event(msg["Body"])
             except (json.JSONDecodeError, KeyError):
-                kind, config_set, recipients = None, None, None
+                kind, config_set, recipients, day = None, None, None, None
 
             match = domain_map.get(config_set) if config_set else None
             if kind and match:
                 domain_id, domain_name = match
-                key = (domain_id, config_set)
-                counts.setdefault(key, {"delivered": 0, "bounced": 0, "complained": 0})
-                counts[key][EVENT_TO_COUNTER[kind]] += len(recipients)
+                count_key = (domain_id, config_set, day or today)
+                counts.setdefault(count_key, {"delivered": 0, "bounced": 0, "complained": 0})
+                counts[count_key][EVENT_TO_COUNTER[kind]] += len(recipients)
 
                 if kind in ("bounce", "complaint"):
+                    supp_key = (domain_id, config_set)
                     for r in recipients:
                         existing = conn.execute(
                             "SELECT 1 FROM ses_suppressions WHERE configuration_set=? AND email=? AND kind=?",
@@ -153,8 +173,8 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                             (domain_id, config_set, r["email"], kind, r.get("bounce_type"), r.get("reason")),
                         )
                         if not existing:
-                            new_suppressions.setdefault(key, {"bounce": 0, "complaint": 0})
-                            new_suppressions[key][kind] += 1
+                            new_suppressions.setdefault(supp_key, {"bounce": 0, "complaint": 0})
+                            new_suppressions[supp_key][kind] += 1
 
         # Delete regardless of whether each message was recognized -- validation
         # confirmations and anything from an unmapped configuration set shouldn't
@@ -171,18 +191,18 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
         if verbose and processed % 500 < 10:
             print(f"[ses] ...{processed} processed so far this run")
 
-    for (domain_id, config_set), c in counts.items():
+    for (domain_id, config_set, day), c in counts.items():
         conn.execute(
             """INSERT INTO ses_event_counts (domain_id, configuration_set, day, delivered, bounced, complained)
                VALUES (?,?,?,?,?,?)
                ON CONFLICT(configuration_set, day) DO UPDATE SET
                  delivered=delivered+excluded.delivered, bounced=bounced+excluded.bounced,
                  complained=complained+excluded.complained""",
-            (domain_id, config_set, today, c["delivered"], c["bounced"], c["complained"]),
+            (domain_id, config_set, day, c["delivered"], c["bounced"], c["complained"]),
         )
         if verbose:
             domain_name = next(n for cs, (did, n) in domain_map.items() if did == domain_id and cs == config_set)
-            print(f"[ses] {config_set} ({domain_name}): +{c['delivered']} delivered, "
+            print(f"[ses] {config_set} ({domain_name}) {day}: +{c['delivered']} delivered, "
                   f"+{c['bounced']} bounced, +{c['complained']} complained")
 
     window_days = int(settings_now["ses_stats_window_days"])
@@ -190,7 +210,7 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
     complaint_warn = float(settings_now["ses_complaint_rate_warn"])
     cutoff = (datetime.date.today() - datetime.timedelta(days=window_days)).isoformat()
 
-    touched = set(counts) | set(new_suppressions)
+    touched = {(domain_id, config_set) for domain_id, config_set, _ in counts} | set(new_suppressions)
     for domain_id, config_set in touched:
         domain_name = domain_map.get(config_set, (None, None))[1]
         row = conn.execute(

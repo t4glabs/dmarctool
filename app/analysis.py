@@ -456,6 +456,27 @@ def ses_daily_series(conn, domain_id: int, days: int = 60):
     return series
 
 
+def mailgun_daily_series(conn, domain_id: int, days: int = 60):
+    """List of (date_str, delivered, bounce_rate, complaint_rate) -- same shape
+    as ses_daily_series so both can share the same chart function. Built from
+    our own accumulated history; Mailgun's own API only ever returns a rolling
+    window per query."""
+    since = (datetime.datetime.utcnow().date() - datetime.timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        """SELECT day, SUM(delivered) as delivered, SUM(failed_perm) as failed_perm, SUM(complained) as complained
+           FROM mailgun_daily_stats WHERE domain_id=? AND day >= ?
+           GROUP BY day ORDER BY day""",
+        (domain_id, since),
+    ).fetchall()
+    series = []
+    for r in rows:
+        delivered = r["delivered"] or 0
+        bounce_rate = (r["failed_perm"] or 0) / delivered if delivered else None
+        complaint_rate = (r["complained"] or 0) / delivered if delivered else None
+        series.append((r["day"], delivered, bounce_rate, complaint_rate))
+    return series
+
+
 def postmaster_daily_series(conn, domain_id: int, days: int = 60):
     """List of (date_str, spam_rate) from our own accumulated daily Postmaster
     pulls -- Postmaster Tools itself only exposes a rolling window per query,
