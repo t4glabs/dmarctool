@@ -347,6 +347,8 @@ CREATE TABLE IF NOT EXISTS ses_campaign_recipients (
     delivered         INTEGER NOT NULL DEFAULT 0,  -- 0/1
     opened            INTEGER NOT NULL DEFAULT 0,  -- 0/1 (opened at least once)
     clicked           INTEGER NOT NULL DEFAULT 0,  -- 0/1 (clicked at least once)
+    bounced           INTEGER NOT NULL DEFAULT 0,  -- 0/1
+    bounce_reason     TEXT,  -- raw diagnostic text; categorize with app.bounce_reasons on display
     first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen_at      TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(configuration_set, campaign_id, email)

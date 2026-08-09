@@ -466,6 +466,8 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
     Listmonk X-Listmonk-Campaign header. This is SES's own numbers, not
     Listmonk's -- the two can disagree since Listmonk tracks opens/clicks
     itself via pixel/link rewriting, while this reads what SES actually saw."""
+    from app.bounce_reasons import categorize_bounce
+
     rows = conn.execute(
         """SELECT * FROM ses_campaigns WHERE domain_id=?
            ORDER BY send_day DESC, updated_at DESC LIMIT ?""",
@@ -474,6 +476,14 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
     out = []
     for r in rows:
         delivered = r["delivered"] or 0
+        bounce_breakdown = Counter()
+        if r["bounced"]:
+            for br in conn.execute(
+                """SELECT bounce_reason FROM ses_campaign_recipients
+                   WHERE configuration_set=? AND campaign_id=? AND bounced=1""",
+                (r["configuration_set"], r["campaign_id"]),
+            ):
+                bounce_breakdown[categorize_bounce(br["bounce_reason"])] += 1
         out.append({
             "campaign_id": r["campaign_id"],
             "subject": r["subject"] or "(no subject captured)",
@@ -487,6 +497,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "click_rate": (r["clicked"] or 0) / delivered if delivered else None,
             "bounce_rate": (r["bounced"] or 0) / delivered if delivered else None,
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
+            "bounce_breakdown": bounce_breakdown.most_common(),
         })
     return out
 
@@ -518,6 +529,27 @@ def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
         key=lambda x: -x["received"],
     )
     return {"total_subscribers": len(per_email), "inactive": inactive, "threshold": threshold}
+
+
+def bounce_category_breakdown(conn, domain_id: int):
+    """Bounce counts by plain-language category (see app/bounce_reasons.py),
+    combined across Mailgun and SES -- turns a bare bounce count into an
+    actual reason, using real diagnostic text already captured for
+    suppression purposes."""
+    from app.bounce_reasons import categorize_bounce
+
+    counts = Counter()
+    for r in conn.execute(
+        "SELECT reason, bounce_type FROM ses_suppressions WHERE domain_id=? AND kind='bounce'",
+        (domain_id,),
+    ):
+        counts[categorize_bounce(r["reason"], r["bounce_type"])] += 1
+    for r in conn.execute(
+        "SELECT reason FROM mailgun_suppressions WHERE domain_id=? AND kind='bounce'",
+        (domain_id,),
+    ):
+        counts[categorize_bounce(r["reason"], None)] += 1
+    return counts.most_common()
 
 
 def mailgun_daily_series(conn, domain_id: int, days: int = 60):

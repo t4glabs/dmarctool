@@ -157,8 +157,8 @@ def _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, 
     """Per-recipient-per-campaign record, needed to tell 'the same 5 people
     opened every campaign' apart from '5 different people opened one each' --
     a per-campaign total alone can't do that. Only called for
-    delivery/open/click (the events that mean something at recipient level);
-    bounce/complaint recipients didn't get delivered so they don't belong here."""
+    delivery/open/click; bounce has its own function below since it also
+    needs to store the raw diagnostic text, not just flip a flag."""
     column = RECIPIENT_COLUMN[kind]
     for r in recipients:
         conn.execute(
@@ -167,6 +167,22 @@ def _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, 
                 ON CONFLICT(configuration_set, campaign_id, email) DO UPDATE SET
                   {column}=1, last_seen_at=datetime('now')""",
             (domain_id, config_set, campaign_id, r["email"]),
+        )
+
+
+def _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id, recipients):
+    """Records which specific newsletter caused which specific bounce, with
+    the raw diagnostic text kept for app.bounce_reasons to categorize on
+    display -- turns 'this campaign had 40 bounces' into 'this campaign had
+    30 no-such-user, 10 mailbox-full', not just a domain-wide aggregate."""
+    for r in recipients:
+        conn.execute(
+            """INSERT INTO ses_campaign_recipients
+               (domain_id, configuration_set, campaign_id, email, bounced, bounce_reason)
+               VALUES (?,?,?,?,1,?)
+               ON CONFLICT(configuration_set, campaign_id, email) DO UPDATE SET
+                 bounced=1, bounce_reason=excluded.bounce_reason, last_seen_at=datetime('now')""",
+            (domain_id, config_set, campaign_id, r["email"], r.get("reason")),
         )
 
 
@@ -224,6 +240,8 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                     _upsert_campaign_event(conn, domain_id, config_set, campaign_id, subject, event_day, kind, len(recipients))
                     if kind in RECIPIENT_COLUMN:
                         _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, recipients)
+                    elif kind == "bounce":
+                        _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id, recipients)
 
                 if kind in ("bounce", "complaint"):
                     supp_key = (domain_id, config_set)

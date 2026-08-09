@@ -13,8 +13,23 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:
+    """SQLite has no 'ALTER TABLE ADD COLUMN IF NOT EXISTS' -- this makes
+    adding a column to an already-existing table (vs. a schema.sql change,
+    which only affects fresh installs) idempotent and additive-only, never
+    touching existing rows' other columns or data."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, decl in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_PATH.read_text())
+    _ensure_columns(conn, "ses_campaign_recipients", {
+        "bounced": "INTEGER NOT NULL DEFAULT 0",
+        "bounce_reason": "TEXT",
+    })
     conn.commit()
 
 

@@ -24,11 +24,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.analysis import (
-    all_domains, current_policy_run, daily_pass_series, domain_window_stats,
+    all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, domain_window_stats,
     day_to_date, epoch_day, ensure_default_settings, mailgun_daily_series, postmaster_daily_series,
     provider_breakdown, recent_campaigns, run_analysis, ses_daily_series, sending_stream_breakdown,
     subscriber_engagement_summary,
 )
+from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
 from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_sparkline, volume_bar_chart
@@ -310,6 +311,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10)
     engagement = subscriber_engagement_summary(conn, domain_id)
+    bounce_categories = bounce_category_breakdown(conn, domain_id)
 
     ses_account_status = conn.execute(
         "SELECT * FROM ses_account_status ORDER BY checked_at DESC LIMIT 1"
@@ -370,6 +372,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_volume_chart": ses_volume_chart,
         "newsletter_campaigns": newsletter_campaigns,
         "engagement": engagement,
+        "bounce_categories": bounce_categories,
         "ses_account_status": ses_account_status,
         "ses_identity": ses_identity,
         "open_items": open_items,
@@ -392,14 +395,15 @@ def download_suppressions(name: str):
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["source", "source_domain", "email", "kind", "bounce_type", "reason", "first_seen", "last_seen"])
+    writer.writerow(["source", "source_domain", "email", "kind", "bounce_type", "category", "reason", "first_seen", "last_seen"])
 
     for r in conn.execute(
         """SELECT mailgun_domain, email, kind, reason, first_seen_at, last_checked_at
            FROM mailgun_suppressions WHERE domain_id=? ORDER BY kind, email""",
         (domain_id,),
     ):
-        writer.writerow(["mailgun", r["mailgun_domain"], r["email"], r["kind"], "",
+        category = categorize_bounce(r["reason"], None) if r["kind"] == "bounce" else ""
+        writer.writerow(["mailgun", r["mailgun_domain"], r["email"], r["kind"], "", category,
                           r["reason"] or "", r["first_seen_at"], r["last_checked_at"]])
 
     for r in conn.execute(
@@ -407,7 +411,8 @@ def download_suppressions(name: str):
            FROM ses_suppressions WHERE domain_id=? ORDER BY kind, email""",
         (domain_id,),
     ):
-        writer.writerow(["ses", r["configuration_set"], r["email"], r["kind"], r["bounce_type"] or "",
+        category = categorize_bounce(r["reason"], r["bounce_type"]) if r["kind"] == "bounce" else ""
+        writer.writerow(["ses", r["configuration_set"], r["email"], r["kind"], r["bounce_type"] or "", category,
                           r["reason"] or "", r["first_seen_at"], r["last_seen_at"]])
 
     return Response(
