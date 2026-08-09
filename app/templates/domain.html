@@ -585,11 +585,12 @@
         opened a single one. Worth re-engaging or removing from the list.
       </p>
       {% if engagement.inactive %}
+      <a href="/domain/{{ domain.name }}/inactive_subscribers.csv"><button type="button">⬇️ Download CSV</button></a>
       <div class="table-wrap">
       <table>
-        <tr><th>Email</th><th>Newsletters received</th></tr>
+        <tr><th>Email</th><th>Newsletters received</th><th>First received</th><th>Last received</th></tr>
         {% for s in engagement.inactive %}
-        <tr><td>{{ s.email }}</td><td>{{ s.received }}</td></tr>
+        <tr><td>{{ s.email }}</td><td>{{ s.received }}</td><td>{{ s.first_received }}</td><td>{{ s.last_received }}</td></tr>
         {% endfor %}
       </table>
       </div>

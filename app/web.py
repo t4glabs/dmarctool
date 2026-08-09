@@ -417,6 +417,28 @@ def download_suppressions(name: str):
     )
 
 
+@app.get("/domain/{name}/inactive_subscribers.csv")
+def download_inactive_subscribers(name: str):
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+
+    engagement = subscriber_engagement_summary(conn, domain["id"])
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["email", "newsletters_received", "status", "reason", "first_received", "last_received"])
+    for s in engagement["inactive"]:
+        writer.writerow([s["email"], s["received"], "Inactive", s["reason"], s["first_received"], s["last_received"]])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}_inactive_subscribers.csv"'},
+    )
+
+
 @app.post("/domain/{name}/senders/{ip}/classify")
 def classify_sender(name: str, ip: str, classification: str = Form(...)):
     conn = get_connection()

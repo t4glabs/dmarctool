@@ -500,14 +500,19 @@ def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
         settings = ensure_default_settings(conn)
         threshold = int(settings["newsletter_inactive_campaigns"])
     per_email = conn.execute(
-        """SELECT email, COUNT(DISTINCT campaign_id) as received, MAX(opened) as ever_opened
+        """SELECT email, COUNT(DISTINCT campaign_id) as received, MAX(opened) as ever_opened,
+                  MIN(first_seen_at) as first_received, MAX(last_seen_at) as last_received
            FROM ses_campaign_recipients WHERE domain_id=? AND delivered=1
            GROUP BY email""",
         (domain_id,),
     ).fetchall()
     inactive = sorted(
         (
-            {"email": r["email"], "received": r["received"]}
+            {
+                "email": r["email"], "received": r["received"],
+                "first_received": r["first_received"], "last_received": r["last_received"],
+                "reason": f"{r['received']} newsletters received, 0 opened",
+            }
             for r in per_email if r["received"] >= threshold and not r["ever_opened"]
         ),
         key=lambda x: -x["received"],
