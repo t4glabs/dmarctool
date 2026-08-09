@@ -515,7 +515,34 @@
     </div>
     {% endif %}
 
-    {% if not (postmaster_stats or postmaster_compliance or mailgun_stats or mailgun_suppression_counts or ses_stats or ses_suppression_counts) %}
+    {% if newsletter_campaigns %}
+    <div class="section">
+      <h2 class="first">📰 Recent newsletters (via Listmonk)</h2>
+      <p class="muted" style="margin-top:0">
+        Listmonk stamps every campaign email with a header SES echoes back on every event, so these numbers are
+        SES's own opens/clicks/bounces/complaints for that specific send -- not Listmonk's own analytics (which can
+        disagree with SES, since Listmonk tracks opens/clicks itself via its own pixel/link rewriting).
+      </p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Sent</th><th>Subject</th><th>Delivered</th><th>Opened</th><th>Clicked</th><th>Bounced</th><th>Complained</th></tr>
+        {% for c in newsletter_campaigns %}
+        <tr>
+          <td>{{ c.send_day or "-" }}</td>
+          <td>{{ c.subject }}</td>
+          <td>{{ c.delivered }}</td>
+          <td>{{ c.opened }}{% if c.open_rate is not none %} ({{ "%.0f"|format(100 * c.open_rate) }}%){% endif %}</td>
+          <td>{{ c.clicked }}{% if c.click_rate is not none %} ({{ "%.0f"|format(100 * c.click_rate) }}%){% endif %}</td>
+          <td>{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}</td>
+          <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.1f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if not (postmaster_stats or postmaster_compliance or mailgun_stats or mailgun_suppression_counts or ses_stats or ses_suppression_counts or newsletter_campaigns) %}
     <div class="section">
       <h2 class="first">🧹 Deliverability &amp; Spam</h2>
       <p class="muted" style="margin-top:0">No Postmaster Tools, Mailgun, or SES data connected for this domain yet.</p>

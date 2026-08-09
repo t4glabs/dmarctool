@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from app.analysis import (
     all_domains, current_policy_run, daily_pass_series, domain_window_stats,
     day_to_date, epoch_day, ensure_default_settings, mailgun_daily_series, postmaster_daily_series,
-    provider_breakdown, run_analysis, ses_daily_series, sending_stream_breakdown,
+    provider_breakdown, recent_campaigns, run_analysis, ses_daily_series, sending_stream_breakdown,
 )
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
@@ -298,6 +298,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_series = ses_daily_series(conn, domain_id, days=60)
     ses_rate_sparkline = dual_rate_sparkline(ses_series)
     ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
+    newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10)
 
     manual_log_items = conn.execute(
         "SELECT * FROM action_items WHERE domain_id=? AND kind='manual_log' ORDER BY created_at DESC LIMIT 20",
@@ -346,6 +347,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_suppression_counts": ses_suppression_counts,
         "ses_rate_sparkline": ses_rate_sparkline,
         "ses_volume_chart": ses_volume_chart,
+        "newsletter_campaigns": newsletter_campaigns,
         "open_items": open_items,
         "senders": senders,
         "classifications": CLASSIFICATIONS,

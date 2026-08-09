@@ -456,6 +456,37 @@ def ses_daily_series(conn, domain_id: int, days: int = 60):
     return series
 
 
+def recent_campaigns(conn, domain_id: int, limit: int = 10):
+    """List of dicts, most recent newsletter first -- built entirely from SES's
+    own Open/Click/Bounce/Complaint/Delivery events for messages that carry a
+    Listmonk X-Listmonk-Campaign header. This is SES's own numbers, not
+    Listmonk's -- the two can disagree since Listmonk tracks opens/clicks
+    itself via pixel/link rewriting, while this reads what SES actually saw."""
+    rows = conn.execute(
+        """SELECT * FROM ses_campaigns WHERE domain_id=?
+           ORDER BY send_day DESC, updated_at DESC LIMIT ?""",
+        (domain_id, limit),
+    ).fetchall()
+    out = []
+    for r in rows:
+        delivered = r["delivered"] or 0
+        out.append({
+            "campaign_id": r["campaign_id"],
+            "subject": r["subject"] or "(no subject captured)",
+            "send_day": r["send_day"],
+            "delivered": delivered,
+            "opened": r["opened"] or 0,
+            "clicked": r["clicked"] or 0,
+            "bounced": r["bounced"] or 0,
+            "complained": r["complained"] or 0,
+            "open_rate": (r["opened"] or 0) / delivered if delivered else None,
+            "click_rate": (r["clicked"] or 0) / delivered if delivered else None,
+            "bounce_rate": (r["bounced"] or 0) / delivered if delivered else None,
+            "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
+        })
+    return out
+
+
 def mailgun_daily_series(conn, domain_id: int, days: int = 60):
     """List of (date_str, delivered, bounce_rate, complaint_rate) -- same shape
     as ses_daily_series so both can share the same chart function. Built from

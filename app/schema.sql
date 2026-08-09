@@ -307,6 +307,30 @@ CREATE TABLE IF NOT EXISTS ses_event_counts (
 
 CREATE INDEX IF NOT EXISTS idx_ses_event_counts_domain ON ses_event_counts(domain_id, day);
 
+-- Per-newsletter stats for campaigns sent through Listmonk via SES. Listmonk
+-- stamps every campaign email with an X-Listmonk-Campaign header, which SES
+-- echoes back on every event notification (Open/Click/Bounce/Complaint/
+-- Delivery) for that message -- so campaign-level stats can be built entirely
+-- from the same trusted SES event stream, without calling Listmonk's own API
+-- or its own (per the user, unreliable/inconsistent) open/click analytics.
+CREATE TABLE IF NOT EXISTS ses_campaigns (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    configuration_set TEXT NOT NULL,
+    campaign_id       TEXT NOT NULL,  -- Listmonk campaign UUID
+    subject           TEXT,
+    send_day          TEXT,           -- earliest event day seen for this campaign
+    delivered         INTEGER NOT NULL DEFAULT 0,
+    opened            INTEGER NOT NULL DEFAULT 0,
+    clicked           INTEGER NOT NULL DEFAULT 0,
+    bounced           INTEGER NOT NULL DEFAULT 0,
+    complained        INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(configuration_set, campaign_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ses_campaigns_domain ON ses_campaigns(domain_id, send_day);
+
 -- Google Safe Browsing check -- is this domain's own website flagged for
 -- malware/phishing? Independent of DMARC/authentication, but a real
 -- deliverability/trust signal per Gmail's own sender guidelines.

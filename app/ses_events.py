@@ -31,6 +31,10 @@ from app.config import get_secret
 from app.db import get_connection, init_db
 
 EVENT_TO_COUNTER = {"bounce": "bounced", "complaint": "complained", "delivery": "delivered"}
+CAMPAIGN_EVENT_TO_COUNTER = {
+    "bounce": "bounced", "complaint": "complained", "delivery": "delivered",
+    "open": "opened", "click": "clicked",
+}
 
 
 def _client_and_queue():
@@ -66,25 +70,40 @@ def _event_day(timestamp: str):
         return None
 
 
+def _campaign_info(mail):
+    """Listmonk stamps every campaign email with an X-Listmonk-Campaign header
+    (plus the Subject, always present) -- SES echoes the original message
+    headers back on every event notification, so this works for
+    Open/Click/Bounce/Complaint/Delivery alike. Returns (campaign_id, subject),
+    either of which may be None for non-campaign mail (transactional sends)."""
+    headers = {h.get("name"): h.get("value") for h in mail.get("headers", [])}
+    campaign_id = headers.get("X-Listmonk-Campaign")
+    subject = (mail.get("commonHeaders", {}) or {}).get("subject")
+    return campaign_id, subject
+
+
 def parse_event(raw_body: str):
-    """Returns (kind, configuration_set, recipients, day) for a real SES event,
-    or (None, None, None, None) for anything else (e.g. SNS's "Successfully
-    validated SNS topic..." confirmation, which isn't JSON and isn't a send
-    event). `day` is the event's own timestamp (when it actually happened),
-    not the date this function happens to run -- a backlog drained days or
-    weeks late must still land on the day the mail was actually
-    sent/bounced/complained about, not the day the queue got drained."""
+    """Returns (kind, configuration_set, recipients, day, campaign_id, subject)
+    for a real SES event, or (None, None, None, None, None, None) for anything
+    else (e.g. SNS's "Successfully validated SNS topic..." confirmation, which
+    isn't JSON and isn't a send event). `day` is the event's own timestamp
+    (when it actually happened), not the date this function happens to run --
+    a backlog drained days or weeks late must still land on the day the mail
+    was actually sent/bounced/complained about, not the day the queue got
+    drained. `campaign_id`/`subject` are only populated for mail sent through
+    Listmonk; plain transactional SES sends have neither."""
     envelope = json.loads(raw_body)
     inner_raw = envelope.get("Message", "")
     try:
         event = json.loads(inner_raw)
     except json.JSONDecodeError:
-        return None, None, None, None
+        return None, None, None, None, None, None
 
     event_type = event.get("eventType")
     mail = event.get("mail", {})
     config_set = (mail.get("tags", {}) or {}).get("ses:configuration-set", [None])[0]
     mail_day = _event_day(mail.get("timestamp"))
+    campaign_id, subject = _campaign_info(mail)
 
     if event_type == "Bounce":
         bounce = event.get("bounce", {})
@@ -93,7 +112,7 @@ def parse_event(raw_body: str):
             for r in bounce.get("bouncedRecipients", [])
         ]
         day = _event_day(bounce.get("timestamp")) or mail_day
-        return "bounce", config_set, recipients, day
+        return "bounce", config_set, recipients, day, campaign_id, subject
     if event_type == "Complaint":
         complaint = event.get("complaint", {})
         recipients = [
@@ -101,12 +120,34 @@ def parse_event(raw_body: str):
             for r in complaint.get("complainedRecipients", [])
         ]
         day = _event_day(complaint.get("timestamp")) or mail_day
-        return "complaint", config_set, recipients, day
+        return "complaint", config_set, recipients, day, campaign_id, subject
     if event_type == "Delivery":
         delivery = event.get("delivery", {})
         day = _event_day(delivery.get("timestamp")) or mail_day
-        return "delivery", config_set, [{"email": r} for r in delivery.get("recipients", [])], day
-    return None, config_set, None, None
+        return "delivery", config_set, [{"email": r} for r in delivery.get("recipients", [])], day, campaign_id, subject
+    if event_type == "Open":
+        day = _event_day(event.get("open", {}).get("timestamp")) or mail_day
+        return "open", config_set, [{"email": r} for r in mail.get("destination", [])], day, campaign_id, subject
+    if event_type == "Click":
+        day = _event_day(event.get("click", {}).get("timestamp")) or mail_day
+        return "click", config_set, [{"email": r} for r in mail.get("destination", [])], day, campaign_id, subject
+    return None, config_set, None, None, None, None
+
+
+def _upsert_campaign_event(conn, domain_id, config_set, campaign_id, subject, day, kind, n):
+    """counter comes from CAMPAIGN_EVENT_TO_COUNTER, a fixed internal dict --
+    not attacker-controlled, so building the column name into the SQL is safe."""
+    counter = CAMPAIGN_EVENT_TO_COUNTER[kind]
+    conn.execute(
+        f"""INSERT INTO ses_campaigns (domain_id, configuration_set, campaign_id, subject, send_day, {counter})
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(configuration_set, campaign_id) DO UPDATE SET
+              {counter}={counter}+excluded.{counter},
+              subject=COALESCE(ses_campaigns.subject, excluded.subject),
+              send_day=MIN(ses_campaigns.send_day, excluded.send_day),
+              updated_at=datetime('now')""",
+        (domain_id, config_set, campaign_id, subject, day, n),
+    )
 
 
 def run_ses_event_ingest(conn, verbose: bool = True) -> None:
@@ -145,16 +186,22 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
 
         for msg in messages:
             try:
-                kind, config_set, recipients, day = parse_event(msg["Body"])
+                kind, config_set, recipients, day, campaign_id, subject = parse_event(msg["Body"])
             except (json.JSONDecodeError, KeyError):
-                kind, config_set, recipients, day = None, None, None, None
+                kind, config_set, recipients, day, campaign_id, subject = None, None, None, None, None, None
 
             match = domain_map.get(config_set) if config_set else None
             if kind and match:
                 domain_id, domain_name = match
-                count_key = (domain_id, config_set, day or today)
-                counts.setdefault(count_key, {"delivered": 0, "bounced": 0, "complained": 0})
-                counts[count_key][EVENT_TO_COUNTER[kind]] += len(recipients)
+                event_day = day or today
+
+                if kind in EVENT_TO_COUNTER:
+                    count_key = (domain_id, config_set, event_day)
+                    counts.setdefault(count_key, {"delivered": 0, "bounced": 0, "complained": 0})
+                    counts[count_key][EVENT_TO_COUNTER[kind]] += len(recipients)
+
+                if campaign_id:
+                    _upsert_campaign_event(conn, domain_id, config_set, campaign_id, subject, event_day, kind, len(recipients))
 
                 if kind in ("bounce", "complaint"):
                     supp_key = (domain_id, config_set)
