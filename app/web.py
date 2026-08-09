@@ -38,6 +38,7 @@ from app.mailgun import run_mailgun_checks
 from app.postmaster import run_postmaster_checks
 from app.ses_events import run_ses_event_ingest
 from app.safe_browsing import run_safe_browsing_checks
+from app.watchlist import build_watchlist
 from app.ingest import ingest_source
 from app.labels import (
     SETTINGS_META, category_help, category_label, category_remediation, classification_help,
@@ -453,6 +454,13 @@ def run_checks():
         "/?flash=Analysis, DNS, blocklist, compliance, Mailgun, Postmaster, SES, and Safe Browsing checks refreshed.",
         status_code=303,
     )
+
+
+@app.get("/other-domains", response_class=HTMLResponse)
+def other_domains(request: Request):
+    conn = get_connection()
+    watchlist = build_watchlist(conn)
+    return templates.TemplateResponse(request, "watchlist.html", {"watchlist": watchlist})
 
 
 @app.get("/settings", response_class=HTMLResponse)
