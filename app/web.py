@@ -37,6 +37,7 @@ from app.dns_check import run_dns_checks
 from app.mailgun import run_mailgun_checks
 from app.postmaster import run_postmaster_checks
 from app.ses_events import run_ses_event_ingest
+from app.safe_browsing import run_safe_browsing_checks
 from app.ingest import ingest_source
 from app.labels import (
     SETTINGS_META, category_help, category_label, category_remediation, classification_help,
@@ -86,6 +87,7 @@ def _startup():
         run_mailgun_checks(c, verbose=False)
         run_postmaster_checks(c, verbose=False)
         run_ses_event_ingest(c, verbose=False)
+        run_safe_browsing_checks(c, verbose=False)
 
     _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
     _scheduler.start()
@@ -175,6 +177,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
     dns_history = conn.execute(
         "SELECT * FROM dns_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 15", (domain_id,)
     ).fetchall()
+    safe_browsing = conn.execute(
+        "SELECT * FROM safe_browsing_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
+    ).fetchone()
 
     report_run = current_policy_run(conn, domain_id)
     manual_run = conn.execute(
@@ -340,6 +345,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "classifications": CLASSIFICATIONS,
         "manual_log_items": manual_log_items,
         "dns_history": dns_history,
+        "safe_browsing": safe_browsing,
         "verdicts": verdicts,
     })
 
@@ -442,8 +448,9 @@ def run_checks():
     run_mailgun_checks(conn, verbose=False)
     run_postmaster_checks(conn, verbose=False)
     run_ses_event_ingest(conn, verbose=False)
+    run_safe_browsing_checks(conn, verbose=False)
     return RedirectResponse(
-        "/?flash=Analysis, DNS, blocklist, compliance, Mailgun, Postmaster, and SES checks refreshed.",
+        "/?flash=Analysis, DNS, blocklist, compliance, Mailgun, Postmaster, SES, and Safe Browsing checks refreshed.",
         status_code=303,
     )
 

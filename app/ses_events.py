@@ -91,12 +91,14 @@ def parse_event(raw_body: str):
 
 
 def run_ses_event_ingest(conn, verbose: bool = True) -> None:
-    ensure_default_settings(conn)
+    settings_now = ensure_default_settings(conn)
     sqs, queue_url = _client_and_queue()
     if not sqs:
         if verbose:
             print("[ses] missing AWS_SES_* credentials or SES_EVENTS_QUEUE_URL -- skipping")
         return
+
+    max_messages = int(settings_now["ses_max_messages_per_run"])
 
     domain_map = _config_set_domain_map(conn)
     today = datetime.date.today().isoformat()
@@ -104,7 +106,14 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
     new_suppressions = {}  # (domain_id, config_set) -> {"bounce": n, "complaint": n}
     processed = 0
 
-    while True:
+    # SES publishes a Delivery event for every successfully sent message, not just
+    # bounces/complaints -- at real bulk-sending volume this queue can carry tens of
+    # thousands of backlogged messages. Deleting one at a time (the original version
+    # of this loop) meant one SQS API round-trip per message, which is what caused a
+    # ~24,000-message backlog to hang a single check for many minutes. Batch deletes
+    # (up to 10 per call, matching the receive batch) plus a per-run cap keep this
+    # bounded -- a large backlog drains over several runs instead of blocking one.
+    while processed < max_messages:
         try:
             resp = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=10, WaitTimeSeconds=1)
         except botocore.exceptions.ClientError as e:
@@ -147,10 +156,20 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                             new_suppressions.setdefault(key, {"bounce": 0, "complaint": 0})
                             new_suppressions[key][kind] += 1
 
-            # Delete regardless of whether we recognized it -- validation confirmations
-            # and anything from an unmapped configuration set shouldn't pile up forever.
-            sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=msg["ReceiptHandle"])
-            processed += 1
+        # Delete regardless of whether each message was recognized -- validation
+        # confirmations and anything from an unmapped configuration set shouldn't
+        # pile up forever either. One batch call per receive, not one call per message.
+        try:
+            sqs.delete_message_batch(
+                QueueUrl=queue_url,
+                Entries=[{"Id": str(i), "ReceiptHandle": m["ReceiptHandle"]} for i, m in enumerate(messages)],
+            )
+        except botocore.exceptions.ClientError as e:
+            if verbose:
+                print(f"[ses] batch delete failed: {e}")
+        processed += len(messages)
+        if verbose and processed % 500 < 10:
+            print(f"[ses] ...{processed} processed so far this run")
 
     for (domain_id, config_set), c in counts.items():
         conn.execute(
@@ -166,10 +185,9 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
             print(f"[ses] {config_set} ({domain_name}): +{c['delivered']} delivered, "
                   f"+{c['bounced']} bounced, +{c['complained']} complained")
 
-    settings = ensure_default_settings(conn)
-    window_days = int(settings["ses_stats_window_days"])
-    bounce_warn = float(settings["ses_bounce_rate_warn"])
-    complaint_warn = float(settings["ses_complaint_rate_warn"])
+    window_days = int(settings_now["ses_stats_window_days"])
+    bounce_warn = float(settings_now["ses_bounce_rate_warn"])
+    complaint_warn = float(settings_now["ses_complaint_rate_warn"])
     cutoff = (datetime.date.today() - datetime.timedelta(days=window_days)).isoformat()
 
     touched = set(counts) | set(new_suppressions)

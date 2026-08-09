@@ -286,6 +286,20 @@ CREATE TABLE IF NOT EXISTS ses_event_counts (
 
 CREATE INDEX IF NOT EXISTS idx_ses_event_counts_domain ON ses_event_counts(domain_id, day);
 
+-- Google Safe Browsing check -- is this domain's own website flagged for
+-- malware/phishing? Independent of DMARC/authentication, but a real
+-- deliverability/trust signal per Gmail's own sender guidelines.
+CREATE TABLE IF NOT EXISTS safe_browsing_checks (
+    id           INTEGER PRIMARY KEY,
+    domain_id    INTEGER NOT NULL REFERENCES domains(id),
+    checked_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    status       TEXT NOT NULL,  -- 'clean'|'flagged'|'lookup_failed'
+    threat_types TEXT,           -- comma-separated, e.g. 'MALWARE,SOCIAL_ENGINEERING'
+    note         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_safe_browsing_checks_domain ON safe_browsing_checks(domain_id, checked_at);
+
 -- Tunable thresholds for the recommendation engine
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,

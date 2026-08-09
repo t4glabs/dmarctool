@@ -166,6 +166,20 @@
         <span>p={{ manual_run.p }} pct={{ manual_run.pct }} <span class="muted">since {{ manual_run.observed_from }}</span></span>
       </div>
       {% endif %}
+      <div class="row">
+        <span class="label" title="Whether this domain's own website is flagged by Google Safe Browsing for malware/phishing -- independent of DMARC/authentication, but a real deliverability/trust signal">Google Safe Browsing</span>
+        <span>
+          {% if not safe_browsing %}
+            <span class="badge muted">Not checked yet</span>
+          {% elif safe_browsing.status == 'clean' %}
+            <span class="badge ok">Clean</span>
+          {% elif safe_browsing.status == 'flagged' %}
+            <span class="badge bad" title="{{ safe_browsing.note }}">Flagged</span>
+          {% else %}
+            <span class="badge muted" title="{{ safe_browsing.note }}">Couldn't check</span>
+          {% endif %}
+        </span>
+      </div>
     </div>
 
     <div class="section">

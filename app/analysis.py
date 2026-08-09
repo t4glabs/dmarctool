@@ -60,6 +60,12 @@ DEFAULT_SETTINGS = {
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
     "ses_bounce_rate_warn": "0.05",       # bounce rate (of delivered) that triggers a flag
     "ses_complaint_rate_warn": "0.001",   # complaint rate (of delivered) that triggers a flag
+    "ses_max_messages_per_run": "3000",   # cap SQS messages drained per check so a big backlog can't block a request; the rest drain on the next run
+    "volume_spike_recent_days": "3",       # "recent" window averaged for the spike comparison
+    "volume_spike_baseline_days": "7",     # "before" window averaged as the baseline
+    "volume_spike_min_baseline_avg": "10", # baseline must average at least this many msgs/day to count
+    "volume_spike_multiplier": "2.0",      # recent avg must be at least this many times the baseline to flag
+    "safe_browsing_recheck_hours": "24",   # Safe Browsing status doesn't change fast; daily is plenty
 }
 
 
@@ -315,6 +321,41 @@ def daily_pass_series(conn, domain_id: int, days: int = 60):
     return series
 
 
+def check_volume_spike(conn, domain_id: int, domain_name: str, settings: dict) -> list:
+    """Gmail's guidance is explicit: increase sending volume gradually, since a
+    sudden jump can trigger rate limiting or hurt reputation even if the mail
+    itself is fine. This is distinct from the DMARC enforcement pct ramp (that's
+    about how much of your *failing* mail gets penalized) -- this compares your
+    recent total daily volume against your own trailing baseline, purely from
+    report_records counts already ingested, no new data source needed.
+    """
+    recent_days = int(settings["volume_spike_recent_days"])
+    baseline_days = int(settings["volume_spike_baseline_days"])
+    min_baseline_avg = float(settings["volume_spike_min_baseline_avg"])
+    multiplier = float(settings["volume_spike_multiplier"])
+
+    series = daily_pass_series(conn, domain_id, days=recent_days + baseline_days)
+    if len(series) < recent_days + baseline_days:
+        return []
+
+    baseline_window = series[:baseline_days]
+    recent_window = series[baseline_days:]
+    baseline_avg = sum(d[1] for d in baseline_window) / len(baseline_window)
+    recent_avg = sum(d[1] for d in recent_window) / len(recent_window)
+
+    if baseline_avg < min_baseline_avg or recent_avg < baseline_avg * multiplier:
+        return []
+
+    return [{
+        "category": "volume_spike", "ref_key": None,
+        "title": f"{domain_name}: sending volume jumped -- ~{recent_avg:.0f}/day recently vs ~{baseline_avg:.0f}/day before",
+        "detail": (f"Average volume over the last {recent_days}d is {recent_avg / baseline_avg:.1f}x the prior "
+                   f"{baseline_days}d average. Gmail's guidance: ramp sending volume up gradually rather than "
+                   f"suddenly -- a sharp jump can trigger rate limiting or hurt reputation even when the mail "
+                   f"itself is fine."),
+    }]
+
+
 def domain_window_stats(conn, domain_id: int, window_start: int, window_end: int):
     row = conn.execute(
         """SELECT SUM(rr.count) as total, SUM(CASE WHEN rr.dkim_result='pass' OR rr.spf_result='pass' THEN rr.count ELSE 0 END) as passed
@@ -559,6 +600,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
         if latest_report_end is not None:
             now_day = epoch_day(latest_report_end)
             findings += flag_new_and_failing_senders(conn, domain_id, settings, now_day)
+            findings += check_volume_spike(conn, domain_id, domain_name, settings)
         findings += check_staleness(conn, domain_id, domain_name, settings, wall_now)
 
         for f in findings:

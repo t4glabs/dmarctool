@@ -19,6 +19,8 @@ CATEGORY_LABELS = {
     "postmaster_compliance": "Gmail Postmaster compliance",
     "ses_reputation": "SES bounce/complaint rate",
     "ses_new_suppressions": "New SES suppressions",
+    "volume_spike": "Sudden volume increase",
+    "safe_browsing_flagged": "Domain flagged unsafe",
 }
 
 CATEGORY_HELP = {
@@ -36,6 +38,8 @@ CATEGORY_HELP = {
     "postmaster_compliance": "Google's own verdict (from Postmaster Tools) on one of its published sender requirements for this domain -- this is Gmail telling you directly what's wrong, not an inference from DMARC reports.",
     "ses_reputation": "Amazon SES's own bounce or complaint rate for this domain crossed the warning threshold, based on real bounce/complaint events from its dedicated configuration set -- worth checking list quality before sending more.",
     "ses_new_suppressions": "SES recorded new bounces or complaints since the last check for this domain's configuration set -- these addresses are effectively dead ends; worth pruning from Listmonk too.",
+    "volume_spike": "Your recent daily sending volume is well above your own trailing average. Gmail's guidance is to ramp volume up gradually -- a sudden jump (even of genuinely good mail) can trigger rate limiting or hurt reputation.",
+    "safe_browsing_flagged": "Google Safe Browsing has flagged this domain (or a URL on it) as unsafe -- e.g. malware or phishing. This can independently hurt email deliverability and trust, separate from your DMARC/authentication setup.",
 }
 
 # Concrete "what to actually do about it" guidance per action-item category --
@@ -55,6 +59,8 @@ CATEGORY_REMEDIATION = {
     "mailgun_new_suppressions": "These addresses are now suppressed in Mailgun and won't receive mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list (with reasons and dates) and remove them from your Listmonk list too.",
     "ses_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
     "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list and remove them from Listmonk too.",
+    "volume_spike": "If this jump was intentional (a planned campaign), no action needed -- it should stop flagging once your baseline catches up. If it wasn't intentional, check for a misconfigured automation/loop in Listmonk or your ESP that's resending or duplicating messages. Either way, avoid stacking another big increase on top of this one until it settles.",
+    "safe_browsing_flagged": "Check https://transparencyreport.google.com/safe-browsing/search for the specific flagged URL/reason. If it's your own website, scan for and remove malware/injected content, then request a review in Google Search Console. If it's a third-party link in a footer/widget you don't control, remove it.",
 }
 
 # postmaster_compliance items all share one category, but the fix depends on
@@ -307,6 +313,36 @@ SETTINGS_META = {
         "label": "SES complaint rate that triggers a flag",
         "help": "If the share of delivered mail marked as spam goes above this, you'll get an action item.",
         "example": "0.001 means a flag once 0.1% or more of your mail gets marked as spam.",
+    },
+    "ses_max_messages_per_run": {
+        "label": "Max SES events drained per check",
+        "help": "SES publishes an event for every single delivered/bounced/complained message, so a busy sender can build a large backlog. This caps how many get processed in one check so it can't block a request for a long time -- the rest just get picked up on the next run.",
+        "example": "3000 means at most 3000 queued events get processed each time; a bigger backlog drains over several runs.",
+    },
+    "volume_spike_recent_days": {
+        "label": "\"Recent\" window for volume-spike detection (days)",
+        "help": "How many of the most recent days get averaged together as your current sending volume, for comparison against your own trailing baseline.",
+        "example": "3 means the last 3 days' average volume is what gets compared.",
+    },
+    "volume_spike_baseline_days": {
+        "label": "Baseline window for volume-spike detection (days)",
+        "help": "How many days before the \"recent\" window get averaged together as your normal baseline volume.",
+        "example": "7 means the 7 days before the recent window set your normal/expected volume.",
+    },
+    "volume_spike_min_baseline_avg": {
+        "label": "Minimum baseline volume to bother checking for a spike",
+        "help": "A domain with very little baseline volume can look like it \"doubled\" from just a couple of stray messages -- this avoids flagging that as a spike.",
+        "example": "10 means your baseline needs to average at least 10 msgs/day before spikes are checked at all.",
+    },
+    "volume_spike_multiplier": {
+        "label": "How much of a jump counts as a spike",
+        "help": "Your recent average needs to be at least this many times your baseline average to get flagged.",
+        "example": "2.0 means a flag once recent volume is 2x (a 100% increase over) your normal baseline.",
+    },
+    "safe_browsing_recheck_hours": {
+        "label": "Minimum gap between Safe Browsing re-checks",
+        "help": "How often we re-check each domain against Google Safe Browsing. This status doesn't change quickly, so daily is plenty.",
+        "example": "24 means each domain gets checked at most once a day.",
     },
 }
 
