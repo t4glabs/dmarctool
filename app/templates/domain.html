@@ -577,20 +577,25 @@
       </p>
       <div class="table-wrap">
       <table>
-        <tr><th>Sent</th><th>From name</th><th>Subject</th><th>Delivered</th><th>Opened</th><th>Clicked</th><th>Bounced</th><th>Complained</th></tr>
+        <tr><th>Sent</th><th>From name</th><th>Subject</th><th>Delivered</th><th>Opened</th><th>Clicked</th><th>Bounced</th><th>Rejected</th><th>Complained</th></tr>
         {% for c in newsletter_campaigns %}
         <tr>
           <td>{{ c.send_day or "-" }}</td>
           <td>{{ c.from_display_name or "-" }}
             {% if c.display_name_issues %}<br>{% for issue in c.display_name_issues %}<span style="color:var(--warn)">⚠ {{ issue }}</span><br>{% endfor %}{% endif %}
           </td>
-          <td>{{ c.subject }}</td>
+          <td>{{ c.subject }}
+            {% if c.subject_score.score >= 3 %}<br><span style="color:var(--warn)">⚠ Spam-trigger score: {{ c.subject_score.score }} ({{ c.subject_score.flags|join('; ') }})</span>{% endif %}
+            {% for issue in c.header_issues %}<br><span style="color:var(--warn)">⚠ {{ issue }}</span>{% endfor %}
+            {% for issue in c.unsubscribe_issues %}<br><span style="color:var(--bad)">⚠ {{ issue }}</span>{% endfor %}
+          </td>
           <td>{{ c.delivered }}</td>
           <td>{{ c.opened }}{% if c.open_rate is not none %} ({{ "%.0f"|format(100 * c.open_rate) }}%){% endif %}</td>
           <td>{{ c.clicked }}{% if c.click_rate is not none %} ({{ "%.0f"|format(100 * c.click_rate) }}%){% endif %}</td>
           <td>{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}
             {% if c.bounce_breakdown %}<br><span class="muted" style="font-size:0.8em">{% for cat, n in c.bounce_breakdown %}{{ cat }}: {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
           </td>
+          <td>{{ c.rejected }}</td>
           <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.1f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
         </tr>
         {% endfor %}
@@ -601,6 +606,13 @@
         <div class="verdict ok">✅ Consistent sender name across newsletters: "{{ display_names.names[0] }}"</div>
         {% else %}
         <div class="verdict warn">⚠ Inconsistent sender name across newsletters: {{ display_names.names|join(', ') }} -- Gmail's guidelines call for "a consistent, clear, and accurate statement of the sender's identity."</div>
+        {% endif %}
+      {% endif %}
+      {% if cadence.average_gap_days is not none %}
+        {% if cadence.irregular %}
+        <div class="verdict warn">⚠ Irregular sending cadence: usual gap is {{ cadence.average_gap_days }} day(s), most recent gap was {{ cadence.latest_gap_days }} day(s). Gmail's guidance: send at a consistent rate, avoid bursts.</div>
+        {% else %}
+        <div class="verdict ok">✅ Consistent sending cadence: ~{{ cadence.average_gap_days }} day(s) between newsletters</div>
         {% endif %}
       {% endif %}
     </div>

@@ -32,6 +32,14 @@ def init_db(conn: sqlite3.Connection) -> None:
     })
     _ensure_columns(conn, "ses_campaigns", {
         "from_display_name": "TEXT",
+        "from_address": "TEXT",
+        "message_id": "TEXT",
+        "list_unsubscribe": "TEXT",
+        "list_unsubscribe_post": "TEXT",
+        "rejected": "INTEGER NOT NULL DEFAULT 0",
+    })
+    _ensure_columns(conn, "ses_event_counts", {
+        "rejected": "INTEGER NOT NULL DEFAULT 0",
     })
     conn.commit()
 

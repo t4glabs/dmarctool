@@ -31,10 +31,10 @@ from app.analysis import ensure_default_settings, upsert_system_action
 from app.config import get_secret
 from app.db import get_connection, init_db
 
-EVENT_TO_COUNTER = {"bounce": "bounced", "complaint": "complained", "delivery": "delivered"}
+EVENT_TO_COUNTER = {"bounce": "bounced", "complaint": "complained", "delivery": "delivered", "reject": "rejected"}
 CAMPAIGN_EVENT_TO_COUNTER = {
     "bounce": "bounced", "complaint": "complained", "delivery": "delivered",
-    "open": "opened", "click": "clicked",
+    "open": "opened", "click": "clicked", "reject": "rejected",
 }
 
 
@@ -91,6 +91,9 @@ def _campaign_info(mail):
         "subject": (mail.get("commonHeaders", {}) or {}).get("subject"),
         "from_display_name": from_display_name,
         "from_address": from_address,
+        "message_id": headers.get("Message-Id") or headers.get("Message-ID"),
+        "list_unsubscribe": headers.get("List-Unsubscribe"),
+        "list_unsubscribe_post": headers.get("List-Unsubscribe-Post"),
     }
 
 
@@ -144,6 +147,12 @@ def parse_event(raw_body: str):
     if event_type == "Click":
         day = _event_day(event.get("click", {}).get("timestamp")) or mail_day
         return "click", config_set, [{"email": r} for r in mail.get("destination", [])], day, meta
+    if event_type == "Reject":
+        # SES refused to even attempt sending -- a pre-send reputation/content
+        # filter, not a real bounce from the recipient's server. No per-event
+        # timestamp of its own; mail.destination is the intended recipient list.
+        reason = event.get("reject", {}).get("reason")
+        return "reject", config_set, [{"email": r, "reason": reason} for r in mail.get("destination", [])], mail_day, meta
     return None, config_set, None, None, None
 
 
@@ -153,15 +162,21 @@ def _upsert_campaign_event(conn, domain_id, config_set, campaign_id, meta, day, 
     counter = CAMPAIGN_EVENT_TO_COUNTER[kind]
     conn.execute(
         f"""INSERT INTO ses_campaigns
-               (domain_id, configuration_set, campaign_id, subject, from_display_name, send_day, {counter})
-            VALUES (?,?,?,?,?,?,?)
+               (domain_id, configuration_set, campaign_id, subject, from_display_name, from_address,
+                message_id, list_unsubscribe, list_unsubscribe_post, send_day, {counter})
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(configuration_set, campaign_id) DO UPDATE SET
               {counter}={counter}+excluded.{counter},
               subject=COALESCE(ses_campaigns.subject, excluded.subject),
               from_display_name=COALESCE(ses_campaigns.from_display_name, excluded.from_display_name),
+              from_address=COALESCE(ses_campaigns.from_address, excluded.from_address),
+              message_id=COALESCE(ses_campaigns.message_id, excluded.message_id),
+              list_unsubscribe=COALESCE(ses_campaigns.list_unsubscribe, excluded.list_unsubscribe),
+              list_unsubscribe_post=COALESCE(ses_campaigns.list_unsubscribe_post, excluded.list_unsubscribe_post),
               send_day=MIN(ses_campaigns.send_day, excluded.send_day),
               updated_at=datetime('now')""",
-        (domain_id, config_set, campaign_id, meta["subject"], meta["from_display_name"], day, n),
+        (domain_id, config_set, campaign_id, meta["subject"], meta["from_display_name"], meta["from_address"],
+         meta["message_id"], meta["list_unsubscribe"], meta["list_unsubscribe_post"], day, n),
     )
 
 
@@ -213,7 +228,7 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
 
     domain_map = _config_set_domain_map(conn)
     today = datetime.date.today().isoformat()
-    counts = {}  # (domain_id, config_set, day) -> {"delivered": n, "bounced": n, "complained": n}
+    counts = {}  # (domain_id, config_set, day) -> {"delivered": n, "bounced": n, "complained": n, "rejected": n}
     new_suppressions = {}  # (domain_id, config_set) -> {"bounce": n, "complaint": n}
     touched_campaigns = set()  # (domain_id, config_set, campaign_id)
     processed = 0
@@ -250,7 +265,7 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
 
                 if kind in EVENT_TO_COUNTER:
                     count_key = (domain_id, config_set, event_day)
-                    counts.setdefault(count_key, {"delivered": 0, "bounced": 0, "complained": 0})
+                    counts.setdefault(count_key, {"delivered": 0, "bounced": 0, "complained": 0, "rejected": 0})
                     counts[count_key][EVENT_TO_COUNTER[kind]] += len(recipients)
 
                 if campaign_id:
@@ -298,12 +313,12 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
 
     for (domain_id, config_set, day), c in counts.items():
         conn.execute(
-            """INSERT INTO ses_event_counts (domain_id, configuration_set, day, delivered, bounced, complained)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO ses_event_counts (domain_id, configuration_set, day, delivered, bounced, complained, rejected)
+               VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(configuration_set, day) DO UPDATE SET
                  delivered=delivered+excluded.delivered, bounced=bounced+excluded.bounced,
-                 complained=complained+excluded.complained""",
-            (domain_id, config_set, day, c["delivered"], c["bounced"], c["complained"]),
+                 complained=complained+excluded.complained, rejected=rejected+excluded.rejected""",
+            (domain_id, config_set, day, c["delivered"], c["bounced"], c["complained"], c["rejected"]),
         )
         if verbose:
             domain_name = next(n for cs, (did, n) in domain_map.items() if did == domain_id and cs == config_set)
@@ -372,26 +387,87 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                 f"worth pruning these addresses from Listmonk too.",
             )
 
+        rejected_row = conn.execute(
+            "SELECT SUM(rejected) as n FROM ses_event_counts WHERE configuration_set=? AND day >= ?",
+            (config_set, cutoff),
+        ).fetchone()
+        rejected_n = rejected_row["n"] or 0
+        if rejected_n:
+            # SES refusing to even attempt sending is rare and more severe than a
+            # bounce (which at least reached the recipient's server) -- worth
+            # flagging on any occurrence, not just past a rate threshold.
+            upsert_system_action(
+                conn, domain_id, "ses_rejected", config_set,
+                f"{domain_name}: SES refused to send {rejected_n} message(s) ({config_set})",
+                f"{rejected_n} message(s) over the last {window_days}d were rejected by SES itself before "
+                f"attempting delivery -- usually a content or reputation filter. This is more serious than a "
+                f"normal bounce, which at least reached the recipient's server.",
+            )
+        else:
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='ses_rejected' AND ref_key=? AND status='open'""",
+                (config_set,),
+            )
+
     if touched_campaigns:
+        from app.analysis import sending_cadence
+        from app.content_scoring import risk_level, score_text
         from app.display_name_checks import check_display_name, display_name_consistency
+        from app.header_compliance import check_header_hygiene, check_unsubscribe_compliance
 
         for domain_id, config_set, campaign_id in touched_campaigns:
             row = conn.execute(
-                "SELECT subject, from_display_name FROM ses_campaigns WHERE configuration_set=? AND campaign_id=?",
+                """SELECT subject, from_display_name, message_id, list_unsubscribe, list_unsubscribe_post
+                   FROM ses_campaigns WHERE configuration_set=? AND campaign_id=?""",
                 (config_set, campaign_id),
             ).fetchone()
-            issues = check_display_name(row["from_display_name"]) if row else []
-            if issues:
+            if not row:
+                continue
+
+            name_issues = check_display_name(row["from_display_name"])
+            if name_issues:
                 upsert_system_action(
                     conn, domain_id, "display_name_issue", campaign_id,
                     f"\"{row['from_display_name']}\" may not follow Gmail's display-name guidelines "
                     f"(newsletter: {row['subject'] or campaign_id})",
-                    " ".join(issues),
+                    " ".join(name_issues),
                 )
             else:
                 conn.execute(
                     """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                        WHERE category='display_name_issue' AND ref_key=? AND domain_id=? AND status='open'""",
+                    (campaign_id, domain_id),
+                )
+
+            compliance_issues = (
+                check_unsubscribe_compliance(row["list_unsubscribe"], row["list_unsubscribe_post"])
+                + check_header_hygiene(row["message_id"], row["subject"])
+            )
+            if compliance_issues:
+                upsert_system_action(
+                    conn, domain_id, "campaign_compliance_issue", campaign_id,
+                    f"Newsletter formatting issue (newsletter: {row['subject'] or campaign_id})",
+                    " ".join(compliance_issues),
+                )
+            else:
+                conn.execute(
+                    """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                       WHERE category='campaign_compliance_issue' AND ref_key=? AND domain_id=? AND status='open'""",
+                    (campaign_id, domain_id),
+                )
+
+            subject_result = score_text(row["subject"])
+            if risk_level(subject_result["score"]) == "high":
+                upsert_system_action(
+                    conn, domain_id, "subject_spam_risk", campaign_id,
+                    f"Subject line looks spam-trigger-heavy (newsletter: {row['subject']})",
+                    " ".join(subject_result["flags"]),
+                )
+            else:
+                conn.execute(
+                    """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                       WHERE category='subject_spam_risk' AND ref_key=? AND domain_id=? AND status='open'""",
                     (campaign_id, domain_id),
                 )
 
@@ -411,6 +487,22 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                 conn.execute(
                     """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                        WHERE category='display_name_inconsistent' AND domain_id=? AND status='open'""",
+                    (domain_id,),
+                )
+
+            cadence = sending_cadence(conn, domain_id)
+            if cadence["irregular"]:
+                upsert_system_action(
+                    conn, domain_id, "sending_cadence_irregular", "cadence",
+                    "Newsletter sending cadence looks irregular",
+                    f"Usual gap between sends is about {cadence['average_gap_days']} day(s), but the most recent "
+                    f"gap was {cadence['latest_gap_days']} day(s). Gmail's guidance is to send at a consistent "
+                    f"rate and avoid bursts or long silences followed by a sudden resumption.",
+                )
+            else:
+                conn.execute(
+                    """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                       WHERE category='sending_cadence_irregular' AND domain_id=? AND status='open'""",
                     (domain_id,),
                 )
 

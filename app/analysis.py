@@ -467,7 +467,9 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
     Listmonk's -- the two can disagree since Listmonk tracks opens/clicks
     itself via pixel/link rewriting, while this reads what SES actually saw."""
     from app.bounce_reasons import categorize_bounce
+    from app.content_scoring import score_text
     from app.display_name_checks import check_display_name
+    from app.header_compliance import check_header_hygiene, check_unsubscribe_compliance
 
     rows = conn.execute(
         """SELECT * FROM ses_campaigns WHERE domain_id=?
@@ -501,8 +503,41 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
             "bounce_breakdown": bounce_breakdown.most_common(),
             "display_name_issues": check_display_name(r["from_display_name"]),
+            "rejected": r["rejected"] or 0,
+            "unsubscribe_issues": check_unsubscribe_compliance(r["list_unsubscribe"], r["list_unsubscribe_post"]),
+            "header_issues": check_header_hygiene(r["message_id"], r["subject"]),
+            "subject_score": score_text(r["subject"]),
         })
     return out
+
+
+def sending_cadence(conn, domain_id: int):
+    """Gaps between consecutive newsletter send days -- Gmail's guidance is
+    explicit: "send email at a consistent rate. Avoid sending email in
+    bursts" and "avoid introducing sudden volume spikes if you do not have a
+    history". Needs at least 3 distinct send days to say anything meaningful
+    about a pattern, not just report noise from a single gap."""
+    rows = conn.execute(
+        "SELECT DISTINCT send_day FROM ses_campaigns WHERE domain_id=? AND send_day IS NOT NULL ORDER BY send_day",
+        (domain_id,),
+    ).fetchall()
+    days = [datetime.datetime.strptime(r["send_day"], "%Y-%m-%d").date() for r in rows]
+    if len(days) < 3:
+        return {"days": [d.isoformat() for d in days], "average_gap_days": None, "latest_gap_days": None, "irregular": False}
+
+    gaps = [(days[i] - days[i - 1]).days for i in range(1, len(days))]
+    avg_gap = sum(gaps[:-1]) / len(gaps[:-1]) if len(gaps) > 1 else gaps[0]
+    latest_gap = gaps[-1]
+    # Flag only a clear departure from the domain's own history -- e.g. a
+    # newsletter that normally goes out every ~7 days suddenly going out
+    # next-day, or after a 2+ month silence.
+    irregular = avg_gap > 0 and (latest_gap < avg_gap * 0.3 or latest_gap > avg_gap * 3)
+    return {
+        "days": [d.isoformat() for d in days],
+        "average_gap_days": round(avg_gap, 1),
+        "latest_gap_days": latest_gap,
+        "irregular": irregular,
+    }
 
 
 def display_name_summary(conn, domain_id: int):

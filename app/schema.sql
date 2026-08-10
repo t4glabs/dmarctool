@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS ses_event_counts (
     delivered         INTEGER NOT NULL DEFAULT 0,
     bounced           INTEGER NOT NULL DEFAULT 0,
     complained        INTEGER NOT NULL DEFAULT 0,
+    rejected          INTEGER NOT NULL DEFAULT 0,  -- SES refused to even attempt sending (pre-send reputation filter)
     UNIQUE(configuration_set, day)
 );
 
@@ -320,12 +321,17 @@ CREATE TABLE IF NOT EXISTS ses_campaigns (
     campaign_id       TEXT NOT NULL,  -- Listmonk campaign UUID
     subject           TEXT,
     from_display_name TEXT,           -- e.g. "PATTIC" from "PATTIC <hello@pattic.org>" -- not visible in DMARC reports at all
+    from_address      TEXT,           -- e.g. "hello@pattic.org"
+    message_id        TEXT,           -- raw Message-ID header, RFC 5322 requires one
+    list_unsubscribe  TEXT,           -- raw List-Unsubscribe header value
+    list_unsubscribe_post TEXT,       -- raw List-Unsubscribe-Post header value
     send_day          TEXT,           -- earliest event day seen for this campaign
     delivered         INTEGER NOT NULL DEFAULT 0,
     opened            INTEGER NOT NULL DEFAULT 0,
     clicked           INTEGER NOT NULL DEFAULT 0,
     bounced           INTEGER NOT NULL DEFAULT 0,
     complained        INTEGER NOT NULL DEFAULT 0,
+    rejected          INTEGER NOT NULL DEFAULT 0,
     updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(configuration_set, campaign_id)
 );
