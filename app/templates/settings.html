@@ -6,21 +6,29 @@
 <p class="muted">
   These control when the tool tells you "it's safe to tighten enforcement" vs. "hold on and keep watching."
   You don't need to understand DMARC deeply to use these -- each one below has a plain-language explanation
-  and an example. Changes take effect the next time analysis runs (automatically every 6 hours, or click
-  "Refresh now" on the overview page).
+  and an example. Grouped by which part of the tool they affect; click a group's title to collapse it if you
+  just want an overview. Changes take effect the next time analysis runs (automatically every 6 hours, or
+  click "Refresh now" on the overview page).
 </p>
 
 <form action="/settings" method="post">
-  {% for f in fields %}
-  <div class="section">
-    <div class="field">
-      <label style="font-size:1rem; color:var(--fg); margin-bottom:0.3rem">{{ f.label }}</label>
-      <input type="text" name="{{ f.key }}" value="{{ f.value }}" style="width: 220px">
+  {% for g in groups %}
+  <details class="section" open style="padding:0;">
+    <summary style="cursor:pointer; padding:1.1rem 1.25rem; font-size:1rem; font-weight:600;">{{ g.label }}</summary>
+    <div style="padding:0 1.25rem 1.1rem 1.25rem;">
+      {% for f in g.fields %}
+      <div style="padding:0.7rem 0; {% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+          <label style="font-size:0.92rem; color:var(--fg);">{{ f.label }}</label>
+          <input type="text" name="{{ f.key }}" value="{{ f.value }}" style="width: 180px">
+        </div>
+        <p class="muted" style="margin:0.3rem 0 0 0; font-size:0.82rem">{{ f.help }}</p>
+        {% if f.example %}<p class="muted" style="margin:0.15rem 0 0 0; font-size:0.75rem"><em>Example: {{ f.example }}</em></p>{% endif %}
+        <p class="muted" style="margin:0.15rem 0 0 0; font-size:0.7rem">Internal name: <code>{{ f.key }}</code></p>
+      </div>
+      {% endfor %}
     </div>
-    <p class="muted" style="margin:0.4rem 0 0.2rem 0">{{ f.help }}</p>
-    {% if f.example %}<p class="muted" style="margin:0; font-size:0.8rem"><em>Example: {{ f.example }}</em></p>{% endif %}
-    <p class="muted" style="margin:0.3rem 0 0 0; font-size:0.75rem">Internal name: <code>{{ f.key }}</code></p>
-  </div>
+  </details>
   {% endfor %}
   <button type="submit">Save settings</button>
 </form>

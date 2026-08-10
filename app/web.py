@@ -45,7 +45,7 @@ from app.safe_browsing import run_safe_browsing_checks
 from app.watchlist import build_watchlist
 from app.ingest import ingest_source
 from app.labels import (
-    SETTINGS_META, category_help, category_label, category_remediation, classification_help,
+    SETTINGS_GROUPS, SETTINGS_META, category_help, category_label, category_remediation, classification_help,
     classification_label, dns_status_help, dns_status_label, explain_policy,
     postmaster_remediation, postmaster_requirement_label,
 )
@@ -533,11 +533,25 @@ def other_domains(request: Request):
 def settings_page(request: Request, flash: str = None):
     conn = get_connection()
     settings = ensure_default_settings(conn)
-    fields = [
-        {"key": key, "value": value, **SETTINGS_META.get(key, {"label": key, "help": "", "example": ""})}
-        for key, value in settings.items()
-    ]
-    return templates.TemplateResponse(request, "settings.html", {"fields": fields, "flash": flash})
+
+    def field_for(key):
+        return {"key": key, "value": settings[key], **SETTINGS_META.get(key, {"label": key, "help": "", "example": ""})}
+
+    grouped = []
+    seen_keys = set()
+    for group_label, keys in SETTINGS_GROUPS:
+        group_fields = [field_for(k) for k in keys if k in settings]
+        seen_keys.update(keys)
+        if group_fields:
+            grouped.append({"label": group_label, "fields": group_fields})
+
+    # Any setting not yet assigned to a group (e.g. a new one added without
+    # updating SETTINGS_GROUPS) still shows up here rather than disappearing.
+    leftover = [field_for(k) for k in settings if k not in seen_keys]
+    if leftover:
+        grouped.append({"label": "Other", "fields": leftover})
+
+    return templates.TemplateResponse(request, "settings.html", {"groups": grouped, "flash": flash})
 
 
 @app.post("/settings")

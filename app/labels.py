@@ -396,6 +396,48 @@ SETTINGS_META = {
     },
 }
 
+# Purely a display grouping for the Settings page (long flat list -> grouped
+# sections) -- doesn't affect what's stored or how settings are used
+# anywhere else. Any key not listed here still shows up, under "Other".
+SETTINGS_GROUPS = [
+    ("📈 DMARC ramp-up & recommendations", [
+        "min_pass_rate", "low_pass_rate", "min_days_stable", "rolling_window_days",
+        "min_volume_for_recommendation", "ramp_steps",
+    ]),
+    ("📡 Sender monitoring & data freshness", [
+        "new_sender_window_days", "high_volume_fail_threshold", "high_fail_rate_threshold",
+        "stale_days_threshold",
+    ]),
+    ("🚫 Blocklist (DNSBL)", [
+        "blocklist_min_volume", "blocklist_recent_days", "blocklist_recheck_hours",
+    ]),
+    ("🔐 Authentication compliance (SPF/DKIM)", [
+        "compliance_recheck_hours", "spf_lookup_warn_threshold", "dkim_min_bits",
+    ]),
+    ("📨 Mailgun", [
+        "mailgun_recheck_hours", "mailgun_stats_window_days",
+        "mailgun_bounce_rate_warn", "mailgun_complaint_rate_warn",
+    ]),
+    ("📮 Google Postmaster Tools", [
+        "postmaster_recheck_hours", "postmaster_stats_window_days",
+    ]),
+    ("☁️ Amazon SES", [
+        "ses_stats_window_days", "ses_bounce_rate_watch", "ses_bounce_rate_warn",
+        "ses_complaint_rate_watch", "ses_complaint_rate_warn",
+        "ses_max_messages_per_run", "ses_account_recheck_hours",
+    ]),
+    ("📰 Newsletters & content", [
+        "newsletter_inactive_campaigns",
+    ]),
+    ("📊 Volume-spike detection", [
+        "volume_spike_recent_days", "volume_spike_baseline_days",
+        "volume_spike_min_baseline_avg", "volume_spike_multiplier",
+    ]),
+    ("🛡️ Google Safe Browsing", [
+        "safe_browsing_recheck_hours",
+    ]),
+]
+
 
 def explain_policy(p, pct):
     """Plain-language sentence for a given p= / pct= combination."""
