@@ -29,8 +29,17 @@ Python, FastAPI + Jinja2 (server-rendered, no JS build step), raw `sqlite3` (no 
 - `config.py` — loads `secrets.env` (project root, chmod 600, never committed/DB-stored) for API keys
 - `actions.py` — manual action log + action-item resolve (CLI: `python -m app.actions log/resolve/list`)
 - `web.py` — the dashboard app
-- `charts.py` — hand-rolled SVG sparkline (no charting library)
+- `charts.py` — hand-rolled SVG sparkline/bar charts (no charting library)
 - `labels.py` — plain-language labels/tooltips/settings help text, kept separate so the dashboard stays understandable to a non-technical reader without cluttering the logic modules
+- `safe_browsing.py` — Google Safe Browsing Lookup API v4 check on each domain's own website; needs `SAFE_BROWSING_API_KEY` in `secrets.env`
+- `ses_account.py` — SES account-wide health (`sesv2 GetAccount`: enforcement status, sending quota, account-level suppression settings) and per-domain identity verification (`ListEmailIdentities`) — separate from `ses_events.py` since it hits the SES API directly instead of draining the event queue
+- `bounce_reasons.py` — categorizes raw SMTP/ESP bounce diagnostic text (from `ses_suppressions`/`mailgun_suppressions`) into plain-language causes (no-such-user, mailbox-full, blocked, etc.), tuned against real stored bounce text rather than a generic word list
+- `display_name_checks.py` — checks a newsletter's "From" display name against Gmail's display-name guidelines (subject-line content, ALL CAPS, emoji, reply-count patterns, gmail.com spoofing) plus cross-campaign consistency
+- `header_compliance.py` — one-click-unsubscribe header compliance (`List-Unsubscribe`/`List-Unsubscribe-Post`) and RFC 5322 hygiene (Message-ID, misleading `Re:`/`Fwd:` subjects) for bulk senders
+- `content_scoring.py` — heuristic spam-trigger scoring for subject lines and newsletter body text (financial/urgency bait phrases, ALL-CAPS phrases, excessive punctuation/emoji) plus HTML structural scoring (image-to-text ratio, link shorteners)
+- `listmonk.py` — read-only Listmonk API integration (stdlib `urllib`, HTTP Basic-style `token user:key` auth) that fetches real newsletter body HTML for campaigns already tracked via the SES event pipeline (matched by Listmonk campaign UUID), strips it to plain text, and feeds `content_scoring`; needs `LISTMONK_URL`/`LISTMONK_API_USERNAME`/`LISTMONK_API_TOKEN` in `secrets.env`
+
+Per-newsletter engagement (opens/clicks/bounces/complaints/rejects, per-campaign-recipient tracking for inactive-subscriber detection) is built inside `ses_events.py` itself, not a separate module — Listmonk stamps every campaign email with an `X-Listmonk-Campaign` header (plus Subject and From), which SES echoes back on every event notification, so campaign-level stats come from the same trusted SES event stream rather than a second integration.
 
 See `MANUAL.md` for the plain-language usage guide (what to click, what the terms mean, troubleshooting) — that's the doc to point the user to, not this file.
 
