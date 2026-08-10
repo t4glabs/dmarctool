@@ -1,0 +1,173 @@
+"""
+Listmonk API integration -- fetches real newsletter body content so
+app.content_scoring can actually "read" a campaign, not just its subject
+line. SES events never carry the message body, only headers, so this is
+the only way to close that gap.
+
+Scoped deliberately narrow: only fetches content for campaigns DMARCTool
+already knows about via the SES event pipeline (ses_campaigns, matched by
+the Listmonk campaign UUID) -- not a general Listmonk sync. Listmonk stays
+the tool the user actually sends from; this only ever reads.
+
+Uses stdlib `urllib` (no new dependency, matching mailgun.py/postmaster.py)
+and the API token in secrets.env. Needs LISTMONK_URL / LISTMONK_API_USERNAME
+/ LISTMONK_API_TOKEN. If any are missing, this is a no-op.
+"""
+
+import argparse
+import json
+import re
+import urllib.error
+import urllib.request
+from html.parser import HTMLParser
+
+from app.analysis import upsert_system_action
+from app.config import get_secret
+from app.content_scoring import risk_level, score_text
+from app.db import get_connection, init_db
+
+
+class _TextExtractor(HTMLParser):
+    """Minimal HTML-to-plain-text extractor, stdlib only -- no BeautifulSoup
+    dependency for what's just "strip tags, keep readable text"."""
+
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._skip_depth += 1
+        elif tag in ("br", "p", "div", "li", "h1", "h2", "h3", "h4", "tr"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if not self._skip_depth:
+            self.parts.append(data)
+
+
+def strip_html(html_text: str) -> str:
+    if not html_text:
+        return ""
+    parser = _TextExtractor()
+    parser.feed(html_text)
+    text = "".join(parser.parts)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _auth_header(user: str, token: str) -> str:
+    return f"token {user}:{token}"
+
+
+def _client():
+    url = get_secret("LISTMONK_URL")
+    user = get_secret("LISTMONK_API_USERNAME")
+    token = get_secret("LISTMONK_API_TOKEN")
+    if not (url and user and token):
+        return None, None
+    return url.rstrip("/"), _auth_header(user, token)
+
+
+def fetch_all_campaigns(timeout: float = 20.0):
+    """{uuid: {"subject":..., "body":..., "name":...}} for every campaign in
+    Listmonk. 130 campaigns total as of writing -- cheap to paginate through
+    fully rather than needing a per-UUID lookup endpoint (Listmonk's API
+    doesn't offer one)."""
+    url, auth = _client()
+    if not url:
+        return {}, "missing LISTMONK_URL/LISTMONK_API_USERNAME/LISTMONK_API_TOKEN"
+
+    out = {}
+    page = 1
+    per_page = 100
+    while True:
+        req = urllib.request.Request(
+            f"{url}/api/campaigns?page={page}&per_page={per_page}",
+            headers={"Authorization": auth},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = json.loads(resp.read())
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as e:
+            return out, str(e)
+
+        results = body.get("data", {}).get("results", [])
+        for c in results:
+            out[c["uuid"]] = c
+        total = body.get("data", {}).get("total", len(out))
+        if len(out) >= total or not results:
+            break
+        page += 1
+    return out, None
+
+
+def run_listmonk_content_sync(conn, verbose: bool = True) -> None:
+    """Backfills body_text for any tracked campaign that doesn't have it yet,
+    then scores it and raises an action item on a high spam-trigger score --
+    same scoring function already used for subject lines, now applied to the
+    actual newsletter content the user explicitly asked to have reviewed."""
+    url, _ = _client()
+    if not url:
+        if verbose:
+            print("[listmonk] missing LISTMONK_URL/LISTMONK_API_USERNAME/LISTMONK_API_TOKEN -- skipping")
+        return
+
+    pending = conn.execute(
+        "SELECT id, domain_id, campaign_id, subject FROM ses_campaigns WHERE body_text IS NULL"
+    ).fetchall()
+    if not pending:
+        if verbose:
+            print("[listmonk] no campaigns need a content backfill")
+        return
+
+    campaigns, err = fetch_all_campaigns()
+    if err:
+        if verbose:
+            print(f"[listmonk] could not fetch campaigns: {err}")
+        return
+
+    for row in pending:
+        listmonk_campaign = campaigns.get(row["campaign_id"])
+        if not listmonk_campaign:
+            continue  # not found in Listmonk (deleted there, or UUID mismatch) -- leave NULL, try again next run
+
+        text = strip_html(listmonk_campaign.get("body", ""))
+        conn.execute("UPDATE ses_campaigns SET body_text=? WHERE id=?", (text, row["id"]))
+
+        result = score_text(text)
+        if risk_level(result["score"]) == "high":
+            upsert_system_action(
+                conn, row["domain_id"], "content_spam_risk", row["campaign_id"],
+                f"Newsletter content looks spam-trigger-heavy (newsletter: {row['subject'] or row['campaign_id']})",
+                " ".join(result["flags"]),
+            )
+        else:
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='content_spam_risk' AND ref_key=? AND domain_id=? AND status='open'""",
+                (row["campaign_id"], row["domain_id"]),
+            )
+        if verbose:
+            print(f"[listmonk] scored content for campaign {row['campaign_id']}: "
+                  f"score={result['score']} ({risk_level(result['score'])})")
+
+    conn.commit()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Backfill and score newsletter body content from Listmonk")
+    parser.parse_args()
+    conn = get_connection()
+    init_db(conn)
+    run_listmonk_content_sync(conn)
+
+
+if __name__ == "__main__":
+    main()

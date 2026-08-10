@@ -325,6 +325,7 @@ CREATE TABLE IF NOT EXISTS ses_campaigns (
     message_id        TEXT,           -- raw Message-ID header, RFC 5322 requires one
     list_unsubscribe  TEXT,           -- raw List-Unsubscribe header value
     list_unsubscribe_post TEXT,       -- raw List-Unsubscribe-Post header value
+    body_text         TEXT,           -- plain-text extracted from Listmonk's campaign HTML, via app.listmonk
     send_day          TEXT,           -- earliest event day seen for this campaign
     delivered         INTEGER NOT NULL DEFAULT 0,
     opened            INTEGER NOT NULL DEFAULT 0,

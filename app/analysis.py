@@ -507,6 +507,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "unsubscribe_issues": check_unsubscribe_compliance(r["list_unsubscribe"], r["list_unsubscribe_post"]),
             "header_issues": check_header_hygiene(r["message_id"], r["subject"]),
             "subject_score": score_text(r["subject"]),
+            "body_score": score_text(r["body_text"]) if r["body_text"] else None,
         })
     return out
 

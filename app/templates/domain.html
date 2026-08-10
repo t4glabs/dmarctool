@@ -585,7 +585,8 @@
             {% if c.display_name_issues %}<br>{% for issue in c.display_name_issues %}<span style="color:var(--warn)">⚠ {{ issue }}</span><br>{% endfor %}{% endif %}
           </td>
           <td>{{ c.subject }}
-            {% if c.subject_score.score >= 3 %}<br><span style="color:var(--warn)">⚠ Spam-trigger score: {{ c.subject_score.score }} ({{ c.subject_score.flags|join('; ') }})</span>{% endif %}
+            {% if c.subject_score.score >= 3 %}<br><span style="color:var(--warn)">⚠ Subject spam-trigger score: {{ c.subject_score.score }} ({{ c.subject_score.flags|join('; ') }})</span>{% endif %}
+            {% if c.body_score and c.body_score.score >= 3 %}<br><span style="color:var(--warn)">⚠ Content spam-trigger score: {{ c.body_score.score }} ({{ c.body_score.flags|join('; ') }})</span>{% endif %}
             {% for issue in c.header_issues %}<br><span style="color:var(--warn)">⚠ {{ issue }}</span>{% endfor %}
             {% for issue in c.unsubscribe_issues %}<br><span style="color:var(--bad)">⚠ {{ issue }}</span>{% endfor %}
           </td>

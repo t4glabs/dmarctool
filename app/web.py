@@ -36,6 +36,7 @@ from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_spark
 from app.compliance import run_compliance_checks
 from app.db import get_connection, init_db
 from app.dns_check import run_dns_checks
+from app.listmonk import run_listmonk_content_sync
 from app.mailgun import run_mailgun_checks
 from app.postmaster import run_postmaster_checks
 from app.ses_account import run_ses_account_checks
@@ -92,6 +93,7 @@ def _startup():
         run_postmaster_checks(c, verbose=False)
         run_ses_event_ingest(c, verbose=False)
         run_ses_account_checks(c, verbose=False)
+        run_listmonk_content_sync(c, verbose=False)
         run_safe_browsing_checks(c, verbose=False)
 
     _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
@@ -512,9 +514,10 @@ def run_checks():
     run_postmaster_checks(conn, verbose=False)
     run_ses_event_ingest(conn, verbose=False)
     run_ses_account_checks(conn, verbose=False)
+    run_listmonk_content_sync(conn, verbose=False)
     run_safe_browsing_checks(conn, verbose=False)
     return RedirectResponse(
-        "/?flash=Analysis, DNS, blocklist, compliance, Mailgun, Postmaster, SES, and Safe Browsing checks refreshed.",
+        "/?flash=Analysis, DNS, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, and Safe Browsing checks refreshed.",
         status_code=303,
     )
 
