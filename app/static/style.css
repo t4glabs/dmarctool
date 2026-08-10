@@ -120,6 +120,12 @@ button, input[type=submit] {
 }
 button:hover { border-color: var(--accent); color: var(--accent); }
 button.small { font-size: 0.72rem; padding: 0.18rem 0.55rem; font-weight: 500; }
+.report-card-btn { font-size: 0.8rem; white-space: nowrap; }
+dialog.report-card-dialog {
+  max-width: 560px; width: 90vw; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--card); color: var(--fg); padding: 1.3rem 1.5rem; font-size: 0.9rem;
+}
+dialog.report-card-dialog::backdrop { background: rgba(0,0,0,0.45); }
 input[type=text], input[type=number], input[type=date], select, textarea {
   font: inherit; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
   background: var(--bg); color: var(--fg);

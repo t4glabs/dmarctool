@@ -592,36 +592,41 @@
           <td>{{ c.rejected }}</td>
           <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.1f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
           <td>
-            <details>
-              <summary style="cursor:pointer; font-weight:600;">
-                {% if c.report_card.overall_score == 0 %}✅{% elif c.report_card.overall_score < 5 %}🟡{% else %}⚠️{% endif %}
-                Score: {{ c.report_card.overall_score }}
-              </summary>
-              <div style="margin-top:0.6rem; font-size:0.85rem; min-width:260px;">
-                {% if c.report_card.good %}
-                <div style="margin-bottom:0.5rem;">
-                  <strong>What's good</strong>
-                  <ul style="margin:0.2rem 0 0 1.1rem; padding:0;">
-                    {% for label, detail in c.report_card.good %}
-                    <li><span style="color:var(--ok)">✅ {{ label }}</span> -- {{ detail }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-                {% endif %}
-                {% if c.report_card.issues %}
-                <div>
-                  <strong>What to improve</strong>
-                  <ul style="margin:0.2rem 0 0 1.1rem; padding:0;">
-                    {% for label, detail, score in c.report_card.issues %}
-                    <li><span style="color:var(--warn)">⚠ {{ label }} (+{{ score }})</span> -- {{ detail }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-                {% else %}
-                <div class="muted">No issues found -- this newsletter follows every check DMARCTool currently runs.</div>
-                {% endif %}
+            <button type="button" class="report-card-btn" onclick="document.getElementById('report-{{ loop.index }}-{{ c.campaign_id }}').showModal()">
+              {% if not c.report_card.issues %}✅ All clear{% else %}⚠ {{ c.report_card.issues|length }} issue(s){% endif %}
+            </button>
+            <dialog id="report-{{ loop.index }}-{{ c.campaign_id }}" class="report-card-dialog">
+              <h3 style="margin-top:0">Report card: {{ c.subject }}</h3>
+              <p class="muted" style="margin-top:-0.5rem">
+                "Issues" add points below -- 0 issues is the best possible result, not a bad score. Higher totals mean
+                more things worth fixing, not a rating out of some maximum.
+              </p>
+              {% if c.report_card.good %}
+              <div style="margin-bottom:0.9rem;">
+                <strong>✅ What's good</strong>
+                <ul style="margin:0.3rem 0 0 1.1rem; padding:0;">
+                  {% for label, detail in c.report_card.good %}
+                  <li style="margin-bottom:0.3rem;"><span style="color:var(--ok); font-weight:600;">{{ label }}</span> -- {{ detail }}</li>
+                  {% endfor %}
+                </ul>
               </div>
-            </details>
+              {% endif %}
+              {% if c.report_card.issues %}
+              <div>
+                <strong>⚠ What to improve (total: {{ c.report_card.overall_score }} point{{ 's' if c.report_card.overall_score != 1 else '' }})</strong>
+                <ul style="margin:0.3rem 0 0 1.1rem; padding:0;">
+                  {% for label, detail, score in c.report_card.issues %}
+                  <li style="margin-bottom:0.3rem;"><span style="color:var(--warn); font-weight:600;">{{ label }} (+{{ score }})</span> -- {{ detail }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% else %}
+              <div class="muted">No issues found -- this newsletter follows every check DMARCTool currently runs.</div>
+              {% endif %}
+              <div style="margin-top:1.2rem; text-align:right;">
+                <button type="button" onclick="this.closest('dialog').close()">Close</button>
+              </div>
+            </dialog>
           </td>
         </tr>
         {% endfor %}

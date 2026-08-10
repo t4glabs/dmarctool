@@ -38,6 +38,12 @@ document.addEventListener("DOMContentLoaded", function () {
     var hash = location.hash.replace("#", "");
     activate(ids.indexOf(hash) !== -1 ? hash : ids[0]);
   });
+
+  document.querySelectorAll("dialog").forEach(function (dialog) {
+    dialog.addEventListener("click", function (e) {
+      if (e.target === dialog) dialog.close(); // click on the backdrop, not the content
+    });
+  });
 });
 </script>
 </body>
