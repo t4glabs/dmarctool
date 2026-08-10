@@ -78,29 +78,46 @@ def build_watchlist(conn):
     if not domains:
         return []
 
-    with ThreadPoolExecutor(max_workers=min(10, len(domains))) as ex:
-        dmarc_results = dict(zip(domains, ex.map(_has_dmarc, domains)))
-
     mg_stats_domains = [d for d in domains if "Mailgun" in entries[d]["sources"]] if mg_key else []
-    mg_stats = {}
-    if mg_stats_domains:
-        with ThreadPoolExecutor(max_workers=min(10, len(mg_stats_domains))) as ex:
-            results = ex.map(lambda d: mailgun_fetch_stats(d, mg_key, 30), mg_stats_domains)
-            mg_stats = dict(zip(mg_stats_domains, results))
-
     pm_domains_to_check = [d for d in domains if "Postmaster" in entries[d]["sources"]] if pm_token else []
+
+    # All four of these are independent I/O-bound calls (DNS lookups, two
+    # different APIs) -- previously run as four separate sequential
+    # ThreadPoolExecutor batches, which meant total wait time was the *sum*
+    # of each batch's slowest lookup. Running them in one shared pool cuts
+    # that down to roughly the slowest *single* batch instead, since they
+    # all overlap.
+    total_tasks = len(domains) + len(mg_stats_domains) + 2 * len(pm_domains_to_check)
+    dmarc_results, mg_stats, comp_results, stat_results = {}, {}, {}, {}
+    with ThreadPoolExecutor(max_workers=min(25, max(total_tasks, 1))) as ex:
+        futures = {}
+        for d in domains:
+            futures[ex.submit(_has_dmarc, d)] = ("dmarc", d)
+        for d in mg_stats_domains:
+            futures[ex.submit(mailgun_fetch_stats, d, mg_key, 30)] = ("mg_stats", d)
+        for d in pm_domains_to_check:
+            futures[ex.submit(fetch_compliance, d, pm_token)] = ("pm_compliance", d)
+            futures[ex.submit(postmaster_fetch_stats, d, pm_token, 30)] = ("pm_stats", d)
+
+        for future in futures:
+            kind, d = futures[future]
+            result = future.result()
+            if kind == "dmarc":
+                dmarc_results[d] = result
+            elif kind == "mg_stats":
+                mg_stats[d] = result
+            elif kind == "pm_compliance":
+                comp_results[d] = result
+            elif kind == "pm_stats":
+                stat_results[d] = result
+
     pm_compliance = {}
     pm_stats = {}
-    if pm_domains_to_check:
-        with ThreadPoolExecutor(max_workers=min(10, len(pm_domains_to_check))) as ex:
-            comp_results = dict(zip(pm_domains_to_check, ex.map(lambda d: fetch_compliance(d, pm_token), pm_domains_to_check)))
-        with ThreadPoolExecutor(max_workers=min(10, len(pm_domains_to_check))) as ex:
-            stat_results = dict(zip(pm_domains_to_check, ex.map(lambda d: postmaster_fetch_stats(d, pm_token, 30), pm_domains_to_check)))
-        for d in pm_domains_to_check:
-            rows, err = comp_results[d]
-            pm_compliance[d] = [r[0] for r in rows if r[1] == "NEEDS_WORK"] if rows else None
-            stats, serr = stat_results[d]
-            pm_stats[d] = stats.get("spam_rate") if stats else None
+    for d in pm_domains_to_check:
+        rows, err = comp_results[d]
+        pm_compliance[d] = [r[0] for r in rows if r[1] == "NEEDS_WORK"] if rows else None
+        stats, serr = stat_results[d]
+        pm_stats[d] = stats.get("spam_rate") if stats else None
 
     out = []
     for d in domains:

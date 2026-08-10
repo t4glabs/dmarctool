@@ -8,55 +8,29 @@
   friends'/clients' sites you manage that don't need daily/weekly DMARC review, but are still worth an occasional
   glance. A domain only ever shows up in the main Overview once a DMARC report for it has actually been ingested;
   if it has no DMARC record published at all, it never will, no matter how much time passes -- this page is the
-  only place that gap would ever surface. Computed live on load (a few seconds), nothing here is stored or
-  scheduled.
+  only place that gap would ever surface. Computed live on every load (real DNS lookups + two live APIs across
+  every untracked domain) rather than cached, so it can take several seconds -- nothing here is stored or scheduled.
 </p>
 
-{% if not watchlist %}
-<div class="section">
-  <p class="muted">Nothing here -- either every domain in your connected accounts is already tracked, or Mailgun/Postmaster credentials aren't configured.</p>
+<div id="watchlist-loading" class="section">
+  <p class="muted" style="margin:0; display:flex; align-items:center; gap:0.6rem;">
+    <span class="spinner" aria-hidden="true"></span>
+    Checking DNS and pulling live stats for each domain -- usually takes a few seconds...
+  </p>
 </div>
-{% else %}
-<div class="section">
-  <p class="muted" style="margin-top:0">{{ watchlist|length }} untracked domain(s), most concerning first.</p>
-  <div class="table-wrap">
-  <table>
-    <tr><th>Domain</th><th>Seen in</th><th>Has DMARC?</th><th>Mailgun bounce rate (30d)</th><th>Postmaster status</th></tr>
-    {% for e in watchlist %}
-    <tr>
-      <td>{{ e.domain }}</td>
-      <td>{{ e.sources|join(", ") }}</td>
-      <td>
-        {% if e.has_dmarc is none %}<span class="badge muted">Couldn't check</span>
-        {% elif e.has_dmarc %}<span class="badge ok">Yes</span>
-        {% else %}<span class="badge bad">No record</span>{% endif %}
-      </td>
-      <td>
-        {% if e.mailgun_bounce_rate is not none %}
-          <span class="badge {{ 'bad' if e.mailgun_bounce_rate >= 0.05 else 'ok' }}">{{ "%.1f"|format(100 * e.mailgun_bounce_rate) }}%</span>
-        {% else %}<span class="muted">-</span>{% endif %}
-      </td>
-      <td>
-        {% if e.postmaster_needs_work is none and e.postmaster_spam_rate is none %}
-          <span class="muted">-</span>
-        {% elif e.postmaster_needs_work %}
-          <span class="badge bad" title="{% for req in e.postmaster_needs_work %}{{ postmaster_requirement_label(req) }}{% if not loop.last %}, {% endif %}{% endfor %}">
-            {{ e.postmaster_needs_work|length }} issue(s)
-          </span>
-        {% else %}
-          <span class="badge ok">Compliant</span>
-        {% endif %}
-        {% if e.postmaster_spam_rate is not none %}
-          <span class="badge {{ 'bad' if e.postmaster_spam_rate >= 0.003 else ('warn' if e.postmaster_spam_rate >= 0.001 else 'ok') }}">
-            {{ "%.3f"|format(100 * e.postmaster_spam_rate) }}% spam
-          </span>
-        {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
-  </div>
-</div>
-{% endif %}
+<div id="watchlist-content"></div>
+
+<script>
+fetch("/other-domains/content")
+  .then(function (r) { return r.text(); })
+  .then(function (html) {
+    document.getElementById("watchlist-loading").remove();
+    document.getElementById("watchlist-content").innerHTML = html;
+  })
+  .catch(function () {
+    document.getElementById("watchlist-loading").innerHTML =
+      '<p class="muted" style="margin:0;">Something went wrong loading this -- try refreshing the page.</p>';
+  });
+</script>
 
 {% endblock %}

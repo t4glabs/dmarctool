@@ -524,9 +524,18 @@ def run_checks():
 
 @app.get("/other-domains", response_class=HTMLResponse)
 def other_domains(request: Request):
+    # Renders instantly -- the actual watchlist (live DNS + Mailgun/Postmaster
+    # API calls across every untracked domain) is fetched separately by the
+    # page's own JS, so the user sees a loading state immediately instead of
+    # a blank tab for several seconds.
+    return templates.TemplateResponse(request, "watchlist.html", {})
+
+
+@app.get("/other-domains/content", response_class=HTMLResponse)
+def other_domains_content(request: Request):
     conn = get_connection()
     watchlist = build_watchlist(conn)
-    return templates.TemplateResponse(request, "watchlist.html", {"watchlist": watchlist})
+    return templates.TemplateResponse(request, "watchlist_content.html", {"watchlist": watchlist})
 
 
 @app.get("/settings", response_class=HTMLResponse)
