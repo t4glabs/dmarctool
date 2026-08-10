@@ -460,6 +460,65 @@ def ses_daily_series(conn, domain_id: int, days: int = 60):
     return series
 
 
+def _campaign_report_card(c: dict, structure: dict) -> dict:
+    """Turns the various per-campaign checks already computed (subject/body
+    scoring, display name, unsubscribe/header compliance, this campaign's
+    own bounce/complaint rate, and now image/link structure) into a single
+    "here's what's good, here's what's not, here's the score" report --
+    always says *something*, even when everything is clean, rather than
+    only ever speaking up about problems."""
+    from app.content_scoring import score_html_structure
+
+    good, issues = [], []
+
+    if c["subject_score"]["score"] == 0:
+        good.append(("Subject line", "No spam-trigger words or formatting issues found"))
+    else:
+        issues.append(("Subject line", "; ".join(c["subject_score"]["flags"]), c["subject_score"]["score"]))
+
+    if c["body_score"] is None:
+        good.append(("Newsletter content", "Not yet fetched from Listmonk -- will be scored once content sync catches up"))
+    elif c["body_score"]["score"] == 0:
+        good.append(("Newsletter content", "No spam-trigger words or formatting issues found in the body text"))
+    else:
+        issues.append(("Newsletter content", "; ".join(c["body_score"]["flags"]), c["body_score"]["score"]))
+
+    structure_result = score_html_structure(structure["image_count"], structure["word_count"], structure["shortener_links"]) if structure else {"score": 0, "flags": []}
+    if structure and structure["word_count"]:
+        if structure_result["score"] == 0:
+            good.append(("Images & links", f"{structure['image_count']} image(s), {structure['link_count']} link(s) -- healthy balance, no shorteners used"))
+        else:
+            issues.append(("Images & links", "; ".join(structure_result["flags"]), structure_result["score"]))
+
+    if not c["display_name_issues"]:
+        good.append(("Sender display name", f'"{c["from_display_name"] or "-"}" follows Gmail\'s display-name guidelines'))
+    else:
+        issues.append(("Sender display name", "; ".join(c["display_name_issues"]), 2 * len(c["display_name_issues"])))
+
+    if not c["unsubscribe_issues"]:
+        good.append(("Unsubscribe compliance", "One-click unsubscribe headers present and correctly formatted"))
+    else:
+        issues.append(("Unsubscribe compliance", "; ".join(c["unsubscribe_issues"]), 3 * len(c["unsubscribe_issues"])))
+
+    if not c["header_issues"]:
+        good.append(("Message formatting", "Message-ID present, subject isn't a misleading \"Re:\"/\"Fwd:\""))
+    else:
+        issues.append(("Message formatting", "; ".join(c["header_issues"]), 2 * len(c["header_issues"])))
+
+    if c["delivered"]:
+        if c["complaint_rate"] and c["complaint_rate"] >= 0.001:
+            issues.append(("Spam complaints", f"{c['complaint_rate']:.2%} of recipients marked this as spam", 5))
+        else:
+            good.append(("Spam complaints", f"{(c['complaint_rate'] or 0):.2%} -- negligible"))
+        if c["bounce_rate"] and c["bounce_rate"] >= 0.05:
+            issues.append(("Bounce rate", f"{c['bounce_rate']:.2%} bounced -- check list hygiene", 3))
+        else:
+            good.append(("Bounce rate", f"{(c['bounce_rate'] or 0):.2%} bounced -- healthy"))
+
+    overall_score = sum(score for _, _, score in issues)
+    return {"good": good, "issues": issues, "overall_score": overall_score}
+
+
 def recent_campaigns(conn, domain_id: int, limit: int = 10):
     """List of dicts, most recent newsletter first -- built entirely from SES's
     own Open/Click/Bounce/Complaint/Delivery events for messages that carry a
@@ -470,6 +529,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
     from app.content_scoring import score_text
     from app.display_name_checks import check_display_name
     from app.header_compliance import check_header_hygiene, check_unsubscribe_compliance
+    from app.listmonk import analyze_html
 
     rows = conn.execute(
         """SELECT * FROM ses_campaigns WHERE domain_id=?
@@ -509,6 +569,9 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "subject_score": score_text(r["subject"]),
             "body_score": score_text(r["body_text"]) if r["body_text"] else None,
         })
+        structure = analyze_html(r["body_html"]) if r["body_html"] else None
+        out[-1]["structure"] = structure
+        out[-1]["report_card"] = _campaign_report_card(out[-1], structure)
     return out
 
 

@@ -38,6 +38,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         "list_unsubscribe_post": "TEXT",
         "rejected": "INTEGER NOT NULL DEFAULT 0",
         "body_text": "TEXT",
+        "body_html": "TEXT",
     })
     _ensure_columns(conn, "ses_event_counts", {
         "rejected": "INTEGER NOT NULL DEFAULT 0",

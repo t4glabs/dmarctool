@@ -102,6 +102,32 @@ def score_text(text: str) -> dict:
     return {"score": score, "flags": flags}
 
 
+def score_html_structure(image_count: int, word_count: int, shortener_links: list) -> dict:
+    """Structural content signals score_text() alone can't see, since
+    they're about HTML layout, not wording: an image-heavy email with
+    little real text, and links routed through a shortener service (which
+    hides the real destination from both spam filters and recipients --
+    Gmail's own guidance: "web links in the message body should be visible
+    and easy to understand")."""
+    score = 0
+    flags = []
+
+    if image_count > 0:
+        # Roughly: more than 1 image per 50 words of text reads as
+        # image-heavy/little-substance, a common spam pattern -- a plain
+        # text-only email (word_count > 0, image_count 0) is never flagged.
+        ratio = image_count / max(word_count / 50, 1)
+        if ratio > 3:
+            score += 3
+            flags.append(f"Image-heavy: {image_count} image(s) for only {word_count} words of text")
+
+    if shortener_links:
+        score += 4
+        flags.append(f"{len(shortener_links)} link-shortener URL(s) used ({', '.join(shortener_links[:3])}) -- hides the real destination from filters and recipients")
+
+    return {"score": score, "flags": flags}
+
+
 def risk_level(score: int) -> str:
     if score >= 8:
         return "high"
