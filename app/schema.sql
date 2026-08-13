@@ -365,6 +365,28 @@ CREATE TABLE IF NOT EXISTS ses_campaign_recipients (
 
 CREATE INDEX IF NOT EXISTS idx_ses_campaign_recipients_email ON ses_campaign_recipients(domain_id, email);
 
+-- Raw per-click log (ip/user-agent/link, one row per Click event) -- used by
+-- app.click_quality to tell a genuine subscriber click apart from a corporate
+-- email-security gateway (Mimecast, Proofpoint, Microsoft Defender Safe
+-- Links, etc.) auto-visiting every link in a message to scan it. Those show
+-- up to SES as real "clicks" but aren't a person reading the newsletter.
+-- ses_campaign_recipients only keeps a single clicked=0/1 flag per recipient,
+-- which can't tell "clicked once" apart from "clicked nine times".
+CREATE TABLE IF NOT EXISTS ses_campaign_clicks (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    configuration_set TEXT NOT NULL,
+    campaign_id       TEXT NOT NULL,
+    email             TEXT NOT NULL,
+    clicked_at        TEXT NOT NULL,  -- event's own timestamp, ISO8601 UTC as SES reported it
+    ip_address        TEXT,
+    user_agent        TEXT,
+    link              TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ses_campaign_clicks_campaign ON ses_campaign_clicks(configuration_set, campaign_id);
+
 -- Account-wide SES health (sesv2 GetAccount) -- not tied to any one tracked
 -- domain, since it's one shared AWS account, but affects deliverability for
 -- all of them equally. History kept (like postmaster_stats) so a status

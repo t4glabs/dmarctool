@@ -526,6 +526,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
     Listmonk's -- the two can disagree since Listmonk tracks opens/clicks
     itself via pixel/link rewriting, while this reads what SES actually saw."""
     from app.bounce_reasons import categorize_bounce
+    from app.click_quality import classify_campaign_clicks
     from app.content_scoring import score_text
     from app.display_name_checks import check_display_name
     from app.header_compliance import check_header_hygiene, check_unsubscribe_compliance
@@ -547,6 +548,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
                 (r["configuration_set"], r["campaign_id"]),
             ):
                 bounce_breakdown[categorize_bounce(br["bounce_reason"])] += 1
+        click_quality = classify_campaign_clicks(conn, r["configuration_set"], r["campaign_id"])
         out.append({
             "campaign_id": r["campaign_id"],
             "subject": r["subject"] or "(no subject captured)",
@@ -838,6 +840,32 @@ def run_analysis(conn, verbose: bool = True) -> None:
 
         for f in findings:
             upsert_system_action(conn, domain_id, f["category"], f["ref_key"], f["title"], f["detail"])
+
+        # Clear previously-open items whose underlying condition no longer holds --
+        # every other check module in this codebase (compliance.py, blocklist.py,
+        # dns_check.py, mailgun.py, postmaster.py, ses_account.py, etc.) dismisses
+        # its own stale items the same way once a re-check comes back clean; these
+        # four categories were missing that step, so e.g. a failing sender that
+        # recovers, or a stale-data warning after ingestion resumes, stayed open forever.
+        still_open = {(f["category"], f["ref_key"]) for f in findings}
+        for category in ("new_sender", "failure_investigation"):
+            open_items = conn.execute(
+                "SELECT id, ref_key FROM action_items WHERE domain_id=? AND category=? AND status='open'",
+                (domain_id, category),
+            ).fetchall()
+            for item in open_items:
+                if (category, item["ref_key"]) not in still_open:
+                    conn.execute(
+                        "UPDATE action_items SET status='dismissed', resolved_at=datetime('now') WHERE id=?",
+                        (item["id"],),
+                    )
+        for category in ("data_stale", "volume_spike"):
+            if not any(f["category"] == category for f in findings):
+                conn.execute(
+                    """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                       WHERE domain_id=? AND category=? AND status='open'""",
+                    (domain_id, category),
+                )
 
         rec = None
         if latest_report_end is not None:

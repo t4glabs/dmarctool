@@ -145,8 +145,14 @@ def parse_event(raw_body: str):
         day = _event_day(event.get("open", {}).get("timestamp")) or mail_day
         return "open", config_set, [{"email": r} for r in mail.get("destination", [])], day, meta
     if event_type == "Click":
-        day = _event_day(event.get("click", {}).get("timestamp")) or mail_day
-        return "click", config_set, [{"email": r} for r in mail.get("destination", [])], day, meta
+        click = event.get("click", {})
+        day = _event_day(click.get("timestamp")) or mail_day
+        recipients = [
+            {"email": r, "ip_address": click.get("ipAddress"), "user_agent": click.get("userAgent"),
+             "link": click.get("link"), "clicked_at": click.get("timestamp")}
+            for r in mail.get("destination", [])
+        ]
+        return "click", config_set, recipients, day, meta
     if event_type == "Reject":
         # SES refused to even attempt sending -- a pre-send reputation/content
         # filter, not a real bounce from the recipient's server. No per-event
@@ -183,6 +189,22 @@ def _upsert_campaign_event(conn, domain_id, config_set, campaign_id, meta, day, 
         (domain_id, config_set, campaign_id, meta["subject"], meta["from_display_name"], meta["from_address"],
          meta["message_id"], meta["list_unsubscribe"], meta["list_unsubscribe_post"], day, n),
     )
+
+
+def _log_campaign_clicks(conn, domain_id, config_set, campaign_id, recipients):
+    """Raw per-click log (see ses_campaign_clicks in schema.sql) -- lets
+    app.click_quality tell a genuine subscriber click apart from a security
+    gateway auto-visiting every link, which ses_campaign_recipients' single
+    clicked=0/1 flag per recipient can't do on its own."""
+    for r in recipients:
+        conn.execute(
+            """INSERT INTO ses_campaign_clicks
+               (domain_id, configuration_set, campaign_id, email, clicked_at, ip_address, user_agent, link)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (domain_id, config_set, campaign_id, r["email"],
+             r.get("clicked_at") or datetime.datetime.utcnow().isoformat(),
+             r.get("ip_address"), r.get("user_agent"), r.get("link")),
+        )
 
 
 RECIPIENT_COLUMN = {"delivery": "delivered", "open": "opened", "click": "clicked"}
@@ -278,6 +300,8 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                     _upsert_campaign_event(conn, domain_id, config_set, campaign_id, meta, event_day, kind, len(recipients))
                     if kind in RECIPIENT_COLUMN:
                         _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, recipients)
+                        if kind == "click":
+                            _log_campaign_clicks(conn, domain_id, config_set, campaign_id, recipients)
                     elif kind == "bounce":
                         _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id, recipients)
 

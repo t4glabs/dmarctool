@@ -585,7 +585,13 @@
           <td>{{ c.subject }}</td>
           <td>{{ c.delivered }}</td>
           <td>{{ c.opened }}{% if c.open_rate is not none %} ({{ "%.0f"|format(100 * c.open_rate) }}%){% endif %}</td>
-          <td>{{ c.clicked }}{% if c.click_rate is not none %} ({{ "%.0f"|format(100 * c.click_rate) }}%){% endif %}</td>
+          <td>{{ c.clicked }}{% if c.click_rate is not none %} ({{ "%.0f"|format(100 * c.click_rate) }}%){% endif %}
+            {% if c.click_quality and c.click_quality.total_clickers %}
+            <br><span class="muted" style="font-size:0.8em" title="{{ c.click_quality.automated }} of {{ c.click_quality.total_clickers }} recipient(s) who clicked show signs of being a corporate security scanner or automated link-check (e.g. clicked without ever opening the message, clicked an implausible number of times, or a non-browser user-agent) rather than a real person reading the newsletter. This is a heuristic, not a certainty.">
+              {{ c.click_quality.genuine }} genuine{% if c.click_quality.automated %}, {{ c.click_quality.automated }} likely automated{% endif %}
+            </span>
+            {% endif %}
+          </td>
           <td>{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}
             {% if c.bounce_breakdown %}<br><span class="muted" style="font-size:0.8em">{% for cat, n in c.bounce_breakdown %}{{ cat }}: {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
           </td>
