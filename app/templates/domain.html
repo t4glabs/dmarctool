@@ -584,7 +584,13 @@
           <td>{{ c.from_display_name or "-" }}</td>
           <td>{{ c.subject }}</td>
           <td>{{ c.delivered }}</td>
-          <td>{{ c.opened }}{% if c.open_rate is not none %} ({{ "%.0f"|format(100 * c.open_rate) }}%){% endif %}</td>
+          <td>{{ c.opened }}{% if c.open_rate is not none %} ({{ "%.0f"|format(100 * c.open_rate) }}%){% endif %}
+            {% if c.open_quality and c.open_quality.total_openers %}
+            <br><span class="muted" style="font-size:0.8em" title="{{ c.open_quality.automated }} of {{ c.open_quality.total_openers }} recipient(s) who opened show signs of being an automated image-proxy fetch (e.g. Gmail's own image proxy, or an implausible number of opens) rather than a real person. This only catches automated fetches that identify themselves -- it can't detect Apple Mail Privacy Protection's pre-fetch, which is designed to look identical to a real open. So even the 'genuine' count here isn't a confirmed human read, just 'no known automated signal found'.">
+              {{ c.open_quality.genuine }} not-flagged{% if c.open_quality.automated %}, {{ c.open_quality.automated }} likely automated{% endif %}
+            </span>
+            {% endif %}
+          </td>
           <td>{{ c.clicked }}{% if c.click_rate is not none %} ({{ "%.0f"|format(100 * c.click_rate) }}%){% endif %}
             {% if c.click_quality and c.click_quality.total_clickers %}
             <br><span class="muted" style="font-size:0.8em" title="{{ c.click_quality.automated }} of {{ c.click_quality.total_clickers }} recipient(s) who clicked show signs of being a corporate security scanner or automated link-check (e.g. clicked without ever opening the message, clicked an implausible number of times, or a non-browser user-agent) rather than a real person reading the newsletter. This is a heuristic, not a certainty.">

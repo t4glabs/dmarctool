@@ -387,6 +387,27 @@ CREATE TABLE IF NOT EXISTS ses_campaign_clicks (
 
 CREATE INDEX IF NOT EXISTS idx_ses_campaign_clicks_campaign ON ses_campaign_clicks(configuration_set, campaign_id);
 
+-- Raw per-open log (ip/user-agent, one row per Open event) -- used by
+-- app.open_quality the same way ses_campaign_clicks is used for clicks:
+-- telling apart a real open from an automated image pre-fetch (Gmail's own
+-- image proxy, most visibly -- its fetches carry a distinctive user-agent).
+-- NOTE this can only catch fetches that identify themselves; Apple Mail
+-- Privacy Protection deliberately mimics a real device/open and is not
+-- reliably detectable this way -- see app.open_quality's docstring.
+CREATE TABLE IF NOT EXISTS ses_campaign_opens (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    configuration_set TEXT NOT NULL,
+    campaign_id       TEXT NOT NULL,
+    email             TEXT NOT NULL,
+    opened_at         TEXT NOT NULL,  -- event's own timestamp, ISO8601 UTC as SES reported it
+    ip_address        TEXT,
+    user_agent        TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ses_campaign_opens_campaign ON ses_campaign_opens(configuration_set, campaign_id);
+
 -- Account-wide SES health (sesv2 GetAccount) -- not tied to any one tracked
 -- domain, since it's one shared AWS account, but affects deliverability for
 -- all of them equally. History kept (like postmaster_stats) so a status

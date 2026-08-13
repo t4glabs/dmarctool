@@ -531,6 +531,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
     from app.display_name_checks import check_display_name
     from app.header_compliance import check_header_hygiene, check_unsubscribe_compliance
     from app.listmonk import analyze_html
+    from app.open_quality import classify_campaign_opens
 
     rows = conn.execute(
         """SELECT * FROM ses_campaigns WHERE domain_id=?
@@ -549,6 +550,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             ):
                 bounce_breakdown[categorize_bounce(br["bounce_reason"])] += 1
         click_quality = classify_campaign_clicks(conn, r["configuration_set"], r["campaign_id"])
+        open_quality = classify_campaign_opens(conn, r["configuration_set"], r["campaign_id"])
         out.append({
             "campaign_id": r["campaign_id"],
             "subject": r["subject"] or "(no subject captured)",
@@ -565,6 +567,8 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
             "click_quality": click_quality,
             "genuine_click_rate": (click_quality["genuine"] / delivered) if delivered else None,
+            "open_quality": open_quality,
+            "genuine_open_rate": (open_quality["genuine"] / delivered) if delivered else None,
             "bounce_breakdown": bounce_breakdown.most_common(),
             "display_name_issues": check_display_name(r["from_display_name"]),
             "rejected": r["rejected"] or 0,

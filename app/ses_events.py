@@ -142,8 +142,14 @@ def parse_event(raw_body: str):
         day = _event_day(delivery.get("timestamp")) or mail_day
         return "delivery", config_set, [{"email": r} for r in delivery.get("recipients", [])], day, meta
     if event_type == "Open":
-        day = _event_day(event.get("open", {}).get("timestamp")) or mail_day
-        return "open", config_set, [{"email": r} for r in mail.get("destination", [])], day, meta
+        open_ = event.get("open", {})
+        day = _event_day(open_.get("timestamp")) or mail_day
+        recipients = [
+            {"email": r, "ip_address": open_.get("ipAddress"), "user_agent": open_.get("userAgent"),
+             "opened_at": open_.get("timestamp")}
+            for r in mail.get("destination", [])
+        ]
+        return "open", config_set, recipients, day, meta
     if event_type == "Click":
         click = event.get("click", {})
         day = _event_day(click.get("timestamp")) or mail_day
@@ -204,6 +210,23 @@ def _log_campaign_clicks(conn, domain_id, config_set, campaign_id, recipients):
             (domain_id, config_set, campaign_id, r["email"],
              r.get("clicked_at") or datetime.datetime.utcnow().isoformat(),
              r.get("ip_address"), r.get("user_agent"), r.get("link")),
+        )
+
+
+def _log_campaign_opens(conn, domain_id, config_set, campaign_id, recipients):
+    """Raw per-open log (see ses_campaign_opens in schema.sql) -- lets
+    app.open_quality flag opens that are an automated image pre-fetch (e.g.
+    Gmail's own image proxy) rather than a person actually reading the
+    message, which ses_campaign_recipients' single opened=0/1 flag per
+    recipient can't do on its own."""
+    for r in recipients:
+        conn.execute(
+            """INSERT INTO ses_campaign_opens
+               (domain_id, configuration_set, campaign_id, email, opened_at, ip_address, user_agent)
+               VALUES (?,?,?,?,?,?,?)""",
+            (domain_id, config_set, campaign_id, r["email"],
+             r.get("opened_at") or datetime.datetime.utcnow().isoformat(),
+             r.get("ip_address"), r.get("user_agent")),
         )
 
 
@@ -302,6 +325,8 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                         _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, recipients)
                         if kind == "click":
                             _log_campaign_clicks(conn, domain_id, config_set, campaign_id, recipients)
+                        elif kind == "open":
+                            _log_campaign_opens(conn, domain_id, config_set, campaign_id, recipients)
                     elif kind == "bounce":
                         _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id, recipients)
 
