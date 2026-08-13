@@ -62,10 +62,14 @@ def check_ip(ip: str, timeout: float = 5.0):
 
     if listed:
         return "listed", listed, f"listed on: {', '.join(listed)}"
-    if failed and len(failed) == len(DNSBL_ZONES):
-        return "lookup_failed", None, "all blocklist lookups failed (network/dig error)"
-    note = "not listed" if not failed else f"not listed ({', '.join(failed)} lookup failed)"
-    return "clean", None, note
+    if failed:
+        # A zone that failed to respond wasn't actually checked -- treating this
+        # as "clean" would risk silently clearing a real listing on the zone that
+        # timed out. Inconclusive either way, so don't claim clean or listed.
+        note = ("all blocklist lookups failed (network/dig error)" if len(failed) == len(DNSBL_ZONES)
+                else f"lookup incomplete -- {', '.join(failed)} failed to respond, no listing found on the rest")
+        return "lookup_failed", None, note
+    return "clean", None, "not listed"
 
 
 def _record(conn, source_ip, status, listed_on, note):
@@ -124,12 +128,13 @@ def run_blocklist_checks(conn, verbose: bool = True) -> None:
                     f"{domain_name}: sending IP {source_ip} is on a blocklist",
                     note,
                 )
-        else:
+        elif status == "clean":
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                    WHERE category='blocklist' AND ref_key=? AND status='open'""",
                 (source_ip,),
             )
+        # status == "lookup_failed": inconclusive, leave any existing open item as-is
     conn.commit()
 
     if verbose:

@@ -167,12 +167,17 @@ def _upsert_campaign_event(conn, domain_id, config_set, campaign_id, meta, day, 
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(configuration_set, campaign_id) DO UPDATE SET
               {counter}={counter}+excluded.{counter},
-              subject=COALESCE(ses_campaigns.subject, excluded.subject),
-              from_display_name=COALESCE(ses_campaigns.from_display_name, excluded.from_display_name),
-              from_address=COALESCE(ses_campaigns.from_address, excluded.from_address),
-              message_id=COALESCE(ses_campaigns.message_id, excluded.message_id),
-              list_unsubscribe=COALESCE(ses_campaigns.list_unsubscribe, excluded.list_unsubscribe),
-              list_unsubscribe_post=COALESCE(ses_campaigns.list_unsubscribe_post, excluded.list_unsubscribe_post),
+              -- Prefer the newest non-null value, not the first-ever one: a
+              -- Listmonk test send and the real campaign send share the same
+              -- campaign_id, and the test (usually processed first, to a
+              -- single recipient) must not permanently pin these fields if the
+              -- subject/from/headers changed before the real send went out.
+              subject=COALESCE(excluded.subject, ses_campaigns.subject),
+              from_display_name=COALESCE(excluded.from_display_name, ses_campaigns.from_display_name),
+              from_address=COALESCE(excluded.from_address, ses_campaigns.from_address),
+              message_id=COALESCE(excluded.message_id, ses_campaigns.message_id),
+              list_unsubscribe=COALESCE(excluded.list_unsubscribe, ses_campaigns.list_unsubscribe),
+              list_unsubscribe_post=COALESCE(excluded.list_unsubscribe_post, ses_campaigns.list_unsubscribe_post),
               send_day=MIN(ses_campaigns.send_day, excluded.send_day),
               updated_at=datetime('now')""",
         (domain_id, config_set, campaign_id, meta["subject"], meta["from_display_name"], meta["from_address"],

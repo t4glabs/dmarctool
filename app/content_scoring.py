@@ -63,10 +63,15 @@ def score_text(text: str) -> dict:
     score = 0
     flags = []
 
-    for phrase, weight in _HIGH_RISK_PHRASES.items():
-        if phrase in lower:
-            score += weight
-            flags.append(f'Contains "{phrase}"')
+    matched_phrases = [p for p in _HIGH_RISK_PHRASES if p in lower]
+    for phrase in matched_phrases:
+        # Skip if this match is wholly contained in another matched phrase (e.g.
+        # "extra cash" inside "earn extra cash", "guaranteed" inside "satisfaction
+        # guaranteed") -- same signal, shouldn't score/flag twice.
+        if any(phrase != other and phrase in other for other in matched_phrases):
+            continue
+        score += _HIGH_RISK_PHRASES[phrase]
+        flags.append(f'Contains "{phrase}"')
 
     for pattern, (label, weight) in _HIGH_RISK_PATTERNS.items():
         if pattern.search(text):

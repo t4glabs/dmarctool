@@ -561,6 +561,8 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "click_rate": (r["clicked"] or 0) / delivered if delivered else None,
             "bounce_rate": (r["bounced"] or 0) / delivered if delivered else None,
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
+            "click_quality": click_quality,
+            "genuine_click_rate": (click_quality["genuine"] / delivered) if delivered else None,
             "bounce_breakdown": bounce_breakdown.most_common(),
             "display_name_issues": check_display_name(r["from_display_name"]),
             "rejected": r["rejected"] or 0,

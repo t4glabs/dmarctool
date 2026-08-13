@@ -148,19 +148,26 @@ def run_listmonk_content_sync(conn, verbose: bool = True) -> None:
     """Backfills body_text for any tracked campaign that doesn't have it yet,
     then scores it and raises an action item on a high spam-trigger score --
     same scoring function already used for subject lines, now applied to the
-    actual newsletter content the user explicitly asked to have reviewed."""
+    actual newsletter content the user explicitly asked to have reviewed.
+
+    Also corrects `subject` from Listmonk on every run, for every tracked
+    campaign (not just ones missing a body) -- Listmonk is authoritative for
+    the subject actually sent (a sent campaign is locked there), whereas
+    ses_events.py can only go by whatever a given SES-echoed header happened
+    to say, which is wrong if a one-recipient test send (sharing the same
+    campaign_id) got processed before the real send with an edited subject."""
     url, _ = _client()
     if not url:
         if verbose:
             print("[listmonk] missing LISTMONK_URL/LISTMONK_API_USERNAME/LISTMONK_API_TOKEN -- skipping")
         return
 
-    pending = conn.execute(
-        "SELECT id, domain_id, campaign_id, subject FROM ses_campaigns WHERE body_html IS NULL"
+    tracked = conn.execute(
+        "SELECT id, domain_id, campaign_id, subject, body_html FROM ses_campaigns"
     ).fetchall()
-    if not pending:
+    if not tracked:
         if verbose:
-            print("[listmonk] no campaigns need a content backfill")
+            print("[listmonk] no tracked campaigns yet")
         return
 
     campaigns, err = fetch_all_campaigns()
@@ -169,10 +176,19 @@ def run_listmonk_content_sync(conn, verbose: bool = True) -> None:
             print(f"[listmonk] could not fetch campaigns: {err}")
         return
 
-    for row in pending:
+    for row in tracked:
         listmonk_campaign = campaigns.get(row["campaign_id"])
         if not listmonk_campaign:
-            continue  # not found in Listmonk (deleted there, or UUID mismatch) -- leave NULL, try again next run
+            continue  # not found in Listmonk (deleted there, or UUID mismatch) -- leave as-is, try again next run
+
+        true_subject = listmonk_campaign.get("subject")
+        if true_subject and true_subject != row["subject"]:
+            conn.execute("UPDATE ses_campaigns SET subject=? WHERE id=?", (true_subject, row["id"]))
+            if verbose:
+                print(f"[listmonk] corrected subject for campaign {row['campaign_id']}: {true_subject!r}")
+
+        if row["body_html"] is not None:
+            continue  # body already fetched; not re-scoring unchanged content every run
 
         html = listmonk_campaign.get("body", "") or ""
         info = analyze_html(html)
@@ -189,7 +205,7 @@ def run_listmonk_content_sync(conn, verbose: bool = True) -> None:
         if risk_level(combined_score) == "high":
             upsert_system_action(
                 conn, row["domain_id"], "content_spam_risk", row["campaign_id"],
-                f"Newsletter content looks spam-trigger-heavy (newsletter: {row['subject'] or row['campaign_id']})",
+                f"Newsletter content looks spam-trigger-heavy (newsletter: {true_subject or row['subject'] or row['campaign_id']})",
                 " ".join(combined_flags),
             )
         else:

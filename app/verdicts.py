@@ -136,10 +136,15 @@ def ses_verdict(ses_stats, bounce_warn, complaint_warn):
 
     issues = []
     for s in ses_stats:
-        if not s["delivered"]:
+        # delivered/bounced are disjoint SES outcome counters (a bounced message was
+        # never delivered), so "attempted" -- the correct bounce-rate denominator --
+        # is their sum, not delivered alone. Also means a config set with zero
+        # delivered but nonzero bounced (everything bounced) must not be skipped.
+        attempted = s["delivered"] + s["bounced"]
+        if not attempted:
             continue
-        bounce_rate = s["bounced"] / s["delivered"]
-        complaint_rate = s["complained"] / s["delivered"]
+        bounce_rate = s["bounced"] / attempted
+        complaint_rate = s["complained"] / s["delivered"] if s["delivered"] else 0
         if bounce_rate >= bounce_warn:
             issues.append(f"{s['configuration_set']} bounce rate is {bounce_rate:.1%}")
         if complaint_rate >= complaint_warn:
