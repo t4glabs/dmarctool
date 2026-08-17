@@ -1,6 +1,6 @@
 Hi {{ recipient_label }},
 
-Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }} to {{ period_end }}), in plain terms -- no technical jargon, just what happened and what we did about it.
+Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }} to {{ period_end }}), in plain terms. No technical jargon, just what happened and what we did about it.
 {% if resolved %}
 WHAT WE FIXED FOR YOU
 {% for item in resolved %}
@@ -14,7 +14,7 @@ WHAT WE'RE STILL WORKING ON
 {{ contact_cta }}
 {% endif %}{% endif %}
 {%- if not resolved and not still_open %}
-Nothing needed fixing this time -- everything's running smoothly.
+Nothing needed fixing this time, everything's running smoothly.
 {% endif %}
 {%- if risk_warning %}
 HEADS UP
@@ -35,7 +35,7 @@ YOUR NEWSLETTER'S REACH
 {{ newsletter }}
 {% endif %}
 {%- if blocklist_events %}
-NOTE: one of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }} -- we're keeping watch.
+NOTE: one of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }}. We're keeping watch.
 {% endif %}
 {%- if comparison %}
 HOW YOU COMPARE
@@ -46,9 +46,9 @@ TIPS FOR THE NEXT FEW WEEKS
 {% for tip in tips %}
 - {{ tip }}
 {% endfor %}
-Whatever needs fixing here, aikyam will make sure it gets sorted properly -- you don't have to solve this alone.
+Whatever needs fixing here, aikyam will make sure it gets sorted properly. You don't have to solve this alone.
 {% endif %}
-This might look like a lot to take in, but it really matters -- these are the things that decide whether people actually see your emails, and whether someone could try to impersonate your organization using your name. Please take a moment to read through it, and reply any time if anything's unclear -- we're always happy to walk through it with you.
+This might look like a lot to take in, but it really matters. These are the things that decide whether people actually see your emails, and whether someone could try to impersonate your organization using your name. Please take a moment to read through it, and reply any time if anything's unclear. We're always happy to walk through it with you.
 
 With care,
 {{ signoff_name }}

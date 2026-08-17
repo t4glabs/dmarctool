@@ -11,8 +11,8 @@
       <p style="font-size:13px; color:#888888; margin:0 0 4px 0;">{{ period_start }} to {{ period_end }}</p>
       <h1 style="font-size:20px; margin:0 0 20px 0; color:#222222;">Hi {{ recipient_label }},</h1>
       <p style="font-size:16px; line-height:1.6; margin:0 0 20px 0;">
-        Here's how <strong>{{ domain_name }}</strong>'s emails have been doing lately, in plain terms -- no
-        technical jargon, just what happened and what we did about it.
+        Here's how <strong>{{ domain_name }}</strong>'s emails have been doing lately, in plain terms.
+        No technical jargon, just what happened and what we did about it.
       </p>
 
       {% if resolved %}
@@ -42,7 +42,7 @@
 
       {% if not resolved and not still_open %}
       <div style="margin-bottom:24px; background:#f0f7f0; border-radius:6px; padding:14px 16px;">
-        <p style="font-size:15px; margin:0; color:#1a7f37;">✅ Nothing needed fixing this time -- everything's running smoothly.</p>
+        <p style="font-size:15px; margin:0; color:#1a7f37;">✅ Nothing needed fixing this time, everything's running smoothly.</p>
       </div>
       {% endif %}
 
@@ -82,7 +82,7 @@
 
       {% if blocklist_events %}
       <div style="margin-bottom:24px; background:#fff5f5; border-radius:6px; padding:14px 16px;">
-        <p style="font-size:15px; margin:0; color:#b42318;">⚠️ One of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }} -- we're keeping watch.</p>
+        <p style="font-size:15px; margin:0; color:#b42318;">⚠️ One of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }}. We're keeping watch.</p>
       </div>
       {% endif %}
 
@@ -101,14 +101,14 @@
           <li style="margin-bottom:6px;">{{ tip }}</li>
           {% endfor %}
         </ul>
-        <p style="font-size:15px; line-height:1.6; margin:10px 0 0 0;">Whatever needs fixing here, aikyam will make sure it gets sorted properly -- you don't have to solve this alone.</p>
+        <p style="font-size:15px; line-height:1.6; margin:10px 0 0 0;">Whatever needs fixing here, aikyam will make sure it gets sorted properly. You don't have to solve this alone.</p>
       </div>
       {% endif %}
 
       <p style="font-size:15px; line-height:1.6; margin:24px 0 0 0;">
-        This might look like a lot to take in, but it really matters -- these are the things that decide whether
+        This might look like a lot to take in, but it really matters. These are the things that decide whether
         people actually see your emails, and whether someone could try to impersonate your organization using
-        your name. Please take a moment to read through it, and reply any time if anything's unclear -- we're
+        your name. Please take a moment to read through it, and reply any time if anything's unclear. We're
         always happy to walk through it with you.
       </p>
       <p style="font-size:15px; line-height:1.6; margin:20px 0 0 0;">

@@ -51,21 +51,21 @@ _PROBLEM_STORY = {
     "mailgun_reputation": "more of your emails than usual were bouncing back or being marked as spam",
     "ses_reputation": "more of your emails than usual were bouncing back or being marked as spam",
     "ses_reputation_watch": "your emails' bounce or spam-complaint rate started creeping up",
-    "ses_rejected": "one or more of your emails were blocked before they even went out -- usually a sign something needed a closer look",
+    "ses_rejected": "one or more of your emails were blocked before they even went out, usually a sign something needed a closer look",
     # Fallback wording only -- _resolved_items() special-cases these two with
     # a real per-report count instead of this generic phrase; this only shows
     # up if one is still open (these categories currently have no auto-dismiss).
     "mailgun_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo, a full inbox, or an address that no longer exists)",
     "ses_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo, a full inbox, or an address that no longer exists)",
-    "new_sender": ("we noticed a computer sending email using your website's name that we hadn't seen before -- "
-                   "worth knowing, since this can be a sign that someone else is using your organization's name "
-                   "without your knowledge"),
+    "new_sender": ("we noticed a computer sending email using your website's name that we hadn't seen before. "
+                   "It's worth knowing about, since this can be a sign that someone else is using your "
+                   "organization's name without your knowledge"),
     "failure_investigation": ("a computer sending email using your website's name was having trouble passing "
-                               "safety checks -- worth knowing, since this can be a sign that someone else is "
-                               "using your organization's name without your knowledge"),
+                               "safety checks. It's worth knowing about, since this can be a sign that someone "
+                               "else is using your organization's name without your knowledge"),
     "borrowed_sending_identity": ("some of your emails were accidentally being sent through a different website's "
-                                   "account -- worth knowing, since mix-ups like this can also be a sign that "
-                                   "someone else is using your organization's name"),
+                                   "account. It's worth knowing about, since mix-ups like this can also be a sign "
+                                   "that someone else is using your organization's name"),
     "spf_missing": "your website was missing a security setting that helps stop people from faking your emails",
     "dns_missing": "your website didn't have the basic protection that stops people from faking your emails",
     "dkim_missing": "your website was missing a kind of digital signature that proves your emails really came from you",
@@ -74,8 +74,8 @@ _PROBLEM_STORY = {
     "display_name_issue": "the name your newsletters show as being \"from\" could look confusing or untrustworthy to your readers",
     "content_spam_risk": "the wording in one of your newsletters looked similar to what spam filters watch out for",
     "subject_spam_risk": "the subject line of one of your newsletters looked similar to what spam filters watch out for",
-    "sending_cadence_irregular": ("your newsletters haven't been going out on a very consistent schedule lately -- "
-                                   "a steady rhythm helps mailbox providers trust your mail more"),
+    "sending_cadence_irregular": ("your newsletters haven't been going out on a very consistent schedule lately, "
+                                   "and a steady rhythm helps mailbox providers trust your mail more"),
 }
 _GENERIC_PROBLEM_STORY = "something about your website's email setup needed attention"
 
@@ -118,20 +118,20 @@ _TIP_LIBRARY = {
     "ses_reputation": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
     "ses_reputation_watch": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
     "blocklist": "If this happens again, ask whoever manages your sending platform (Ghost/Mailgun) to look into why one of your sending computers landed on a spam list.",
-    "safe_browsing_flagged": "Check your website for anything that looks out of place -- this sometimes happens after a plugin or theme gets compromised.",
+    "safe_browsing_flagged": "Check your website for anything that looks out of place, since this sometimes happens after a plugin or theme gets compromised.",
     "display_name_issue": "Keep your newsletter's \"from\" name consistent and clearly recognizable as your organization across every email you send.",
-    "content_spam_risk": "Before your next newsletter, read the subject line and body out loud -- if it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
-    "subject_spam_risk": "Before your next newsletter, read the subject line out loud -- if it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
+    "content_spam_risk": "Before your next newsletter, read the subject line and body out loud. If it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
+    "subject_spam_risk": "Before your next newsletter, read the subject line out loud. If it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
     "postmaster_compliance": "aikyam can walk you through Google's checklist for bulk senders to make sure your setup still matches it.",
-    "spf_missing": "This one needs a small change to your website's DNS settings -- aikyam can make this change for you if you're not comfortable doing it yourself.",
-    "dns_missing": "This one needs a small change to your website's DNS settings -- aikyam can make this change for you if you're not comfortable doing it yourself.",
-    "dkim_missing": "This one needs a small change to your website's DNS settings -- aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "spf_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "dns_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "dkim_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
 }
-_CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or month each time -- a predictable "
+_CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or month each time. A predictable "
                      "rhythm helps mailbox providers trust your mail more, and helps your readers know when to "
                      "expect you.")
 _GENERIC_TIP = ("Keep sending on a predictable schedule, keep your list clean by removing addresses that bounce, "
-                 "and reach out to aikyam any time something looks off -- we'd rather help early than after it "
+                 "and reach out to aikyam any time something looks off. We'd rather help early than after it "
                  "becomes a bigger problem.")
 
 # Categories where this domain's own overall pass rate (7 days before the fix
@@ -218,7 +218,7 @@ def _ses_rate_impact(conn, config_set: str, around: datetime.datetime):
 
 def _suppression_story(count: int) -> str:
     return (f"{count} email address{'es' if count != 1 else ''} stopped accepting your mail during this time "
-            f"(usually a typo, a full inbox, or an account that's closed) -- these are now automatically skipped "
+            f"(usually a typo, a full inbox, or an account that's closed). These are now automatically skipped "
             f"so they don't drag down your other emails. Keeping a clean list like this is exactly what helps "
             f"your future emails land in the inbox instead of getting filtered out, so it's worth removing them "
             f"from your own list too")
@@ -231,18 +231,18 @@ def _explain_policy_for_owner(p: str, pct) -> str:
     complete non-technical reader."""
     if not p:
         return ("We haven't yet turned on the protection that stops people from faking your website's "
-                "name in emails -- that's the next thing we're setting up for you.")
+                "name in emails. That's the next thing we're setting up for you.")
     pct = 100 if pct is None else pct
     if p == "none":
         return ("Right now we're quietly watching for anyone faking your website's name in emails, "
-                "without blocking anything yet -- this is the safe first step before turning on real "
+                "without blocking anything yet. This is the safe first step before turning on real "
                 "protection, so we don't accidentally block any of your own real mail while we're still watching.")
     verb = "sent straight to spam instead of the inbox" if p == "quarantine" else "blocked completely, never even arriving"
     if pct >= 100:
         return f"Every email we catch pretending to be from you now gets {verb}."
     return (f"Think of it like a lock we're gradually tightening: right now, about {pct} out of every 100 "
             f"suspicious emails pretending to be you get {verb}, and we're keeping a close eye on the rest "
-            f"before turning the lock up further -- that way we never accidentally block your own real mail.")
+            f"before turning the lock up further. That way we never accidentally block your own real mail.")
 
 
 # Aikyam's own default CC on every domain's report -- so Aikyam always has
@@ -344,7 +344,7 @@ def _contact_aikyam_cta(still_open_categories: set):
     issue) that a non-technical reader shouldn't just sit with it."""
     if not (still_open_categories & _URGENT_STILL_OPEN_CATEGORIES):
         return None
-    return ("If you're not sure how to fix what's above, reach out to aikyam directly -- this is worth getting "
+    return ("If you're not sure how to fix what's above, reach out to aikyam directly. This is worth getting "
             "right, and we'll make sure it's solved properly.")
 
 
@@ -401,12 +401,12 @@ def _protection_tightened(conn, domain_id: int, period_start: datetime.datetime)
 
     if after_strength > before_strength and after_strength >= 0:
         verb = "sent straight to spam instead of the inbox" if after_p == "quarantine" else "blocked completely, never even arriving"
-        return (f"Since last time, we've strengthened your protection -- suspicious emails pretending to be from "
+        return (f"Since last time, we've strengthened your protection. Suspicious emails pretending to be from "
                 f"you now get {verb}, instead of just being watched. That makes it much harder for someone to "
                 f"send fake mail that looks like it's from you.")
     if after_strength == before_strength and after_strength >= 0 and after_pct > before_pct + MATERIAL_PASS_RATE_DELTA:
         return (f"Since last time, we've tightened your protection from catching about {before_pct} out of 100 "
-                f"suspicious emails to about {after_pct} out of 100 -- that makes it much harder for someone to "
+                f"suspicious emails to about {after_pct} out of 100. That makes it much harder for someone to "
                 f"send fake mail that looks like it's from you.")
     return None
 
@@ -430,16 +430,16 @@ def _spam_rate_trend(conn, domain_id: int, now: datetime.datetime):
     recent_pct = recent * 100
 
     if recent <= GOOD_SPAM_RATE:
-        story = (f"Google's own numbers show very few people are marking your mail as spam -- averaging about "
+        story = (f"Google's own numbers show very few people are marking your mail as spam, averaging about "
                  f"{recent_pct:.2f}% over the last few months, well under the {GOOD_SPAM_RATE * 100:.2f}% Google "
                  f"recommends staying under.")
     elif recent >= BAD_SPAM_RATE:
         story = (f"Google's own numbers show about {recent_pct:.2f}% of people are marking your mail as spam "
-                 f"over the last few months -- that's above the {BAD_SPAM_RATE * 100:.2f}% Google treats as a "
+                 f"over the last few months, which is above the {BAD_SPAM_RATE * 100:.2f}% Google treats as a "
                  f"real problem.")
     else:
         story = (f"Google's own numbers show about {recent_pct:.2f}% of people are marking your mail as spam "
-                 f"over the last few months -- within a normal range, but worth keeping an eye on.")
+                 f"over the last few months, within a normal range but worth keeping an eye on.")
     if prior is not None:
         prior_pct = prior * 100
         if recent_pct < prior_pct - 0.01:
@@ -483,7 +483,7 @@ def _risk_warning(conn, domain_id: int, now: datetime.datetime):
     if not reasons:
         return None
     return ("You are in danger of emails landing in spam folders soon if this continues: " + "; ".join(reasons)
-            + ". If you're not sure how to fix this yourself, reach out to aikyam directly -- this is really "
+            + ". If you're not sure how to fix this yourself, reach out to aikyam directly. This is really "
             "important for your organization.")
 
 
@@ -590,7 +590,7 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
         concerns.append("more people marked them as spam than usual")
 
     if improvements:
-        story += " Your newsletters are improving -- " + ", and ".join(improvements) + " compared to last time."
+        story += " Your newsletters are improving: " + ", and ".join(improvements) + " compared to last time."
     elif concerns:
         story += " Worth a look: " + ", and ".join(concerns) + " compared to last time."
     return story
@@ -625,11 +625,11 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
             if cur_pct > prev_pct + 2:
                 deliverability += f" That's better than last time (about {prev_pct} out of 100)."
             elif cur_pct < prev_pct - 2:
-                deliverability += f" That's a bit lower than last time (about {prev_pct} out of 100) -- we're looking into why."
+                deliverability += f" That's a bit lower than last time (about {prev_pct} out of 100). We're looking into why."
             else:
                 deliverability += " That's about the same as last time."
     else:
-        deliverability = "We didn't get enough information about your emails this time to say how they're doing -- nothing to worry about, we'll know more next time."
+        deliverability = "We didn't get enough information about your emails this time to say how they're doing. Nothing to worry about, we'll know more next time."
 
     policy_run = current_policy_run(conn, domain_id)
     protection = _explain_policy_for_owner(policy_run["p"] if policy_run else None, policy_run["pct"] if policy_run else None)
