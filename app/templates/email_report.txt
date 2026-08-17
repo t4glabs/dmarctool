@@ -46,7 +46,7 @@ TIPS FOR THE NEXT FEW WEEKS
 {% for tip in tips %}
 - {{ tip }}
 {% endfor %}
-Whatever needs fixing here, Aikyam will make sure it gets sorted properly -- you don't have to solve this alone.
+Whatever needs fixing here, aikyam will make sure it gets sorted properly -- you don't have to solve this alone.
 {% endif %}
 This might look like a lot to take in, but it really matters -- these are the things that decide whether people actually see your emails, and whether someone could try to impersonate your organization using your name. Please take a moment to read through it, and reply any time if anything's unclear -- we're always happy to walk through it with you.
 

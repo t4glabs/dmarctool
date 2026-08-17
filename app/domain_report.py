@@ -122,16 +122,16 @@ _TIP_LIBRARY = {
     "display_name_issue": "Keep your newsletter's \"from\" name consistent and clearly recognizable as your organization across every email you send.",
     "content_spam_risk": "Before your next newsletter, read the subject line and body out loud -- if it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
     "subject_spam_risk": "Before your next newsletter, read the subject line out loud -- if it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
-    "postmaster_compliance": "Aikyam can walk you through Google's checklist for bulk senders to make sure your setup still matches it.",
-    "spf_missing": "This one needs a small change to your website's DNS settings -- Aikyam can make this change for you if you're not comfortable doing it yourself.",
-    "dns_missing": "This one needs a small change to your website's DNS settings -- Aikyam can make this change for you if you're not comfortable doing it yourself.",
-    "dkim_missing": "This one needs a small change to your website's DNS settings -- Aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "postmaster_compliance": "aikyam can walk you through Google's checklist for bulk senders to make sure your setup still matches it.",
+    "spf_missing": "This one needs a small change to your website's DNS settings -- aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "dns_missing": "This one needs a small change to your website's DNS settings -- aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "dkim_missing": "This one needs a small change to your website's DNS settings -- aikyam can make this change for you if you're not comfortable doing it yourself.",
 }
 _CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or month each time -- a predictable "
                      "rhythm helps mailbox providers trust your mail more, and helps your readers know when to "
                      "expect you.")
 _GENERIC_TIP = ("Keep sending on a predictable schedule, keep your list clean by removing addresses that bounce, "
-                 "and reach out to Aikyam any time something looks off -- we'd rather help early than after it "
+                 "and reach out to aikyam any time something looks off -- we'd rather help early than after it "
                  "becomes a bigger problem.")
 
 # Categories where this domain's own overall pass rate (7 days before the fix
@@ -344,7 +344,7 @@ def _contact_aikyam_cta(still_open_categories: set):
     issue) that a non-technical reader shouldn't just sit with it."""
     if not (still_open_categories & _URGENT_STILL_OPEN_CATEGORIES):
         return None
-    return ("If you're not sure how to fix what's above, reach out to Aikyam directly -- this is worth getting "
+    return ("If you're not sure how to fix what's above, reach out to aikyam directly -- this is worth getting "
             "right, and we'll make sure it's solved properly.")
 
 
@@ -483,7 +483,7 @@ def _risk_warning(conn, domain_id: int, now: datetime.datetime):
     if not reasons:
         return None
     return ("You are in danger of emails landing in spam folders soon if this continues: " + "; ".join(reasons)
-            + ". If you're not sure how to fix this yourself, reach out to Aikyam directly -- this is really "
+            + ". If you're not sure how to fix this yourself, reach out to aikyam directly -- this is really "
             "important for your organization.")
 
 
@@ -520,7 +520,7 @@ def _health_comparison(conn, domain_id: int):
     better_than = sum(1 for s in other_scores if my_score > s)
     percentile = round(100 * better_than / len(other_scores))
     return (f"Your domain's overall email health is better than about {percentile}% of the other organizations "
-            f"Aikyam supports right now.")
+            f"aikyam supports right now.")
 
 
 def _blocklist_events(conn, domain_id: int, start_str: str, end_str: str):

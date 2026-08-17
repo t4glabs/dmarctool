@@ -434,7 +434,7 @@ SETTINGS_META = {
     "report_signoff_name": {
         "label": "Domain health email -- sign-off name",
         "help": "The name shown at the very bottom of every domain health update email, under \"With care,\".",
-        "example": "\"The Aikyam Team\" -- shown exactly as typed, no substitution.",
+        "example": "\"The aikyam Team\" -- shown exactly as typed, no substitution.",
     },
 }
 

@@ -73,7 +73,7 @@ DEFAULT_SETTINGS = {
     "safe_browsing_recheck_hours": "24",   # Safe Browsing status doesn't change fast; daily is plenty
     "report_sender_name": "Domain Health",           # display name for the domain-health email's From header
     "report_subject_template": "Your {domain} domain health update from aikyam",  # {domain} substituted at send time
-    "report_signoff_name": "The Aikyam Team",         # sign-off name at the bottom of the domain-health email
+    "report_signoff_name": "The aikyam Team",         # sign-off name at the bottom of the domain-health email
 }
 
 
