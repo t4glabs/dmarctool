@@ -74,6 +74,7 @@
     <button class="tab-btn" data-tab="auth">🔐 Authentication</button>
     <button class="tab-btn" data-tab="senders">📡 Senders</button>
     <button class="tab-btn" data-tab="deliverability">🧹 Deliverability &amp; Spam</button>
+    <button class="tab-btn" data-tab="email_updates">📧 Email Updates</button>
     <button class="tab-btn" data-tab="log">📝 Manual Log</button>
   </div>
 
@@ -728,6 +729,77 @@
 
   </div>
 
+  <div class="tab-panel" data-tab="email_updates">
+
+    <div class="section">
+      <h2 class="first">📧 Email health updates for the domain owner</h2>
+      <p class="muted" style="margin-top:0">
+        Send a short, plain-language summary of this domain's email health to whoever actually manages it -- what
+        got fixed (with real before/after numbers where we have them), what's still being worked on, how their
+        mail and newsletter are doing. Written for someone who's never heard of DMARC/SPF/DKIM, on their own
+        schedule. Nothing is ever sent until you enable this below and review a test send. The sender name,
+        subject line, and sign-off used for every domain's email are set once for the whole tool, in
+        <a href="/settings#report-sender-name">Settings</a>.
+      </p>
+      <form action="/domain/{{ domain.name }}/report_settings" method="post">
+        <div class="formrow">
+          <div class="field">
+            <label>Send updates to (one or more, comma separated)</label>
+            <input type="email" name="recipient_email" multiple value="{{ report_settings.recipient_email or '' }}" placeholder="e.g. hello@theirdomain.org, someoneelse@theirdomain.org">
+          </div>
+          <div class="field">
+            <label>Greet them as</label>
+            <input type="text" name="recipient_label" value="{{ report_settings.recipient_label or '' }}" placeholder="e.g. Bangalore Cat Squad team">
+          </div>
+          <div class="field">
+            <label>Send every</label>
+            <select name="interval_days">
+              <option value="7" {{ 'selected' if report_settings and report_settings.interval_days == 7 else '' }}>Week</option>
+              <option value="30" {{ 'selected' if not report_settings or report_settings.interval_days == 30 else '' }}>Month</option>
+              <option value="90" {{ 'selected' if report_settings and report_settings.interval_days == 90 else '' }}>Quarter (3 months)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>CC (Aikyam's own copy)</label>
+            <input type="email" name="cc_email" multiple value="{{ report_settings.cc_email if report_settings and report_settings.cc_email is not none else 'jinso@aikyamfellows.org' }}" placeholder="jinso@aikyamfellows.org">
+          </div>
+          <div class="field">
+            <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if report_settings and report_settings.enabled else '' }}> Enabled</label>
+          </div>
+          <div class="field"><button type="submit">Save</button></div>
+        </div>
+      </form>
+      <form action="/domain/{{ domain.name }}/report_settings/test" method="post" style="margin-top:0.6rem">
+        <button type="submit" {{ 'disabled' if not report_settings or not report_settings.recipient_email else '' }}>✉️ Send a test now</button>
+        <span class="muted" style="font-size:0.85rem">
+          Sends immediately to the address above using this domain's real current data, without affecting the
+          real schedule or marking anything as sent -- save your settings first, then review a test before
+          enabling.
+        </span>
+      </form>
+      {% if report_settings and report_settings.last_sent_at %}
+      <p class="muted" style="font-size:0.85rem; margin-top:0.6rem">Last sent: {{ report_settings.last_sent_at }}</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2 class="first">👀 Preview -- what would send right now</h2>
+      <p class="muted" style="margin-top:0">
+        The exact plain-text content the next update would contain, built from this domain's real current data --
+        nothing here sends anything. Covers the same period a real or test send would use (since the last one
+        sent, or the configured interval if none has gone out yet).
+      </p>
+      <p style="margin:0 0 0.6rem 0"><strong>Subject:</strong> {{ report_preview_subject }}</p>
+      <div class="table-wrap">
+        <pre style="white-space:pre-wrap; font-family:inherit; font-size:0.85rem; line-height:1.5; margin:0; padding:0.9rem 1rem; background:var(--card-raised); border-radius:6px; border:1px solid var(--border);">{{ report_preview_text }}</pre>
+      </div>
+      <p class="muted" style="font-size:0.85rem; margin-top:0.6rem">
+        <a href="/domain/{{ domain.name }}/report_preview" target="_blank" rel="noopener">View as the styled HTML email &rarr;</a>
+      </p>
+    </div>
+
+  </div>
+
   <div class="tab-panel" data-tab="log">
 
     <div class="section">
@@ -773,51 +845,6 @@
         {% endfor %}
       </table>
       </div>
-      {% endif %}
-    </div>
-
-    <div class="section">
-      <h2 class="first">📧 Email health updates for the domain owner</h2>
-      <p class="muted" style="margin-top:0">
-        Send a short, plain-language summary of this domain's email health to whoever actually manages it -- what
-        got fixed, what's still being worked on, how their mail and newsletter are doing. Written for someone who's
-        never heard of DMARC/SPF/DKIM, on their own schedule. Nothing is ever sent until you enable this below and
-        review a test send.
-      </p>
-      <form action="/domain/{{ domain.name }}/report_settings" method="post">
-        <div class="formrow">
-          <div class="field">
-            <label>Send updates to (their email address)</label>
-            <input type="email" name="recipient_email" value="{{ report_settings.recipient_email or '' }}" placeholder="e.g. hello@theirdomain.org">
-          </div>
-          <div class="field">
-            <label>Greet them as</label>
-            <input type="text" name="recipient_label" value="{{ report_settings.recipient_label or '' }}" placeholder="e.g. Bangalore Cat Squad team">
-          </div>
-          <div class="field">
-            <label>Send every</label>
-            <select name="interval_days">
-              <option value="7" {{ 'selected' if report_settings and report_settings.interval_days == 7 else '' }}>Week</option>
-              <option value="30" {{ 'selected' if not report_settings or report_settings.interval_days == 30 else '' }}>Month</option>
-              <option value="90" {{ 'selected' if report_settings and report_settings.interval_days == 90 else '' }}>Quarter (3 months)</option>
-            </select>
-          </div>
-          <div class="field">
-            <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if report_settings and report_settings.enabled else '' }}> Enabled</label>
-          </div>
-          <div class="field"><button type="submit">Save</button></div>
-        </div>
-      </form>
-      <form action="/domain/{{ domain.name }}/report_settings/test" method="post" style="margin-top:0.6rem">
-        <button type="submit" {{ 'disabled' if not report_settings or not report_settings.recipient_email else '' }}>✉️ Send a test now</button>
-        <span class="muted" style="font-size:0.85rem">
-          Sends immediately to the address above using this domain's real current data, without affecting the
-          real schedule or marking anything as sent -- save your settings first, then review a test before
-          enabling.
-        </span>
-      </form>
-      {% if report_settings and report_settings.last_sent_at %}
-      <p class="muted" style="font-size:0.85rem; margin-top:0.6rem">Last sent: {{ report_settings.last_sent_at }}</p>
       {% endif %}
     </div>
 

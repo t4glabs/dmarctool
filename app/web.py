@@ -12,6 +12,7 @@ after each ingest.
 
 import csv
 import io
+import re
 import shutil
 import tempfile
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
@@ -37,7 +38,9 @@ from app.compliance import run_compliance_checks
 from app.config import get_secret
 from app.db import get_connection, init_db
 from app.dns_check import discover_untracked_subdomains, run_dns_checks
-from app.domain_report import get_report_settings, run_report_emails, save_report_settings, send_report_now
+from app.domain_report import (
+    get_report_settings, preview_domain_report, run_report_emails, save_report_settings, send_report_now,
+)
 from app.listmonk import run_listmonk_content_sync
 from app.mailgun import run_mailgun_checks
 from app.postmaster import run_postmaster_checks
@@ -344,6 +347,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ).fetchall()
 
     report_settings = get_report_settings(conn, domain_id)
+    report_preview_subject, report_preview_text, _ = preview_domain_report(conn, domain_id, name)
 
     verdicts = {
         "senders": senders_verdict(senders),
@@ -403,6 +407,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "classifications": CLASSIFICATIONS,
         "manual_log_items": manual_log_items,
         "report_settings": report_settings,
+        "report_preview_subject": report_preview_subject,
+        "report_preview_text": report_preview_text,
         "dns_history": dns_history,
         "safe_browsing": safe_browsing,
         "verdicts": verdicts,
@@ -494,12 +500,12 @@ def log_manual_action(name: str, message: str = Form(...), p: str = Form(""), pc
 
 @app.post("/domain/{name}/report_settings")
 def save_domain_report_settings(name: str, recipient_email: str = Form(""), recipient_label: str = Form(""),
-                                 interval_days: int = Form(30), enabled: str = Form("")):
+                                 interval_days: int = Form(30), enabled: str = Form(""), cc_email: str = Form("")):
     conn = get_connection()
     domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
     save_report_settings(conn, domain["id"], recipient_email or None, recipient_label or None,
-                          interval_days, bool(enabled))
-    return RedirectResponse(f"/domain/{name}?flash=Email update settings saved.#log", status_code=303)
+                          interval_days, bool(enabled), cc_email or None)
+    return RedirectResponse(f"/domain/{name}?flash=Email update settings saved.#email_updates", status_code=303)
 
 
 @app.post("/domain/{name}/report_settings/test")
@@ -508,14 +514,14 @@ def test_domain_report(name: str):
     domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
     settings_row = get_report_settings(conn, domain["id"])
     if not settings_row or not settings_row["recipient_email"]:
-        return RedirectResponse(f"/domain/{name}?flash=Save a recipient email first.#log", status_code=303)
+        return RedirectResponse(f"/domain/{name}?flash=Save a recipient email first.#email_updates", status_code=303)
 
     sender_email = get_secret("REPORT_SENDER_EMAIL")
     sender_domain = get_secret("REPORT_SENDER_MAILGUN_DOMAIN")
-    api_key = get_secret("MAILGUN_API_KEY")
+    api_key = get_secret("MAILGUN_SEND_API_KEY")
     if not (sender_email and sender_domain and api_key):
         return RedirectResponse(
-            f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_API_KEY in secrets.env.#log",
+            f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_SEND_API_KEY in secrets.env.#email_updates",
             status_code=303,
         )
 
@@ -524,14 +530,28 @@ def test_domain_report(name: str):
     status, err = send_report_now(
         conn, domain["id"], name, settings_row["recipient_email"], settings_row["recipient_label"],
         period_start, period_end, sender_email, sender_domain, api_key, mark_sent=False,
+        cc_email=settings_row["cc_email"],
     )
     if status == "sent":
         flash = f"Test email sent to {settings_row['recipient_email']}."
+        if settings_row["cc_email"]:
+            flash += f" (cc: {settings_row['cc_email']})"
     elif status == "skipped_no_data":
         flash = "No DMARC report data for this domain in that period yet -- nothing sent."
     else:
         flash = f"Test send failed: {err}"
-    return RedirectResponse(f"/domain/{name}?flash={flash}#log", status_code=303)
+    return RedirectResponse(f"/domain/{name}?flash={flash}#email_updates", status_code=303)
+
+
+@app.get("/domain/{name}/report_preview", response_class=HTMLResponse)
+def preview_domain_report_html(request: Request, name: str):
+    """Read-only: renders the styled HTML the next email report would use,
+    for the "View as the styled HTML email" link -- no Mailgun call, no
+    sending, safe to open any time."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    _subject, _text, context = preview_domain_report(conn, domain["id"], name)
+    return templates.TemplateResponse(request, "email_report.html", context)
 
 
 @app.post("/action_items/{item_id}/resolve")
@@ -613,7 +633,11 @@ def settings_page(request: Request, flash: str = None):
         group_fields = [field_for(k) for k in keys if k in settings]
         seen_keys.update(keys)
         if group_fields:
-            grouped.append({"label": group_label, "fields": group_fields})
+            # Slug from the group's keys, not its label -- stable even if the
+            # emoji/wording in SETTINGS_GROUPS changes later, so links to it
+            # (e.g. the domain page's Email Updates tab) don't silently break.
+            slug = re.sub(r"[^a-z0-9]+", "-", keys[0].replace("_", " ")).strip("-")
+            grouped.append({"label": group_label, "fields": group_fields, "slug": slug})
 
     # Any setting not yet assigned to a group (e.g. a new one added without
     # updating SETTINGS_GROUPS) still shows up here rather than disappearing.

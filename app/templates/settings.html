@@ -13,7 +13,7 @@
 
 <form action="/settings" method="post">
   {% for g in groups %}
-  <details class="section" open style="padding:0;">
+  <details class="section" id="{{ g.slug }}" open style="padding:0;">
     <summary style="cursor:pointer; padding:1.1rem 1.25rem; font-size:1rem; font-weight:600;">{{ g.label }}</summary>
     <div style="padding:0 1.25rem 1.1rem 1.25rem;">
       {% for f in g.fields %}

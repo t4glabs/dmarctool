@@ -4,32 +4,54 @@ Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }}
 {% if resolved %}
 WHAT WE FIXED FOR YOU
 {% for item in resolved %}
-- Earlier, {{ item }}. We've since taken care of this.
+- Earlier, {{ item.story }}. We've since taken care of this.{% if item.impact %} And here's the payoff: {{ item.impact }}.{% endif %}
 {% endfor %}{% endif %}
 {%- if still_open %}
 WHAT WE'RE STILL WORKING ON
 {% for item in still_open %}
 - {{ item[0]|upper }}{{ item[1:] }}. We're on it.
-{% endfor %}{% endif %}
+{% endfor %}{% if contact_cta %}
+{{ contact_cta }}
+{% endif %}{% endif %}
 {%- if not resolved and not still_open %}
 Nothing needed fixing this time -- everything's running smoothly.
+{% endif %}
+{%- if risk_warning %}
+HEADS UP
+{{ risk_warning }}
 {% endif %}
 HOW YOUR EMAILS ARE ARRIVING
 {{ deliverability }}
 
 PROTECTION FROM FAKE EMAILS
-{{ protection }}
-{% if newsletter %}
+{% if protection_tightened %}{{ protection_tightened }}
+{% endif %}{{ protection }}
+{% if spam_trend %}
+GOOGLE'S OWN VIEW OF YOUR MAIL
+{{ spam_trend }}
+{% endif %}
+{%- if newsletter %}
 YOUR NEWSLETTER'S REACH
 {{ newsletter }}
 {% endif %}
 {%- if blocklist_events %}
 NOTE: one of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }} -- we're keeping watch.
 {% endif %}
-That's everything for this update. If anything here doesn't make sense, or you'd just like to talk it through, reply to this email any time -- we're happy to explain.
+{%- if comparison %}
+HOW YOU COMPARE
+{{ comparison }}
+{% endif %}
+{%- if tips %}
+TIPS FOR THE NEXT FEW WEEKS
+{% for tip in tips %}
+- {{ tip }}
+{% endfor %}
+Whatever needs fixing here, Aikyam will make sure it gets sorted properly -- you don't have to solve this alone.
+{% endif %}
+This might look like a lot to take in, but it really matters -- these are the things that decide whether people actually see your emails, and whether someone could try to impersonate your organization using your name. Please take a moment to read through it, and reply any time if anything's unclear -- we're always happy to walk through it with you.
 
 With care,
-The Aikyam Team
+{{ signoff_name }}
 
 --
-You're receiving this because Aikyam manages email safety for {{ domain_name }}.
+You're receiving this because aikyam manages email safety for your {{ domain_name }} domain.

@@ -20,7 +20,7 @@
         <h2 style="font-size:16px; color:#1a7f37; margin:0 0 10px 0;">🎉 What we fixed for you</h2>
         <ul style="font-size:15px; line-height:1.6; padding-left:20px; margin:0;">
           {% for item in resolved %}
-          <li style="margin-bottom:8px;">Earlier, {{ item }}. <strong>We've since taken care of this.</strong></li>
+          <li style="margin-bottom:8px;">Earlier, {{ item.story }}. <strong>We've since taken care of this.</strong>{% if item.impact %} And here's the payoff: {{ item.impact }}.{% endif %}</li>
           {% endfor %}
         </ul>
       </div>
@@ -34,12 +34,22 @@
           <li style="margin-bottom:8px;">{{ item[0]|upper }}{{ item[1:] }}. We're on it.</li>
           {% endfor %}
         </ul>
+        {% if contact_cta %}
+        <p style="font-size:15px; line-height:1.6; margin:12px 0 0 0;">{{ contact_cta }}</p>
+        {% endif %}
       </div>
       {% endif %}
 
       {% if not resolved and not still_open %}
       <div style="margin-bottom:24px; background:#f0f7f0; border-radius:6px; padding:14px 16px;">
         <p style="font-size:15px; margin:0; color:#1a7f37;">✅ Nothing needed fixing this time -- everything's running smoothly.</p>
+      </div>
+      {% endif %}
+
+      {% if risk_warning %}
+      <div style="margin-bottom:24px; background:#fff5f5; border-radius:6px; padding:14px 16px; border:1px solid #f3c6c1;">
+        <h2 style="font-size:16px; color:#b42318; margin:0 0 8px 0;">🚨 Heads up</h2>
+        <p style="font-size:15px; line-height:1.6; margin:0; color:#b42318;">{{ risk_warning }}</p>
       </div>
       {% endif %}
 
@@ -50,8 +60,18 @@
 
       <div style="margin-bottom:24px;">
         <h2 style="font-size:16px; color:#222222; margin:0 0 10px 0;">🔒 Protection from fake emails</h2>
+        {% if protection_tightened %}
+        <p style="font-size:15px; line-height:1.6; margin:0 0 10px 0;"><strong>{{ protection_tightened }}</strong></p>
+        {% endif %}
         <p style="font-size:15px; line-height:1.6; margin:0;">{{ protection }}</p>
       </div>
+
+      {% if spam_trend %}
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:16px; color:#222222; margin:0 0 10px 0;">📊 Google's own view of your mail</h2>
+        <p style="font-size:15px; line-height:1.6; margin:0;">{{ spam_trend }}</p>
+      </div>
+      {% endif %}
 
       {% if newsletter %}
       <div style="margin-bottom:24px;">
@@ -66,17 +86,38 @@
       </div>
       {% endif %}
 
+      {% if comparison %}
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:16px; color:#222222; margin:0 0 10px 0;">📈 How you compare</h2>
+        <p style="font-size:15px; line-height:1.6; margin:0;">{{ comparison }}</p>
+      </div>
+      {% endif %}
+
+      {% if tips %}
+      <div style="margin-bottom:24px; background:#f0f7f0; border-radius:6px; padding:14px 16px;">
+        <h2 style="font-size:16px; color:#1a7f37; margin:0 0 10px 0;">✅ Tips for the next few weeks</h2>
+        <ul style="font-size:15px; line-height:1.6; padding-left:20px; margin:0;">
+          {% for tip in tips %}
+          <li style="margin-bottom:6px;">{{ tip }}</li>
+          {% endfor %}
+        </ul>
+        <p style="font-size:15px; line-height:1.6; margin:10px 0 0 0;">Whatever needs fixing here, Aikyam will make sure it gets sorted properly -- you don't have to solve this alone.</p>
+      </div>
+      {% endif %}
+
       <p style="font-size:15px; line-height:1.6; margin:24px 0 0 0;">
-        That's everything for this update. If anything here doesn't make sense, or you'd just like to talk it
-        through, reply to this email any time -- we're happy to explain.
+        This might look like a lot to take in, but it really matters -- these are the things that decide whether
+        people actually see your emails, and whether someone could try to impersonate your organization using
+        your name. Please take a moment to read through it, and reply any time if anything's unclear -- we're
+        always happy to walk through it with you.
       </p>
       <p style="font-size:15px; line-height:1.6; margin:20px 0 0 0;">
         With care,<br>
-        <strong>The Aikyam Team</strong>
+        <strong>{{ signoff_name }}</strong>
       </p>
     </div>
     <p style="font-size:12px; color:#999999; text-align:center; margin:16px 0 0 0;">
-      You're receiving this because Aikyam manages email safety for {{ domain_name }}.
+      You're receiving this because aikyam manages email safety for your {{ domain_name }} domain.
     </p>
   </div>
 </body>

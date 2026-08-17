@@ -53,15 +53,17 @@ def _get(url: str, api_key: str, timeout: float = 15.0):
 
 
 def send_message(mailgun_domain: str, api_key: str, from_addr: str, to_addr: str,
-                  subject: str, text: str, html: str, timeout: float = 20.0):
+                  subject: str, text: str, html: str, cc_addr: str = None, timeout: float = 20.0):
     """Sends a single email via Mailgun's Messages API (POST {domain}/messages),
     same auth/base-URL conventions as every read-only call in this file --
     used by app.domain_report for the periodic plain-language owner reports.
-    Returns (message_id, error)."""
+    `to_addr`/`cc_addr` accept Mailgun's own comma-separated multi-address
+    format directly. Returns (message_id, error)."""
     url = f"{API_BASE}/{mailgun_domain}/messages"
-    data = urllib.parse.urlencode({
-        "from": from_addr, "to": to_addr, "subject": subject, "text": text, "html": html,
-    }).encode()
+    fields = {"from": from_addr, "to": to_addr, "subject": subject, "text": text, "html": html}
+    if cc_addr:
+        fields["cc"] = cc_addr
+    data = urllib.parse.urlencode(fields).encode()
     req = urllib.request.Request(
         url, data=data, method="POST",
         headers={

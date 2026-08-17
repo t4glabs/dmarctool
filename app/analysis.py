@@ -71,6 +71,9 @@ DEFAULT_SETTINGS = {
     "volume_spike_min_baseline_avg": "10", # baseline must average at least this many msgs/day to count
     "volume_spike_multiplier": "2.0",      # recent avg must be at least this many times the baseline to flag
     "safe_browsing_recheck_hours": "24",   # Safe Browsing status doesn't change fast; daily is plenty
+    "report_sender_name": "Domain Health",           # display name for the domain-health email's From header
+    "report_subject_template": "Your {domain} domain health update from aikyam",  # {domain} substituted at send time
+    "report_signoff_name": "The Aikyam Team",         # sign-off name at the bottom of the domain-health email
 }
 
 
@@ -1122,6 +1125,79 @@ def upsert_system_action(conn, domain_id: int, category: str, ref_key, title: st
         )
 
 
+def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dict) -> None:
+    """Once-a-day composite health snapshot for this domain, stored in
+    domain_health_snapshots. Reuses the same day-keyed history tables the
+    dashboard's own trend charts already read (mailgun_daily_stats,
+    ses_event_counts, postmaster_daily_stats/postmaster_stats) rather than
+    adding a new collection path -- this is pure derived history, safe to
+    recompute, and idempotent per domain per day via INSERT OR IGNORE.
+    """
+    today = datetime.datetime.utcnow().date().isoformat()
+    already = conn.execute(
+        "SELECT 1 FROM domain_health_snapshots WHERE domain_id=? AND snapshot_date=?",
+        (domain_id, today),
+    ).fetchone()
+    if already:
+        return
+
+    now_epoch = int(datetime.datetime.utcnow().timestamp())
+    window_start_epoch = now_epoch - 30 * 86400
+    _, _, pass_rate = domain_window_stats(conn, domain_id, window_start_epoch, now_epoch)
+
+    pm_row = conn.execute(
+        "SELECT spam_rate FROM postmaster_stats WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1",
+        (domain_id,),
+    ).fetchone()
+    postmaster_spam_rate = pm_row["spam_rate"] if pm_row and pm_row["spam_rate"] is not None else None
+
+    since_day = (datetime.datetime.utcnow().date() - datetime.timedelta(days=30)).isoformat()
+    mg_row = conn.execute(
+        """SELECT SUM(delivered) as delivered, SUM(failed_perm) as failed_perm, SUM(complained) as complained
+           FROM mailgun_daily_stats WHERE domain_id=? AND day >= ?""",
+        (domain_id, since_day),
+    ).fetchone()
+    ses_row = conn.execute(
+        """SELECT SUM(delivered) as delivered, SUM(bounced) as bounced, SUM(complained) as complained
+           FROM ses_event_counts WHERE domain_id=? AND day >= ?""",
+        (domain_id, since_day),
+    ).fetchone()
+    combined_delivered = (mg_row["delivered"] or 0) + (ses_row["delivered"] or 0)
+    combined_bounced = (mg_row["failed_perm"] or 0) + (ses_row["bounced"] or 0)
+    combined_complained = (mg_row["complained"] or 0) + (ses_row["complained"] or 0)
+    bounce_rate = combined_bounced / combined_delivered if combined_delivered else None
+    complaint_rate = combined_complained / combined_delivered if combined_delivered else None
+
+    policy_p = policy_pct = None
+    run = current_policy_run(conn, domain_id)
+    if run:
+        policy_p, policy_pct = run["p"], run["pct"]
+
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for value, weight, threshold in (
+        (pass_rate, 40, None),
+        (postmaster_spam_rate, 25, 0.003),
+        (bounce_rate, 20, 0.05),
+        (complaint_rate, 15, 0.001),
+    ):
+        if value is None:
+            continue
+        component = value if threshold is None else 1 - min(value / threshold, 1)
+        weighted_sum += component * weight
+        weight_total += weight
+    health_score = (weighted_sum / weight_total) * 100 if weight_total else None
+
+    conn.execute(
+        """INSERT OR IGNORE INTO domain_health_snapshots
+           (domain_id, snapshot_date, pass_rate, postmaster_spam_rate, bounce_rate,
+            complaint_rate, policy_p, policy_pct, health_score)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (domain_id, today, pass_rate, postmaster_spam_rate, bounce_rate,
+         complaint_rate, policy_p, policy_pct, health_score),
+    )
+
+
 def run_analysis(conn, verbose: bool = True) -> None:
     settings = ensure_default_settings(conn)
     wall_now = datetime.datetime.utcnow()
@@ -1130,6 +1206,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
         domain_id, domain_name = domain["id"], domain["name"]
         derive_policy_history(conn, domain_id)
         update_known_senders(conn, domain_id, domain_name, settings)
+        snapshot_domain_health(conn, domain_id, domain_name, settings)
 
         latest_row = conn.execute(
             "SELECT MAX(date_end) as latest FROM reports WHERE domain_id = ?", (domain_id,)

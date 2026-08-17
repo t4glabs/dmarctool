@@ -421,6 +421,21 @@ SETTINGS_META = {
         "help": "How often we re-check each domain against Google Safe Browsing. This status doesn't change quickly, so daily is plenty.",
         "example": "24 means each domain gets checked at most once a day.",
     },
+    "report_sender_name": {
+        "label": "Domain health email -- sender display name",
+        "help": "The name recipients see next to your sending address, e.g. in their inbox list. Applies to every domain's health update email -- one name for all of them, not set per domain.",
+        "example": "\"Domain Health\" shows as \"Domain Health <your-address>\" in their inbox, instead of just the raw address.",
+    },
+    "report_subject_template": {
+        "label": "Domain health email -- subject line",
+        "help": "The subject line used for every domain's health update email. Use {domain} anywhere you want that domain's name inserted.",
+        "example": "\"Your {domain} domain health update from aikyam\" becomes \"Your pattic.org domain health update from aikyam\".",
+    },
+    "report_signoff_name": {
+        "label": "Domain health email -- sign-off name",
+        "help": "The name shown at the very bottom of every domain health update email, under \"With care,\".",
+        "example": "\"The Aikyam Team\" -- shown exactly as typed, no substitution.",
+    },
 }
 
 # Purely a display grouping for the Settings page (long flat list -> grouped
@@ -462,6 +477,9 @@ SETTINGS_GROUPS = [
     ]),
     ("🛡️ Google Safe Browsing", [
         "safe_browsing_recheck_hours",
+    ]),
+    ("📧 Domain health email reports", [
+        "report_sender_name", "report_subject_template", "report_signoff_name",
     ]),
 ]
 

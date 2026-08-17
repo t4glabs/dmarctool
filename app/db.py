@@ -43,6 +43,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "ses_event_counts", {
         "rejected": "INTEGER NOT NULL DEFAULT 0",
     })
+    _ensure_columns(conn, "domain_report_settings", {
+        "cc_email": "TEXT DEFAULT 'jinso@aikyamfellows.org'",
+    })
     conn.commit()
 
 

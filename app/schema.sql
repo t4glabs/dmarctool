@@ -465,11 +465,12 @@ CREATE TABLE IF NOT EXISTS settings (
 -- nothing is ever sent to anyone until a domain is explicitly opted in.
 CREATE TABLE IF NOT EXISTS domain_report_settings (
     domain_id       INTEGER PRIMARY KEY REFERENCES domains(id),
-    recipient_email TEXT,
+    recipient_email TEXT,              -- one or more, comma-separated
     recipient_label TEXT,              -- how to greet them, e.g. "Bangalore Cat Squad team"
     interval_days   INTEGER NOT NULL DEFAULT 30,
     enabled         INTEGER NOT NULL DEFAULT 0,
-    last_sent_at    TEXT
+    last_sent_at    TEXT,
+    cc_email        TEXT DEFAULT 'jinso@aikyamfellows.org'  -- Aikyam's own copy of every report; editable/removable per domain
 );
 
 -- Audit log of every report email actually sent (or attempted) -- matters
@@ -488,3 +489,27 @@ CREATE TABLE IF NOT EXISTS report_sends (
 );
 
 CREATE INDEX IF NOT EXISTS idx_report_sends_domain ON report_sends(domain_id, sent_at);
+
+-- One row per domain per calendar day, a derived composite "how healthy is
+-- this domain's email right now" snapshot (see app.analysis.snapshot_domain_health
+-- for the 0-100 scoring formula). Powers two things a live query can't:
+-- comparing this domain's own health over months (report_records/action_items
+-- only answer "what happened in a window", not "was March better than
+-- April"), and comparing across domains for the email report's "how you
+-- compare to other organizations Aikyam supports" section. Purely derived/
+-- recomputable from data already stored elsewhere, safe to backfill.
+CREATE TABLE IF NOT EXISTS domain_health_snapshots (
+    id                   INTEGER PRIMARY KEY,
+    domain_id            INTEGER NOT NULL REFERENCES domains(id),
+    snapshot_date        TEXT NOT NULL,
+    pass_rate            REAL,
+    postmaster_spam_rate REAL,
+    bounce_rate          REAL,
+    complaint_rate       REAL,
+    policy_p             TEXT,
+    policy_pct           INTEGER,
+    health_score         REAL,
+    UNIQUE(domain_id, snapshot_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_snapshots_domain ON domain_health_snapshots(domain_id, snapshot_date);
