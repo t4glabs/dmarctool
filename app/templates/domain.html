@@ -2,6 +2,9 @@
 {% block title %}{{ domain.name }} - DMARCTool{% endblock %}
 {% block content %}
 
+{% set fix_note_ns = namespace(id=0) %}
+{% macro fix_note(text) %}{% if text %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="How to fix this">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover>💡 <strong>How to fix:</strong> {{ text | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
+
 <div class="back"><a href="/">&larr; all domains</a></div>
 <h1>{{ domain.name }}</h1>
 
@@ -84,7 +87,7 @@
         <div class="item">
           <div class="title"><span class="badge muted" title="{{ category_help(item.category) }}">{{ category_label(item.category) }}</span> {{ item.title }}</div>
           {% if item.detail %}<div class="detail">{{ item.detail }}</div>{% endif %}
-          {% set fix = postmaster_remediation(item.ref_key, dns_p, dns_pct, postmaster_stats[0].spam_rate if postmaster_stats else none, postmaster_reason_by_ref_key.get(item.ref_key), google_volume, window_days) if item.category == 'postmaster_compliance' else category_remediation(item.category) %}
+          {% set fix = postmaster_remediation(item.ref_key, dns_p, dns_pct, postmaster_stats[0].spam_rate if postmaster_stats else none, postmaster_reason_by_ref_key.get(item.ref_key), google_volume, window_days, postmaster_causal_senders) if item.category == 'postmaster_compliance' else category_remediation(item.category) %}
           {% if fix %}<div class="fix">💡 <strong>How to fix:</strong> {{ fix | urlize(40, target="_blank", rel="noopener") }}</div>{% endif %}
           <form class="inline" action="/action_items/{{ item.id }}/resolve" method="post">
             <input type="hidden" name="redirect_to" value="/domain/{{ domain.name }}">
@@ -133,6 +136,9 @@
       <p class="muted" style="margin-top:0">
         "Live DNS" is what's actually published right now. "Reports say" is what mail providers have told us
         they've seen -- this can lag a few days behind a real DNS change, so a mismatch isn't necessarily a problem.
+        Why it matters: with no DMARC record, anyone can spoof this domain in phishing emails and receiving servers
+        have no way to tell; with conflicting records, providers may ignore your policy entirely. Good looks like a
+        single record here that matches what reports say; bad is missing, conflicting, or a persistent mismatch.
       </p>
       <div class="row">
         <span class="label">Live DNS (_dmarc.{{ domain.name }})</span>
@@ -140,9 +146,9 @@
           {% if dns_status == 'ok' %}
             <span class="badge {{ 'ok' if dns_match else 'warn' }}" title="{{ explain_policy(dns_p, dns_pct) }}">p={{ dns_p }} pct={{ dns_pct }}</span>
           {% elif dns_status == 'missing' %}
-            <span class="badge bad">{{ dns_status_label(dns_status) }}</span>
+            <span class="badge bad">{{ dns_status_label(dns_status) }}</span>{{ fix_note(category_remediation('dns_missing')) }}
           {% elif dns_status == 'multiple' %}
-            <span class="badge bad">{{ dns_status_label(dns_status) }}</span>
+            <span class="badge bad">{{ dns_status_label(dns_status) }}</span>{{ fix_note(category_remediation('dns_multiple')) }}
           {% elif dns_status == 'lookup_failed' %}
             <span class="badge muted">{{ dns_status_label(dns_status) }}</span>
           {% else %}
@@ -174,7 +180,7 @@
           {% elif safe_browsing.status == 'clean' %}
             <span class="badge ok">Clean</span>
           {% elif safe_browsing.status == 'flagged' %}
-            <span class="badge bad" title="{{ safe_browsing.note }}">Flagged</span>
+            <span class="badge bad" title="{{ safe_browsing.note }}">Flagged</span>{{ fix_note(category_remediation('safe_browsing_flagged')) }}
           {% else %}
             <span class="badge muted" title="{{ safe_browsing.note }}">Couldn't check</span>
           {% endif %}
@@ -186,9 +192,11 @@
       <h2 class="first">✍️ Gmail sender requirements (SPF &amp; DKIM)</h2>
       <p class="muted" style="margin-top:0">
         Checks against Google's published sender guidelines that don't need any account or API key -- just DNS.
-        SPF allows at most 10 DNS lookups per check (RFC 7208); going over silently breaks SPF with no warning.
-        DKIM keys must be at least 1024 bits (Google recommends 2048). Only checked for domains/selectors your
-        own reports show real, ongoing volume from -- not one-off historical stragglers.
+        SPF allows at most 10 DNS lookups per check (RFC 7208); going over silently breaks SPF with no warning --
+        mail that should pass starts failing on the sending side, even though DNS still "looks fine" at a glance.
+        DKIM keys must be at least 1024 bits (Google recommends 2048); a weak or missing key means Gmail can't
+        confirm your mail wasn't tampered with in transit. Only checked for domains/selectors your own reports
+        show real, ongoing volume from -- not one-off historical stragglers.
       </p>
       <div class="verdict {{ verdicts.spf_dkim[0] }}">{{ verdicts.spf_dkim[1] }}</div>
       <div class="table-wrap">
@@ -201,8 +209,8 @@
           <td>
             {% if c.status == 'ok' %}<span class="badge ok" title="{{ c.note }}">OK</span>
             {% elif c.status == 'warn' %}<span class="badge warn" title="{{ c.note }}">Near limit</span>
-            {% elif c.status == 'over_limit' %}<span class="badge bad" title="{{ c.note }}">Over limit</span>
-            {% elif c.status == 'missing' %}<span class="badge bad" title="{{ c.note }}">No SPF record</span>
+            {% elif c.status == 'over_limit' %}<span class="badge bad" title="{{ c.note }}">Over limit</span>{{ fix_note(category_remediation('spf_lookup_limit')) }}
+            {% elif c.status == 'missing' %}<span class="badge bad" title="{{ c.note }}">No SPF record</span>{{ fix_note(category_remediation('spf_missing')) }}
             {% else %}<span class="badge muted" title="{{ c.note }}">Couldn't check</span>{% endif %}
           </td>
         </tr>
@@ -221,8 +229,8 @@
           <td>{{ (c.key_bits|string + " bits") if c.key_bits is not none else "-" }}</td>
           <td>
             {% if c.status == 'ok' %}<span class="badge ok" title="{{ c.note }}">OK</span>
-            {% elif c.status == 'weak' %}<span class="badge bad" title="{{ c.note }}">Too weak</span>
-            {% elif c.status == 'missing' %}<span class="badge bad" title="{{ c.note }}">Missing</span>
+            {% elif c.status == 'weak' %}<span class="badge bad" title="{{ c.note }}">Too weak</span>{{ fix_note(category_remediation('dkim_weak_key')) }}
+            {% elif c.status == 'missing' %}<span class="badge bad" title="{{ c.note }}">Missing</span>{{ fix_note(category_remediation('dkim_missing')) }}
             {% else %}<span class="badge muted" title="{{ c.note }}">Couldn't check</span>{% endif %}
           </td>
         </tr>
@@ -322,7 +330,9 @@
       <p class="muted" style="margin-top:0">
         Every mail source we've seen for this domain. Use the dropdown to label a sender once you know what it is
         (e.g. your bulk email system, or Google Workspace) -- unrecognized senders with a lot of failing mail are
-        also called out under "Open action items" in the Overview tab.
+        also called out under "Open action items" in the Overview tab. The Blocklist and PTR/rDNS columns matter
+        even when DMARC/SPF/DKIM all pass: a blocklisted IP or missing reverse DNS can still get mail sent straight
+        to spam or rejected outright, silently, with nothing showing up as a DMARC failure.
       </p>
       <div class="verdict {{ verdicts.senders[0] }}">{{ verdicts.senders[1] }}</div>
       <div class="table-wrap">
@@ -338,7 +348,7 @@
           <td>
             {% if s.blocklist_status %}
               {% if s.blocklist_status.status == 'listed' %}
-                <span class="badge bad" title="{{ s.blocklist_status.note }}">Listed</span>
+                <span class="badge bad" title="{{ s.blocklist_status.note }}">Listed</span>{{ fix_note(category_remediation('blocklist')) }}
               {% elif s.blocklist_status.status == 'lookup_failed' %}
                 <span class="badge muted" title="{{ s.blocklist_status.note }}">Unknown</span>
               {% else %}
@@ -355,7 +365,7 @@
               {% elif s.ptr_status.status == 'lookup_failed' %}
                 <span class="badge muted" title="{{ s.ptr_status.note }}">Unknown</span>
               {% else %}
-                <span class="badge bad" title="{{ s.ptr_status.note }}">{{ 'No PTR' if s.ptr_status.status == 'ptr_missing' else 'Mismatch' }}</span>
+                <span class="badge bad" title="{{ s.ptr_status.note }}">{{ 'No PTR' if s.ptr_status.status == 'ptr_missing' else 'Mismatch' }}</span>{{ fix_note(category_remediation('ptr_issue')) }}
               {% endif %}
             {% else %}
               <span class="muted">Not checked yet</span>
@@ -416,7 +426,10 @@
       <h2 class="first">📮 Google Postmaster Tools</h2>
       <p class="muted" style="margin-top:0">
         Straight from Google -- your real Gmail-reported spam rate, and Google's own compliance verdict against its
-        published sender guidelines. Gmail's guidance: keep the spam rate below 0.30%, ideally below 0.10%.
+        published sender guidelines. Gmail's guidance: keep the spam rate below 0.30%, ideally below 0.10%. Why it
+        matters: this is Gmail's own verdict, not an inference from DMARC reports -- a domain can pass DMARC/SPF/DKIM
+        perfectly and still get bulk-foldered or blocked if Gmail's real recipients are marking mail as spam or a
+        requirement here stays "Needs work". Click the ℹ️ next to any "Needs work" badge for exactly what to fix.
       </p>
       <div class="verdict {{ verdicts.postmaster[0] }}">{{ verdicts.postmaster[1] }}</div>
       <div class="table-wrap">
@@ -430,6 +443,7 @@
               <span class="badge {{ 'bad' if s.spam_rate >= 0.003 else ('warn' if s.spam_rate >= 0.001 else 'ok') }}">
                 {{ "%.3f"|format(100 * s.spam_rate) }}%
               </span>
+              {% if s.spam_rate >= 0.001 %}{{ fix_note(postmaster_remediation(s.postmaster_domain ~ ":USER_REPORTED_SPAM_RATE", dns_p, dns_pct, s.spam_rate, none, google_volume, window_days)) }}{% endif %}
             {% else %}-{% endif %}
           </td>
           <td>{{ "%.3f"|format(100 * s.delivery_error_rate) if s.delivery_error_rate is not none else "-" }}%</td>
@@ -455,7 +469,7 @@
           <td>{{ postmaster_requirement_label(c.requirement) }}</td>
           <td>
             {% if c.status == 'COMPLIANT' %}<span class="badge ok" title="{{ c.reason or '' }}">Compliant</span>
-            {% elif c.status == 'NEEDS_WORK' %}<span class="badge bad" title="{{ c.reason or '' }}">Needs work</span>
+            {% elif c.status == 'NEEDS_WORK' %}<span class="badge bad" title="{{ c.reason or '' }}">Needs work</span>{{ fix_note(postmaster_remediation(c.postmaster_domain ~ ":" ~ c.requirement, dns_p, dns_pct, postmaster_stats[0].spam_rate if postmaster_stats else none, c.reason, google_volume, window_days, postmaster_causal_senders)) }}
             {% else %}<span class="badge muted" title="{{ c.reason or '' }}">Unknown</span>{% endif %}
           </td>
         </tr>
@@ -472,9 +486,12 @@
         Pulled from your Mailgun account for whichever Mailgun domain matches this one. Bounce/complaint rates here
         are Mailgun's own numbers -- not the same as Gmail's spam rate, since Gmail generally doesn't feed complaints
         back to third-party senders the way Yahoo does. Suppressed addresses won't receive mail from Mailgun again;
-        worth removing from Listmonk too.
+        worth removing from Listmonk too. Why it matters: if bounce/complaint rates stay elevated, Mailgun itself can
+        start throttling or suspending sending for this domain -- good is a low, stable rate with suppressions
+        promptly pruned from Listmonk; bad is a rising or persistently high rate.
       </p>
       <div class="verdict {{ verdicts.mailgun[0] }}">{{ verdicts.mailgun[1] }}</div>
+      {% if verdicts.mailgun[0] == 'bad' %}{{ fix_note(category_remediation('mailgun_reputation')) }}{% endif %}
       <div class="table-wrap">
       <table>
         <tr><th>Mailgun domain</th><th>Accepted ({{ mailgun_stats[0].window_days if mailgun_stats else "?" }}d)</th><th>Bounce rate</th><th>Complaint rate</th><th>Bounces</th><th>Complaints</th><th>Unsubscribes</th></tr>
@@ -503,8 +520,18 @@
       <p class="muted" style="margin-top:0">
         Straight from AWS SES's own account/identity APIs -- separate from the event-derived numbers below.
         Account-wide items (enforcement status, sending quota, suppression settings) are shared across every domain
-        sending through this same SES account, not specific to this one.
+        sending through this same SES account, not specific to this one. An unhealthy account or an unverified
+        identity means mail can be throttled, rejected, or sent unauthenticated regardless of how clean your DMARC
+        setup is -- worth fixing before anything else here.
       </p>
+      {% if ses_account_status %}
+      <div class="verdict {{ verdicts.ses_account[0] }}">{{ verdicts.ses_account[1] }}</div>
+      {% if verdicts.ses_account[0] == 'bad' %}{{ fix_note(category_remediation('ses_account_health')) }}{% endif %}
+      {% endif %}
+      {% if ses_identity %}
+      <div class="verdict {{ verdicts.ses_identity[0] }}">{{ verdicts.ses_identity[1] }}</div>
+      {% if verdicts.ses_identity[0] == 'bad' %}{{ fix_note(category_remediation('ses_identity_unverified')) }}{% endif %}
+      {% endif %}
       <div class="table-wrap">
       <table>
         {% if ses_account_status %}
@@ -535,9 +562,13 @@
       <p class="muted" style="margin-top:0">
         Built entirely from real bounce/complaint/delivery events captured via this domain's own SES configuration
         set (SES itself has no per-domain stats API). Counts only cover activity since the SNS/SQS pipeline was set
-        up -- there's no historical backfill.
+        up -- there's no historical backfill. Why it matters: AWS monitors these rates account-wide and can pause or
+        restrict sending if they stay high, independent of anything DMARC reports show. Good is a low, stable
+        bounce/complaint rate with permanent bounces pruned from Listmonk regularly; bad is a rising rate or a
+        growing pile of unpruned suppressions.
       </p>
       <div class="verdict {{ verdicts.ses[0] }}">{{ verdicts.ses[1] }}</div>
+      {% if verdicts.ses[0] == 'bad' %}{{ fix_note(category_remediation('ses_reputation')) }}{% endif %}
       <div class="table-wrap">
       <table>
         <tr><th>Configuration set</th><th>Delivered ({{ ses_window_days }}d)</th><th>Bounce rate</th><th>Complaint rate</th><th>Bounces</th><th title="Non-existent/rejecting addresses -- these need blocklisting in Listmonk. Transient bounces are temporary and may succeed on retry.">Permanent bounces (needs cleanup)</th><th>Complaints</th></tr>

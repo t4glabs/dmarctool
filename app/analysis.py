@@ -187,6 +187,34 @@ def _suggest_classification(conn, domain_id: int, domain_name: str, source_ip: s
     return "unclassified"
 
 
+def _evaluated_auth_domains(conn, domain_id: int, source_ip: str) -> str:
+    """What a failing sender's messages actually authenticate as, per the DMARC
+    report's own recorded SPF/DKIM results -- the single most useful fact when
+    triaging a consistently-failing sender. A sender that fails DMARC for the
+    tracked domain but *passes* SPF/DKIM as some other domain almost always
+    means a misconfigured shared ESP/mailing setup pointed at the wrong From
+    address (e.g. another one of your own domains' sending config), not
+    spoofing -- worth saying explicitly rather than leaving it to guesswork."""
+    rows = conn.execute(
+        """SELECT rar.mechanism, rar.domain, rar.result, COUNT(*) as n
+           FROM record_auth_results rar
+           JOIN report_records rr ON rr.id = rar.record_id
+           JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND rr.source_ip = ? AND rar.domain IS NOT NULL
+           GROUP BY rar.mechanism, rar.domain, rar.result
+           ORDER BY n DESC""",
+        (domain_id, source_ip),
+    ).fetchall()
+    passing = [r for r in rows if r["result"] == "pass"]
+    if not passing:
+        return "no SPF/DKIM authentication passed for this sender at all -- could be spoofed mail, not a misconfigured integration"
+    by_domain = {}
+    for r in passing:
+        by_domain.setdefault(r["domain"], set()).add(r["mechanism"])
+    parts = [f"{d} ({'/'.join(sorted(m))} pass)" for d, m in by_domain.items()]
+    return f"actually authenticates as: {', '.join(parts)} -- likely a misconfigured sender/From-address on that domain's setup, not spoofing"
+
+
 def update_known_senders(conn, domain_id: int, domain_name: str, settings: dict) -> None:
     rows = conn.execute(
         """SELECT rr.source_ip,
@@ -228,6 +256,23 @@ def update_known_senders(conn, domain_id: int, domain_name: str, settings: dict)
     conn.commit()
 
 
+def likely_causal_senders(conn, domain_id: int, settings: dict) -> list:
+    """Senders currently failing badly enough to trigger their own
+    failure_investigation item (same thresholds), reused to connect a
+    Postmaster DMARC-alignment/deliverability flag back to a concrete likely
+    cause instead of leaving 'fix whichever's flagged' as the only guidance."""
+    high_vol = int(settings["high_volume_fail_threshold"])
+    high_fail_rate = float(settings["high_fail_rate_threshold"])
+    rows = conn.execute("SELECT * FROM known_senders WHERE domain_id = ?", (domain_id,)).fetchall()
+    out = []
+    for s in rows:
+        total = s["total_msgs"]
+        pass_rate = s["pass_msgs"] / total if total else 0
+        if total >= high_vol and pass_rate < high_fail_rate:
+            out.append({"source_ip": s["source_ip"], "pass_rate": pass_rate, "total": total})
+    return out
+
+
 def flag_new_and_failing_senders(conn, domain_id: int, settings: dict, now_day: int) -> list:
     new_window = int(settings["new_sender_window_days"])
     high_vol = int(settings["high_volume_fail_threshold"])
@@ -254,8 +299,10 @@ def flag_new_and_failing_senders(conn, domain_id: int, settings: dict, now_day: 
         if total >= high_vol and pass_rate < high_fail_rate:
             ptr = _reverse_dns(s["source_ip"]) if s["classification"] == "unclassified" else None
             label = classification_label(s["classification"])
+            auth_note = _evaluated_auth_domains(conn, domain_id, s["source_ip"])
             detail = (f"{total} msgs, {pass_rate:.0%} pass ({s['fail_msgs']} failing), "
-                      f"labeled as: {label}" + (f", PTR: {ptr}" if ptr else ""))
+                      f"labeled as: {label}" + (f", PTR: {ptr}" if ptr else "")
+                      + f". {auth_note[0].upper()}{auth_note[1:]}.")
             findings.append({
                 "category": "failure_investigation", "ref_key": s["source_ip"],
                 "title": f"Investigate failing sender {s['source_ip']}",

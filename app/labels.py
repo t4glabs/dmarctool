@@ -31,6 +31,7 @@ CATEGORY_LABELS = {
     "sending_cadence_irregular": "Irregular newsletter sending cadence",
     "volume_spike": "Sudden volume increase",
     "safe_browsing_flagged": "Domain flagged unsafe",
+    "untracked_sending_subdomain": "Untracked sending subdomain found",
 }
 
 CATEGORY_HELP = {
@@ -60,6 +61,7 @@ CATEGORY_HELP = {
     "sending_cadence_irregular": "Gmail's guidance is explicit: \"send email at a consistent rate, avoid sending in bursts.\" This domain's gap between the two most recent newsletters is a lot shorter or longer than its own historical average.",
     "volume_spike": "Your recent daily sending volume is well above your own trailing average. Gmail's guidance is to ramp volume up gradually -- a sudden jump (even of genuinely good mail) can trigger rate limiting or hurt reputation.",
     "safe_browsing_flagged": "Google Safe Browsing has flagged this domain (or a URL on it) as unsafe -- e.g. malware or phishing. This can independently hurt email deliverability and trust, separate from your DMARC/authentication setup.",
+    "untracked_sending_subdomain": "A common sending subdomain (e.g. mail.<domain>) publishes its own DMARC record, separate from this domain's, but isn't tracked here as its own domain. A subdomain's DMARC record and reports are completely independent of its parent's -- if someone set this up for sending, DMARCTool has had zero visibility into it until now.",
 }
 
 # Concrete "what to actually do about it" guidance per action-item category --
@@ -91,6 +93,11 @@ CATEGORY_REMEDIATION = {
     "sending_cadence_irregular": "If this was intentional (a planned schedule change), no action needed -- it'll stop flagging once your baseline catches up. If not, try to keep future sends on a more consistent schedule going forward.",
     "volume_spike": "If this jump was intentional (a planned campaign), no action needed -- it should stop flagging once your baseline catches up. If it wasn't intentional, check for a misconfigured automation/loop in Listmonk or your ESP that's resending or duplicating messages. Either way, avoid stacking another big increase on top of this one until it settles.",
     "safe_browsing_flagged": "Check https://transparencyreport.google.com/safe-browsing/search for the specific flagged URL/reason. If it's your own website, scan for and remove malware/injected content, then request a review in Google Search Console. If it's a third-party link in a footer/widget you don't control, remove it.",
+    "dns_missing": "Publish a DMARC TXT record at _dmarc.<your domain> in your DNS host's control panel. A safe starting point: \"v=DMARC1; p=none; rua=mailto:you@yourdomain.com\" -- p=none only monitors, it doesn't block anything, so it's safe to publish immediately. Once it's live (can take a few minutes to an hour to propagate), log it under Log a manual action in the Manual Log tab.",
+    "dns_multiple": "Your DNS host has more than one TXT record at _dmarc.<your domain> -- mail providers can't tell which one to trust and may ignore your policy entirely as a result. Open your DNS control panel, list all TXT records for that exact name, and delete all but one (merge their content first if they differ). Most registrars show every record for a name on one screen, so this is usually a one-time cleanup.",
+    "spf_missing": "Publish an SPF TXT record at your domain's apex (not a subdomain) listing everything that sends mail as you -- e.g. \"v=spf1 include:_spf.google.com include:mailgun.org ~all\" adjusted for whichever of Google Workspace/SES/Mailgun/etc. you actually use. Each provider's own setup docs give you the exact include: value to add. See the Gmail sender requirements table above once it's published to confirm it's being read correctly.",
+    "dkim_missing": "Turn on DKIM signing in whichever service sends as this domain (Google Workspace: Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email; SES: Identities -> this domain -> DKIM; Mailgun: Domain settings -> DNS records), then publish the CNAME/TXT record it gives you. This is usually a one-time setup per sending service, not something that needs redoing per campaign.",
+    "untracked_sending_subdomain": "Check with whoever manages sending for this domain to confirm whether this subdomain is actually in use. If it is: make sure its DMARC record has a rua= reporting address (see the detail above for whether it's missing), then just let DMARCTool ingest reports for it -- adding a subdomain works exactly like any other domain, no special setup needed. If it's not in use / was a leftover from something abandoned, no action needed beyond knowing it's there.",
 }
 
 # postmaster_compliance items all share one category, but the fix depends on
@@ -112,8 +119,21 @@ def category_remediation(category):
     return CATEGORY_REMEDIATION.get(category)
 
 
+def _causal_sender_note(causal_senders):
+    """Appended to DMARC-alignment-adjacent remediation text when a currently-
+    failing sender (same one that would already have its own open
+    failure_investigation item) could plausibly explain the flag -- turns
+    'fix whichever's flagged' into a pointer at a specific IP to go check."""
+    if not causal_senders:
+        return ""
+    parts = "; ".join(f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs)" for c in causal_senders)
+    return (f" DMARCTool also found a currently-failing sending source that may be causing this: {parts} -- "
+            f"see the matching 'Investigate failing sender' item and the Known senders table (Senders tab) for "
+            f"what it actually authenticates as.")
+
+
 def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_spam_rate=None,
-                            reason=None, google_volume=None, window_days=None):
+                            reason=None, google_volume=None, window_days=None, causal_senders=None):
     """DMARC_POLICY, USER_REPORTED_SPAM_RATE, and DELIVERABILITY get a domain-specific
     answer built from what DMARCTool already knows (live DNS policy, current spam rate,
     actual Gmail-seen message volume, and -- for DELIVERABILITY -- the specific reason
@@ -162,8 +182,12 @@ def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_sp
                     f"or you can safely ignore it if this domain isn't meant to send much.")
         if reason == "SENDER_NOT_COMPLIANT":
             return ("This is Google's overall verdict combining every requirement above -- check which specific "
-                    "one(s) in the table are marked Needs work and fix those; this clears on its own once they do.")
+                    "one(s) in the table are marked Needs work and fix those; this clears on its own once they do."
+                    + _causal_sender_note(causal_senders))
         return "This is Google's overall verdict combining every requirement above -- fix whichever specific one(s) are flagged NEEDS_WORK and this should clear on its own."
+
+    if requirement in ("DMARC_ALIGNMENT", "SPF_AND_DKIM"):
+        return (POSTMASTER_REQUIREMENT_REMEDIATION.get(requirement) or "") + _causal_sender_note(causal_senders)
 
     return POSTMASTER_REQUIREMENT_REMEDIATION.get(requirement)
 

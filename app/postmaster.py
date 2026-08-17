@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analysis import ensure_default_settings, upsert_system_action
+from app.analysis import ensure_default_settings, likely_causal_senders, upsert_system_action
 from app.config import get_secret
 from app.db import get_connection, init_db
 
@@ -311,11 +311,24 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
                 spam_note = ""
                 if requirement == "USER_REPORTED_SPAM_RATE" and stats and stats.get("spam_rate") is not None:
                     spam_note = f" (measured spam rate: {stats['spam_rate']:.3%} over the last {window_days}d)"
+                causal_note = ""
+                # DMARC alignment/SPF+DKIM/overall-deliverability flags are the ones a
+                # currently-failing sender can plausibly explain -- TLS/unsubscribe
+                # requirements are unrelated to sender authentication, so skip those.
+                if requirement in ("DMARC_ALIGNMENT", "SPF_AND_DKIM") or (
+                    requirement == "DELIVERABILITY" and reason == "SENDER_NOT_COMPLIANT"
+                ):
+                    causal = likely_causal_senders(conn, domain_id, settings)
+                    if causal:
+                        parts = "; ".join(f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs)" for c in causal)
+                        causal_note = (f" Possible cause: currently-failing sending source(s) -- {parts} -- "
+                                       f"see the matching 'Investigate failing sender' item and Known senders "
+                                       f"in the Senders tab for what they actually authenticate as.")
                 upsert_system_action(
                     conn, domain_id, "postmaster_compliance", ref_key,
                     f"{domain_name}: Gmail flags {requirement.replace('_', ' ').lower()} as needing work",
                     f"Google's Postmaster Tools reports this as NEEDS_WORK for {postmaster_domain}."
-                    f"{spam_note}" + (f" Reason: {reason}." if reason else ""),
+                    f"{spam_note}" + (f" Reason: {reason}." if reason else "") + causal_note,
                 )
             else:
                 conn.execute(

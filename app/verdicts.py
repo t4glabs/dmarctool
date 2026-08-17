@@ -155,6 +155,35 @@ def ses_verdict(ses_stats, bounce_warn, complaint_warn):
     return "bad", "⚠️ " + "; ".join(issues) + "."
 
 
+def ses_account_verdict(status):
+    """Mirrors the exact 'bad' conditions app.ses_account uses when it raises
+    the ses_account_health action item, so this badge and that action item
+    never disagree about whether the account is healthy."""
+    if not status:
+        return "muted", "No SES account data yet."
+    problems = []
+    if status["enforcement_status"] and status["enforcement_status"] != "HEALTHY":
+        problems.append(f"enforcement status is {status['enforcement_status']}")
+    if not status["sending_enabled"]:
+        problems.append("sending is disabled")
+    if not status["suppress_bounce"] or not status["suppress_complaint"]:
+        problems.append("auto-suppression is off")
+    if problems:
+        return "bad", "⚠️ " + "; ".join(problems) + "."
+    return "ok", "✅ SES account is healthy."
+
+
+def ses_identity_verdict(identity):
+    """Mirrors the exact 'bad' condition app.ses_account uses when it raises
+    the ses_identity_unverified action item."""
+    if not identity:
+        return "muted", "No SES identity data yet."
+    if identity["verification_status"] != "SUCCESS" or not identity["sending_enabled"]:
+        return "bad", (f"⚠️ Identity verification: {identity['verification_status'] or 'unknown'}, "
+                        f"sending enabled: {bool(identity['sending_enabled'])}.")
+    return "ok", "✅ Identity verified and sending enabled."
+
+
 def postmaster_verdict(postmaster_compliance):
     if not postmaster_compliance:
         return "muted", "No Postmaster Tools data for this domain yet."

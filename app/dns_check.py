@@ -163,12 +163,87 @@ def run_dns_checks(conn, verbose: bool = True) -> None:
                 print(f"  {result['status']}: {result['note']}")
 
 
+# Common prefixes for a dedicated bulk/transactional sending subdomain --
+# trimmed to the ones actually used across these domains (confirmed with the
+# user) rather than a generic guess-every-prefix list.
+SENDING_SUBDOMAIN_PREFIXES = ("mail", "mails", "news", "campaigns", "updates", "newsletter")
+
+
+def discover_untracked_subdomains(conn, verbose: bool = True) -> None:
+    """For every tracked domain, checks whether a handful of common
+    sending-subdomain prefixes (mail.<domain>, bulk.<domain>, etc.) have their
+    own DMARC record that isn't itself tracked as a separate domain here.
+
+    This closes a real blind spot: a subdomain's DMARC record and reports are
+    completely independent of its parent's, and DMARCTool only ever tracks
+    domains explicitly present in the `domains` table (which only ever grows
+    via ingesting a report) -- so a sending subdomain nobody told DMARCTool
+    about stays invisible indefinitely, even if it has its own DMARC policy
+    with real sending traffic. It surfaced here once, via a raw email header
+    someone pasted in by hand; this check means that shouldn't need to
+    happen again.
+    """
+    tracked = {row["name"] for row in conn.execute("SELECT name FROM domains")}
+    domains = all_domains(conn)
+
+    # Clear any previously-flagged subdomain that's since been added as its
+    # own tracked domain -- the gap this check exists for is now closed.
+    for item in conn.execute(
+        "SELECT id, ref_key FROM action_items WHERE category='untracked_sending_subdomain' AND status='open'"
+    ).fetchall():
+        if item["ref_key"] in tracked:
+            conn.execute(
+                "UPDATE action_items SET status='dismissed', resolved_at=datetime('now') WHERE id=?",
+                (item["id"],),
+            )
+
+    candidates = [
+        (domain["id"], domain["name"], f"{prefix}.{domain['name']}")
+        for domain in domains
+        for prefix in SENDING_SUBDOMAIN_PREFIXES
+        if f"{prefix}.{domain['name']}" not in tracked
+    ]
+    if not candidates:
+        conn.commit()
+        if verbose:
+            print("[dns] no candidate sending subdomains to check (all already tracked)")
+        return
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        results = list(ex.map(lambda c: dig_txt(c[2]), candidates))
+
+    found = 0
+    for (domain_id, domain_name, candidate), records in zip(candidates, results):
+        if not records:
+            continue
+        dmarc_records = [r for r in records if r.lower().startswith("v=dmarc1")]
+        if not dmarc_records:
+            continue
+        found += 1
+        tags = parse_dmarc_tags(dmarc_records[0])
+        rua_note = ("" if "rua" in tags else
+                    " It has no rua= reporting address, so no aggregate reports will ever be generated for "
+                    "it until one is added.")
+        upsert_system_action(
+            conn, domain_id, "untracked_sending_subdomain", candidate,
+            f"{domain_name}: found an untracked sending subdomain ({candidate})",
+            f"_dmarc.{candidate} publishes its own DMARC record ({dmarc_records[0]}), separate from "
+            f"{domain_name}'s own record.{rua_note} If this subdomain is used for sending, DMARCTool can "
+            f"track it like any other domain once reports start arriving for it.",
+        )
+    conn.commit()
+    if verbose:
+        print(f"[dns] checked {len(candidates)} candidate sending subdomain(s) across {len(domains)} "
+              f"tracked domain(s), found {found} untracked one(s) with their own DMARC record")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check live DMARC DNS TXT records against report/manual-log data")
     parser.parse_args()
     conn = get_connection()
     init_db(conn)
     run_dns_checks(conn)
+    discover_untracked_subdomains(conn)
 
 
 if __name__ == "__main__":

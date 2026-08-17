@@ -25,9 +25,9 @@ from fastapi.templating import Jinja2Templates
 
 from app.analysis import (
     all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
-    domain_window_stats, day_to_date, epoch_day, ensure_default_settings, mailgun_daily_series,
-    postmaster_daily_series, provider_breakdown, recent_campaigns, run_analysis, sending_cadence, ses_daily_series,
-    sending_stream_breakdown, subscriber_engagement_summary,
+    domain_window_stats, day_to_date, epoch_day, ensure_default_settings, likely_causal_senders,
+    mailgun_daily_series, postmaster_daily_series, provider_breakdown, recent_campaigns, run_analysis,
+    sending_cadence, ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
 )
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
@@ -35,7 +35,7 @@ from app.blocklist import run_blocklist_checks
 from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_sparkline, volume_bar_chart
 from app.compliance import run_compliance_checks
 from app.db import get_connection, init_db
-from app.dns_check import run_dns_checks
+from app.dns_check import discover_untracked_subdomains, run_dns_checks
 from app.listmonk import run_listmonk_content_sync
 from app.mailgun import run_mailgun_checks
 from app.postmaster import run_postmaster_checks
@@ -51,7 +51,7 @@ from app.labels import (
 )
 from app.verdicts import (
     dns_history_verdict, mailgun_verdict, postmaster_verdict, provider_verdict,
-    senders_verdict, ses_verdict, spf_dkim_verdict, stream_verdict,
+    senders_verdict, ses_account_verdict, ses_identity_verdict, ses_verdict, spf_dkim_verdict, stream_verdict,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -87,6 +87,7 @@ def _startup():
         c = get_connection()
         run_analysis(c, verbose=False)
         run_dns_checks(c, verbose=False)
+        discover_untracked_subdomains(c, verbose=False)
         run_blocklist_checks(c, verbose=False)
         run_compliance_checks(c, verbose=False)
         run_mailgun_checks(c, verbose=False)
@@ -283,6 +284,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     postmaster_reason_by_ref_key = {
         f"{row['postmaster_domain']}:{row['requirement']}": row["reason"] for row in postmaster_compliance
     }
+    postmaster_causal_senders = likely_causal_senders(conn, domain_id, settings)
     postmaster_spam_sparkline = spam_rate_sparkline(postmaster_daily_series(conn, domain_id, days=60))
 
     ses_window_days = int(settings["ses_stats_window_days"])
@@ -340,6 +342,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mailgun": mailgun_verdict(mailgun_stats, float(settings["mailgun_bounce_rate_warn"]), float(settings["mailgun_complaint_rate_warn"])),
         "ses": ses_verdict(ses_stats, float(settings["ses_bounce_rate_warn"]), float(settings["ses_complaint_rate_warn"])),
         "postmaster": postmaster_verdict(postmaster_compliance),
+        "ses_account": ses_account_verdict(ses_account_status),
+        "ses_identity": ses_identity_verdict(ses_identity),
     }
 
     return templates.TemplateResponse(request, "domain.html", {
@@ -367,6 +371,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "postmaster_stats": postmaster_stats,
         "postmaster_compliance": postmaster_compliance,
         "postmaster_reason_by_ref_key": postmaster_reason_by_ref_key,
+        "postmaster_causal_senders": postmaster_causal_senders,
         "postmaster_spam_sparkline": postmaster_spam_sparkline,
         "ses_stats": ses_stats,
         "ses_window_days": ses_window_days,

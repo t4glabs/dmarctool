@@ -44,6 +44,25 @@ document.addEventListener("DOMContentLoaded", function () {
       if (e.target === dialog) dialog.close(); // click on the backdrop, not the content
     });
   });
+
+  // Popovers (the small "i" fix-instruction buttons) get promoted to the browser's
+  // top layer when open, which breaks their CSS position:absolute containing-block
+  // chain back to the button that opened them -- this is the standard workaround
+  // (also documented by MDN) until CSS anchor positioning is universally supported:
+  // position it manually, relative to the viewport, once it's actually shown. The
+  // popover "toggle" event doesn't bubble or get caught by ancestor listeners at
+  // all, so this has to be attached directly on each popover, not delegated.
+  document.querySelectorAll(".fix-popover").forEach(function (popover) {
+    popover.addEventListener("toggle", function (e) {
+      if (e.newState !== "open") return;
+      var btn = document.querySelector('[popovertarget="' + popover.id + '"]');
+      if (!btn) return;
+      var r = btn.getBoundingClientRect();
+      popover.style.position = "fixed";
+      popover.style.top = (r.bottom + 4) + "px";
+      popover.style.left = Math.min(r.left, window.innerWidth - popover.offsetWidth - 12) + "px";
+    });
+  });
 });
 </script>
 </body>
