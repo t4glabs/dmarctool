@@ -14,7 +14,7 @@ import csv
 import io
 import shutil
 import tempfile
-from datetime import date as _date, timedelta as _timedelta
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -34,8 +34,10 @@ from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
 from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_sparkline, volume_bar_chart
 from app.compliance import run_compliance_checks
+from app.config import get_secret
 from app.db import get_connection, init_db
 from app.dns_check import discover_untracked_subdomains, run_dns_checks
+from app.domain_report import get_report_settings, run_report_emails, save_report_settings, send_report_now
 from app.listmonk import run_listmonk_content_sync
 from app.mailgun import run_mailgun_checks
 from app.postmaster import run_postmaster_checks
@@ -96,6 +98,7 @@ def _startup():
         run_ses_account_checks(c, verbose=False)
         run_listmonk_content_sync(c, verbose=False)
         run_safe_browsing_checks(c, verbose=False)
+        run_report_emails(c, verbose=False)
 
     _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
     _scheduler.start()
@@ -340,6 +343,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ).fetchall()
 
+    report_settings = get_report_settings(conn, domain_id)
+
     verdicts = {
         "senders": senders_verdict(senders),
         "providers": provider_verdict(providers),
@@ -397,6 +402,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "senders": senders,
         "classifications": CLASSIFICATIONS,
         "manual_log_items": manual_log_items,
+        "report_settings": report_settings,
         "dns_history": dns_history,
         "safe_browsing": safe_browsing,
         "verdicts": verdicts,
@@ -484,6 +490,48 @@ def log_manual_action(name: str, message: str = Form(...), p: str = Form(""), pc
         when=date or None,
     )
     return RedirectResponse(f"/domain/{name}", status_code=303)
+
+
+@app.post("/domain/{name}/report_settings")
+def save_domain_report_settings(name: str, recipient_email: str = Form(""), recipient_label: str = Form(""),
+                                 interval_days: int = Form(30), enabled: str = Form("")):
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    save_report_settings(conn, domain["id"], recipient_email or None, recipient_label or None,
+                          interval_days, bool(enabled))
+    return RedirectResponse(f"/domain/{name}?flash=Email update settings saved.#log", status_code=303)
+
+
+@app.post("/domain/{name}/report_settings/test")
+def test_domain_report(name: str):
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    settings_row = get_report_settings(conn, domain["id"])
+    if not settings_row or not settings_row["recipient_email"]:
+        return RedirectResponse(f"/domain/{name}?flash=Save a recipient email first.#log", status_code=303)
+
+    sender_email = get_secret("REPORT_SENDER_EMAIL")
+    sender_domain = get_secret("REPORT_SENDER_MAILGUN_DOMAIN")
+    api_key = get_secret("MAILGUN_API_KEY")
+    if not (sender_email and sender_domain and api_key):
+        return RedirectResponse(
+            f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_API_KEY in secrets.env.#log",
+            status_code=303,
+        )
+
+    period_end = _datetime.utcnow()
+    period_start = period_end - _timedelta(days=settings_row["interval_days"] or 30)
+    status, err = send_report_now(
+        conn, domain["id"], name, settings_row["recipient_email"], settings_row["recipient_label"],
+        period_start, period_end, sender_email, sender_domain, api_key, mark_sent=False,
+    )
+    if status == "sent":
+        flash = f"Test email sent to {settings_row['recipient_email']}."
+    elif status == "skipped_no_data":
+        flash = "No DMARC report data for this domain in that period yet -- nothing sent."
+    else:
+        flash = f"Test send failed: {err}"
+    return RedirectResponse(f"/domain/{name}?flash={flash}#log", status_code=303)
 
 
 @app.post("/action_items/{item_id}/resolve")

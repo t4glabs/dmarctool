@@ -457,3 +457,34 @@ CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
+
+-- Per-domain plain-language email report settings (app.domain_report). One
+-- row per domain, unlike `settings` above which is global -- recipient,
+-- cadence, and greeting are all things a non-technical domain owner cares
+-- about individually, not a tool-wide threshold. `enabled` defaults to 0:
+-- nothing is ever sent to anyone until a domain is explicitly opted in.
+CREATE TABLE IF NOT EXISTS domain_report_settings (
+    domain_id       INTEGER PRIMARY KEY REFERENCES domains(id),
+    recipient_email TEXT,
+    recipient_label TEXT,              -- how to greet them, e.g. "Bangalore Cat Squad team"
+    interval_days   INTEGER NOT NULL DEFAULT 30,
+    enabled         INTEGER NOT NULL DEFAULT 0,
+    last_sent_at    TEXT
+);
+
+-- Audit log of every report email actually sent (or attempted) -- matters
+-- for trust/debuggability since these go to real non-technical people, and
+-- doubles as the anchor for the next period's comparison window
+-- (period_end of the last successful send).
+CREATE TABLE IF NOT EXISTS report_sends (
+    id              INTEGER PRIMARY KEY,
+    domain_id       INTEGER NOT NULL REFERENCES domains(id),
+    period_start    TEXT NOT NULL,
+    period_end      TEXT NOT NULL,
+    sent_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    recipient_email TEXT,
+    status          TEXT NOT NULL,      -- 'sent' | 'failed' | 'skipped_no_data'
+    error_message   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_sends_domain ON report_sends(domain_id, sent_at);

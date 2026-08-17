@@ -24,6 +24,7 @@ import datetime
 import email.utils
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -47,6 +48,32 @@ def _get(url: str, api_key: str, timeout: float = 15.0):
             return json.loads(resp.read()), None
     except urllib.error.HTTPError as e:
         return None, f"HTTP {e.code}: {e.reason}"
+    except (urllib.error.URLError, TimeoutError) as e:
+        return None, f"network error: {e}"
+
+
+def send_message(mailgun_domain: str, api_key: str, from_addr: str, to_addr: str,
+                  subject: str, text: str, html: str, timeout: float = 20.0):
+    """Sends a single email via Mailgun's Messages API (POST {domain}/messages),
+    same auth/base-URL conventions as every read-only call in this file --
+    used by app.domain_report for the periodic plain-language owner reports.
+    Returns (message_id, error)."""
+    url = f"{API_BASE}/{mailgun_domain}/messages"
+    data = urllib.parse.urlencode({
+        "from": from_addr, "to": to_addr, "subject": subject, "text": text, "html": html,
+    }).encode()
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={
+            "Authorization": _auth_header(api_key),
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read()).get("id"), None
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}: {e.read().decode(errors='replace')}"
     except (urllib.error.URLError, TimeoutError) as e:
         return None, f"network error: {e}"
 

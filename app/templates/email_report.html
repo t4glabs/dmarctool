@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your email health update</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f4f4; font-family: Georgia, 'Times New Roman', serif; color:#333333;">
+  <div style="max-width:560px; margin:0 auto; padding:24px 16px;">
+    <div style="background:#ffffff; border-radius:8px; padding:28px 24px; box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+      <p style="font-size:13px; color:#888888; margin:0 0 4px 0;">{{ period_start }} to {{ period_end }}</p>
+      <h1 style="font-size:20px; margin:0 0 20px 0; color:#222222;">Hi {{ recipient_label }},</h1>
+      <p style="font-size:16px; line-height:1.6; margin:0 0 20px 0;">
+        Here's how <strong>{{ domain_name }}</strong>'s emails have been doing lately, in plain terms -- no
+        technical jargon, just what happened and what we did about it.
+      </p>
+
+      {% if resolved %}
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:16px; color:#1a7f37; margin:0 0 10px 0;">🎉 What we fixed for you</h2>
+        <ul style="font-size:15px; line-height:1.6; padding-left:20px; margin:0;">
+          {% for item in resolved %}
+          <li style="margin-bottom:8px;">Earlier, {{ item }}. <strong>We've since taken care of this.</strong></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if still_open %}
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:16px; color:#9a6700; margin:0 0 10px 0;">👀 What we're still working on</h2>
+        <ul style="font-size:15px; line-height:1.6; padding-left:20px; margin:0;">
+          {% for item in still_open %}
+          <li style="margin-bottom:8px;">{{ item[0]|upper }}{{ item[1:] }}. We're on it.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if not resolved and not still_open %}
+      <div style="margin-bottom:24px; background:#f0f7f0; border-radius:6px; padding:14px 16px;">
+        <p style="font-size:15px; margin:0; color:#1a7f37;">✅ Nothing needed fixing this time -- everything's running smoothly.</p>
+      </div>
+      {% endif %}
+
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:16px; color:#222222; margin:0 0 10px 0;">📫 How your emails are arriving</h2>
+        <p style="font-size:15px; line-height:1.6; margin:0;">{{ deliverability }}</p>
+      </div>
+
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:16px; color:#222222; margin:0 0 10px 0;">🔒 Protection from fake emails</h2>
+        <p style="font-size:15px; line-height:1.6; margin:0;">{{ protection }}</p>
+      </div>
+
+      {% if newsletter %}
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:16px; color:#222222; margin:0 0 10px 0;">📰 Your newsletter's reach</h2>
+        <p style="font-size:15px; line-height:1.6; margin:0;">{{ newsletter }}</p>
+      </div>
+      {% endif %}
+
+      {% if blocklist_events %}
+      <div style="margin-bottom:24px; background:#fff5f5; border-radius:6px; padding:14px 16px;">
+        <p style="font-size:15px; margin:0; color:#b42318;">⚠️ One of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }} -- we're keeping watch.</p>
+      </div>
+      {% endif %}
+
+      <p style="font-size:15px; line-height:1.6; margin:24px 0 0 0;">
+        That's everything for this update. If anything here doesn't make sense, or you'd just like to talk it
+        through, reply to this email any time -- we're happy to explain.
+      </p>
+      <p style="font-size:15px; line-height:1.6; margin:20px 0 0 0;">
+        With care,<br>
+        <strong>The Aikyam Team</strong>
+      </p>
+    </div>
+    <p style="font-size:12px; color:#999999; text-align:center; margin:16px 0 0 0;">
+      You're receiving this because Aikyam manages email safety for {{ domain_name }}.
+    </p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,35 @@
+Hi {{ recipient_label }},
+
+Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }} to {{ period_end }}), in plain terms -- no technical jargon, just what happened and what we did about it.
+{% if resolved %}
+WHAT WE FIXED FOR YOU
+{% for item in resolved %}
+- Earlier, {{ item }}. We've since taken care of this.
+{% endfor %}{% endif %}
+{%- if still_open %}
+WHAT WE'RE STILL WORKING ON
+{% for item in still_open %}
+- {{ item[0]|upper }}{{ item[1:] }}. We're on it.
+{% endfor %}{% endif %}
+{%- if not resolved and not still_open %}
+Nothing needed fixing this time -- everything's running smoothly.
+{% endif %}
+HOW YOUR EMAILS ARE ARRIVING
+{{ deliverability }}
+
+PROTECTION FROM FAKE EMAILS
+{{ protection }}
+{% if newsletter %}
+YOUR NEWSLETTER'S REACH
+{{ newsletter }}
+{% endif %}
+{%- if blocklist_events %}
+NOTE: one of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }} -- we're keeping watch.
+{% endif %}
+That's everything for this update. If anything here doesn't make sense, or you'd just like to talk it through, reply to this email any time -- we're happy to explain.
+
+With care,
+The Aikyam Team
+
+--
+You're receiving this because Aikyam manages email safety for {{ domain_name }}.
