@@ -28,6 +28,7 @@ separately against wall-clock time.
 import argparse
 import datetime
 import socket
+import subprocess
 from collections import Counter
 from pathlib import Path
 
@@ -275,6 +276,43 @@ def _guess_provider(ptr: str):
     return None
 
 
+_WHOIS_ORG_FIELDS = ("orgname:", "organization:", "org-name:", "descr:", "netname:")
+
+
+def _whois_org(ip: str, timeout: float = 4.0):
+    """Best-effort network/organization owner for an IP via the `whois` CLI
+    (already present on macOS, same "shell out to a standard tool" pattern as
+    dig elsewhere in this codebase) -- a fallback identification signal for
+    when reverse DNS doesn't match a known ESP pattern at all, e.g. a generic
+    cloud-VM hostname like "bc.googleusercontent.com" that doesn't say
+    anything about which specific app/service is actually running there.
+    WHOIS output format varies a lot by registry (ARIN/RIPE/APNIC/etc all use
+    different field names), so this only tries a handful of common ones
+    rather than fully parsing it -- same "good enough, not exhaustive"
+    tradeoff as the PTR pattern list above. Slow and sometimes rate-limited
+    by upstream registries -- background-job use only, never call this from
+    a live page render (see guess_sender_identity's skip_lookup)."""
+    try:
+        out = subprocess.run(["whois", ip], capture_output=True, text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if out.returncode != 0:
+        return None
+    lines = [line.strip() for line in out.stdout.splitlines()]
+    # Check by field *priority*, not document order -- a field like NetName
+    # (a short internal registry code, e.g. "GOOGL-46") often appears earlier
+    # in the raw text than the more human-readable OrgName/Organization, so
+    # scanning line-by-line and stopping at the first match of any field
+    # would pick the less useful one.
+    for field in _WHOIS_ORG_FIELDS:
+        for line in lines:
+            if line.lower().startswith(field):
+                value = line.split(":", 1)[1].strip()
+                if value and value.upper() not in ("NA", "N/A", ""):
+                    return value
+    return None
+
+
 def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str,
                            ptr: str = None, skip_lookup: bool = False) -> str:
     """Best-effort, plain-language guess at what an unrecognized sending IP
@@ -291,15 +329,22 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
          unrelated domains for different customers at different times. If
          this disagrees with #1, that disagreement itself is the useful
          finding -- it means "shared pool", not "these domains are related".
-      3. The sending provider name, parsed from reverse DNS.
-    Not a certainty -- a starting point for the "What is this?" dropdown, same
+      3. The sending provider name, parsed from reverse DNS (a specific,
+         named ESP -- Mailgun, SES, etc.) -- or failing that, the network's
+         registered owner via WHOIS (a much vaguer signal: "Google LLC" or
+         "Amazon Technologies Inc." just means *some* customer's app is
+         running on that cloud, not which one -- worded accordingly below).
+    When nothing resolves, returns concrete manual next steps instead of just
+    "go figure it out" -- the process to follow, not just a shrug. Not a
+    certainty -- a starting point for the "What is this?" dropdown, same
     spirit as content_scoring.py's heuristics elsewhere in this tool. Pass
     `ptr` if it's already been looked up (e.g. cached in ptr_checks, or from a
     _reverse_dns() call the caller already made) to avoid a redundant lookup.
     If `ptr` is None and this is being called from a live web request (not
-    the background analysis job), pass skip_lookup=True -- _reverse_dns() is a
-    blocking socket call with up to a ~1.5s timeout per miss, which has no
-    business running synchronously inside a page render."""
+    the background analysis job), pass skip_lookup=True -- _reverse_dns() and
+    _whois_org() are both blocking network calls (the latter can take several
+    seconds and is sometimes rate-limited), which have no business running
+    synchronously inside a page render."""
     if ptr is None and not skip_lookup:
         ptr = _reverse_dns(source_ip)
     provider = _guess_provider(ptr)
@@ -330,10 +375,27 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
                 f"relationship -- it's a weaker signal than an actual authenticating domain, which wasn't found here.")
 
     if provider:
-        return (f"sent through {provider} (from reverse DNS), but doesn't authenticate as any "
-                f"domain you track -- legitimate if you use {provider} for something, otherwise worth a closer look.")
+        return (f"sent through {provider} (from reverse DNS), but doesn't authenticate as any domain you track -- "
+                f"legitimate if you use {provider} for something, otherwise check {provider}'s own sending/activity "
+                f"logs for a message matching this IP's volume and date range to find out which account sent it.")
 
-    return "no provider, authenticating domain, or prior labeling found for this IP -- genuinely unfamiliar; worth a closer look before assuming it's yours."
+    whois_org = None if skip_lookup else _whois_org(source_ip)
+    if whois_org:
+        return (f"reverse DNS didn't match a known email provider, but this IP's network is registered to "
+                f"\"{whois_org}\" (via WHOIS). That's the hosting/cloud company, not necessarily the sender -- "
+                f"if it's a major cloud provider (Google, AWS, Azure, DigitalOcean, Hetzner, OVH, etc.), it likely "
+                f"means one specific app or account on that cloud is sending this, not the provider itself. To "
+                f"narrow it down: check whether you (or a service you use) run anything on {whois_org}'s "
+                f"infrastructure that could plausibly send mail as this domain.")
+
+    return ("genuinely unfamiliar -- no provider (from reverse DNS or WHOIS), authenticating domain, or prior "
+            "labeling found for this IP. To investigate by hand: (1) note the PTR/rDNS shown in the Known Senders "
+            "table, if any; (2) check whether the volume here is a one-off blip or growing over time -- a single "
+            "small burst that never recurs is usually low-risk noise, while steady/growing volume deserves more "
+            "attention; (3) if this same IP starts showing up across multiple of your tracked domains without ever "
+            "authenticating as any of them, that's a stronger sign of spoofing than a misconfigured integration -- "
+            "consider tightening this domain's DMARC policy (raise pct, or move toward p=reject) rather than "
+            "trying to identify the sender.")
 
 
 # Minimum span (first_seen to last_seen) a failing sender needs before its
