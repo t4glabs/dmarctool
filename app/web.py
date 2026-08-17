@@ -25,9 +25,9 @@ from fastapi.templating import Jinja2Templates
 
 from app.analysis import (
     all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
-    domain_window_stats, day_to_date, epoch_day, ensure_default_settings, likely_causal_senders,
-    mailgun_daily_series, postmaster_daily_series, provider_breakdown, recent_campaigns, run_analysis,
-    sending_cadence, ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
+    domain_window_stats, day_to_date, epoch_day, ensure_default_settings, guess_sender_identity,
+    likely_causal_senders, mailgun_daily_series, postmaster_daily_series, provider_breakdown, recent_campaigns,
+    run_analysis, sending_cadence, ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
 )
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
@@ -235,10 +235,17 @@ def domain_detail(request: Request, name: str, flash: str = None):
                 "SELECT status, note FROM blocklist_checks WHERE source_ip=? ORDER BY checked_at DESC LIMIT 1",
                 (s["source_ip"],),
             ).fetchone(),
-            ptr_status=conn.execute(
+            ptr_status=(ptr_status := conn.execute(
                 "SELECT status, ptr_hostname, note FROM ptr_checks WHERE source_ip=? ORDER BY checked_at DESC LIMIT 1",
                 (s["source_ip"],),
-            ).fetchone(),
+            ).fetchone()),
+            # skip_lookup=True: this is a live page render, never do a fresh
+            # (blocking, ~1.5s-per-miss) reverse-DNS call here -- only use
+            # whatever's already cached in ptr_checks.
+            guess=guess_sender_identity(
+                conn, domain_id, domain["name"], s["source_ip"],
+                ptr=ptr_status["ptr_hostname"] if ptr_status else None, skip_lookup=True,
+            ) if s["classification"] == "unclassified" else None,
         )
         for s in senders
     ]

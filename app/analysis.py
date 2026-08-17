@@ -208,6 +208,20 @@ def _passing_auth_domains(conn, domain_id: int, source_ip: str) -> dict:
     return by_domain
 
 
+def _cross_domain_labels(conn, source_ip: str, exclude_domain_id: int):
+    """Other tracked domains where this exact IP is already manually
+    classified -- the strongest possible identification signal (you already
+    told DMARCTool what this is, just for a different domain), and pure SQL
+    with no network calls, so it's safe to run on every page load, not just
+    in the background analysis job."""
+    return conn.execute(
+        """SELECT DISTINCT d.name, ks.classification FROM known_senders ks
+           JOIN domains d ON d.id = ks.domain_id
+           WHERE ks.source_ip = ? AND ks.domain_id != ? AND ks.classification != 'unclassified'""",
+        (source_ip, exclude_domain_id),
+    ).fetchall()
+
+
 def _evaluated_auth_domains(conn, domain_id: int, source_ip: str) -> str:
     """What a failing sender's messages actually authenticate as, per the DMARC
     report's own recorded SPF/DKIM results -- the single most useful fact when
@@ -217,10 +231,92 @@ def _evaluated_auth_domains(conn, domain_id: int, source_ip: str) -> str:
     address (e.g. another one of your own domains' sending config), not
     spoofing -- worth saying explicitly rather than leaving it to guesswork."""
     by_domain = _passing_auth_domains(conn, domain_id, source_ip)
+    cross_domain = _cross_domain_labels(conn, source_ip, domain_id)
+    cross_note = ""
+    if cross_domain:
+        labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
+        cross_note = f" This exact IP is already labeled elsewhere in your portfolio -- {labels}."
     if not by_domain:
-        return "no SPF/DKIM authentication passed for this sender at all -- could be spoofed mail, not a misconfigured integration"
+        return ("no SPF/DKIM authentication passed for this sender at all -- could be spoofed mail, "
+                "not a misconfigured integration." + cross_note)
     parts = [f"{d} ({'/'.join(sorted(m))} pass)" for d, m in by_domain.items()]
-    return f"actually authenticates as: {', '.join(parts)} -- likely a misconfigured sender/From-address on that domain's setup, not spoofing"
+    return (f"actually authenticates as: {', '.join(parts)} -- likely a misconfigured sender/From-address "
+            f"on that domain's setup, not spoofing.{cross_note}")
+
+
+# Recognizable reverse-DNS patterns for common sending providers -- short and
+# curated (same rationale as content_scoring.py's phrase list) rather than an
+# exhaustive registry, just enough to turn a cryptic PTR hostname like
+# "v512.v5f06b487.use4.send.mailgun.net" into a plain "Mailgun".
+_ESP_PTR_PATTERNS = (
+    ("mailgun.", "Mailgun"),
+    ("sendgrid.", "SendGrid"),
+    ("amazonses.com", "Amazon SES"),
+    ("google.com", "Google Workspace / Gmail"),
+    ("googlemail.com", "Google Workspace / Gmail"),
+    ("outlook.com", "Microsoft 365 / Outlook"),
+    ("zoho.", "Zoho Mail"),
+    ("mandrillapp.com", "Mandrill (Mailchimp Transactional)"),
+    ("mailchimp.com", "Mailchimp"),
+    ("sparkpostmail.com", "SparkPost"),
+    ("mtasv.net", "SparkPost"),
+    ("postmarkapp.com", "Postmark"),
+    ("sendinblue.com", "Brevo (Sendinblue)"),
+)
+
+
+def _guess_provider(ptr: str):
+    if not ptr:
+        return None
+    lowered = ptr.lower()
+    for pattern, name in _ESP_PTR_PATTERNS:
+        if pattern in lowered:
+            return name
+    return None
+
+
+def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str,
+                           ptr: str = None, skip_lookup: bool = False) -> str:
+    """Best-effort, plain-language guess at what an unrecognized sending IP
+    actually is, combining every signal DMARCTool already has:
+      - the sending provider, from reverse DNS (Mailgun, SES, Google, etc.)
+      - which domain(s) it actually authenticates as, from the DMARC report's
+        own SPF/DKIM results -- especially telling when that's one of your
+        OTHER tracked domains, since that's very likely your own infrastructure
+      - whether this exact IP is already labeled for a different domain in
+        your own portfolio -- the strongest signal of all, since you already
+        told DMARCTool what it is
+    Not a certainty -- a starting point for the "What is this?" dropdown, same
+    spirit as content_scoring.py's heuristics elsewhere in this tool. Pass
+    `ptr` if it's already been looked up (e.g. cached in ptr_checks, or from a
+    _reverse_dns() call the caller already made) to avoid a redundant lookup.
+    If `ptr` is None and this is being called from a live web request (not
+    the background analysis job), pass skip_lookup=True -- _reverse_dns() is a
+    blocking socket call with up to a ~1.5s timeout per miss, which has no
+    business running synchronously inside a page render."""
+    if ptr is None and not skip_lookup:
+        ptr = _reverse_dns(source_ip)
+    provider = _guess_provider(ptr)
+    auth_domains = {
+        d for d in _passing_auth_domains(conn, domain_id, source_ip)
+        if d != domain_name and d not in _ESP_DEFAULT_AUTH_DOMAINS
+    }
+    cross_domain = _cross_domain_labels(conn, source_ip, domain_id)
+
+    if cross_domain:
+        labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
+        return f"this exact IP is already labeled for another domain you track -- {labels}."
+
+    if auth_domains:
+        provider_note = f" via {provider}" if provider else ""
+        return (f"authenticates as {', '.join(sorted(auth_domains))}{provider_note} -- if that's "
+                f"a domain/service you use, it's very likely legitimate, just sending under a different identity.")
+
+    if provider:
+        return (f"sent through {provider} (from reverse DNS), but doesn't authenticate as any "
+                f"domain you track -- legitimate if you use {provider} for something, otherwise worth a closer look.")
+
+    return "no provider, authenticating domain, or prior labeling found for this IP -- genuinely unfamiliar; worth a closer look before assuming it's yours."
 
 
 # Minimum span (first_seen to last_seen) a failing sender needs before its
@@ -350,7 +446,7 @@ def likely_causal_senders(conn, domain_id: int, settings: dict) -> list:
     return out
 
 
-def flag_new_and_failing_senders(conn, domain_id: int, settings: dict, now_day: int) -> list:
+def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, settings: dict, now_day: int) -> list:
     new_window = int(settings["new_sender_window_days"])
     high_vol = int(settings["high_volume_fail_threshold"])
     high_fail_rate = float(settings["high_fail_rate_threshold"])
@@ -365,8 +461,10 @@ def flag_new_and_failing_senders(conn, domain_id: int, settings: dict, now_day: 
 
         if is_new and s["classification"] == "unclassified" and total >= 3:
             ptr = _reverse_dns(s["source_ip"])
+            guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
             detail = (f"First seen {day_to_date(first_seen_day)}, {total} msgs, "
-                      f"{pass_rate:.0%} pass" + (f", PTR: {ptr}" if ptr else ", no PTR record"))
+                      f"{pass_rate:.0%} pass" + (f", PTR: {ptr}" if ptr else ", no PTR record")
+                      + f" Best guess: {guess}")
             findings.append({
                 "category": "new_sender", "ref_key": s["source_ip"],
                 "title": f"New unrecognized sender {s['source_ip']} on this domain",
@@ -379,7 +477,7 @@ def flag_new_and_failing_senders(conn, domain_id: int, settings: dict, now_day: 
             auth_note = _evaluated_auth_domains(conn, domain_id, s["source_ip"])
             detail = (f"{total} msgs, {pass_rate:.0%} pass ({s['fail_msgs']} failing), "
                       f"labeled as: {label}" + (f", PTR: {ptr}" if ptr else "")
-                      + f". {auth_note[0].upper()}{auth_note[1:]}.")
+                      + f". {auth_note[0].upper()}{auth_note[1:]}")
             findings.append({
                 "category": "failure_investigation", "ref_key": s["source_ip"],
                 "title": f"Investigate failing sender {s['source_ip']}",
@@ -962,7 +1060,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
         findings = []
         if latest_report_end is not None:
             now_day = epoch_day(latest_report_end)
-            findings += flag_new_and_failing_senders(conn, domain_id, settings, now_day)
+            findings += flag_new_and_failing_senders(conn, domain_id, domain_name, settings, now_day)
             findings += check_volume_spike(conn, domain_id, domain_name, settings)
             findings += detect_borrowed_sending_identity(conn, domain_id, domain_name, settings)
         findings += check_staleness(conn, domain_id, domain_name, settings, wall_now)

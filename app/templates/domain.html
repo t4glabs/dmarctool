@@ -4,6 +4,7 @@
 
 {% set fix_note_ns = namespace(id=0) %}
 {% macro fix_note(text) %}{% if text %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="How to fix this">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover>💡 <strong>How to fix:</strong> {{ text | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
+{% macro guess_note(text) %}{% if text %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Best guess at what this is">🔎</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover>🔎 <strong>Best guess:</strong> {{ text | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
 
 <div class="back"><a href="/">&larr; all domains</a></div>
 <h1>{{ domain.name }}</h1>
@@ -379,6 +380,7 @@
                 {% endfor %}
               </select>
             </form>
+            {% if s.guess %}{{ guess_note(s.guess) }}{% endif %}
           </td>
         </tr>
         {% endfor %}
