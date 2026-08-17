@@ -187,6 +187,27 @@ def _suggest_classification(conn, domain_id: int, domain_name: str, source_ip: s
     return "unclassified"
 
 
+def _passing_auth_domains(conn, domain_id: int, source_ip: str) -> dict:
+    """{domain: {mechanisms}} for every SPF/DKIM domain that actually PASSED
+    for this sender's messages, per the DMARC report's own recorded auth
+    results -- the shared core behind both _evaluated_auth_domains (per-sender
+    detail text) and detect_borrowed_sending_identity (cross-sender pattern)."""
+    rows = conn.execute(
+        """SELECT rar.mechanism, rar.domain, COUNT(*) as n
+           FROM record_auth_results rar
+           JOIN report_records rr ON rr.id = rar.record_id
+           JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND rr.source_ip = ? AND rar.domain IS NOT NULL AND rar.result = 'pass'
+           GROUP BY rar.mechanism, rar.domain
+           ORDER BY n DESC""",
+        (domain_id, source_ip),
+    ).fetchall()
+    by_domain = {}
+    for r in rows:
+        by_domain.setdefault(r["domain"], set()).add(r["mechanism"])
+    return by_domain
+
+
 def _evaluated_auth_domains(conn, domain_id: int, source_ip: str) -> str:
     """What a failing sender's messages actually authenticate as, per the DMARC
     report's own recorded SPF/DKIM results -- the single most useful fact when
@@ -195,24 +216,80 @@ def _evaluated_auth_domains(conn, domain_id: int, source_ip: str) -> str:
     means a misconfigured shared ESP/mailing setup pointed at the wrong From
     address (e.g. another one of your own domains' sending config), not
     spoofing -- worth saying explicitly rather than leaving it to guesswork."""
-    rows = conn.execute(
-        """SELECT rar.mechanism, rar.domain, rar.result, COUNT(*) as n
-           FROM record_auth_results rar
-           JOIN report_records rr ON rr.id = rar.record_id
-           JOIN reports r ON r.id = rr.report_id
-           WHERE r.domain_id = ? AND rr.source_ip = ? AND rar.domain IS NOT NULL
-           GROUP BY rar.mechanism, rar.domain, rar.result
-           ORDER BY n DESC""",
-        (domain_id, source_ip),
-    ).fetchall()
-    passing = [r for r in rows if r["result"] == "pass"]
-    if not passing:
+    by_domain = _passing_auth_domains(conn, domain_id, source_ip)
+    if not by_domain:
         return "no SPF/DKIM authentication passed for this sender at all -- could be spoofed mail, not a misconfigured integration"
-    by_domain = {}
-    for r in passing:
-        by_domain.setdefault(r["domain"], set()).add(r["mechanism"])
     parts = [f"{d} ({'/'.join(sorted(m))} pass)" for d, m in by_domain.items()]
     return f"actually authenticates as: {', '.join(parts)} -- likely a misconfigured sender/From-address on that domain's setup, not spoofing"
+
+
+# Minimum span (first_seen to last_seen) a failing sender needs before its
+# borrowed-identity pattern counts as *structural* rather than a one-off
+# blip/test -- deliberately short (this is a heuristic tuning constant, same
+# spirit as click_quality.py's thresholds, not a per-user policy choice worth
+# a Settings entry).
+MIN_BORROWED_IDENTITY_DAYS = 5
+
+# ESPs commonly dual-sign with their own generic default domain *in addition*
+# to a customer's verified domain (e.g. every Mailgun message also carries a
+# d=mailgun.org signature alongside the customer's own). That's not a
+# meaningful "borrowed identity" to flag on its own -- it's just how the ESP
+# always signs -- so it's excluded here to avoid reporting the same root
+# cause as two separate findings (the real culprit domain still gets one).
+_ESP_DEFAULT_AUTH_DOMAINS = {"mailgun.org", "amazonses.com", "sendgrid.net"}
+
+
+def detect_borrowed_sending_identity(conn, domain_id: int, domain_name: str, settings: dict) -> list:
+    """Flags when this domain's failing mail *persistently* authenticates as
+    a different domain -- e.g. several sites/newsletters sharing one ESP's
+    verified sending domain while using a different display "From" address
+    per site (a deliberate, common cost-saving setup -- not a mistake). This
+    is a materially different situation from a one-off misconfigured sender
+    (failure_investigation's job): DMARC alignment can never pass for this
+    traffic no matter what, so it needs its own explicit warning, especially
+    since it also means enforcement (ramping pct up) will quarantine/reject a
+    growing share of this mail over time -- exactly the kind of thing that
+    should give a ramp recommendation pause."""
+    high_vol = int(settings["high_volume_fail_threshold"])
+    high_fail_rate = float(settings["high_fail_rate_threshold"])
+    tracked = {row["name"] for row in conn.execute("SELECT name FROM domains")}
+
+    senders = conn.execute("SELECT * FROM known_senders WHERE domain_id = ?", (domain_id,)).fetchall()
+    by_auth_domain = {}
+    for s in senders:
+        total = s["total_msgs"]
+        pass_rate = s["pass_msgs"] / total if total else 0
+        if total < high_vol or pass_rate >= high_fail_rate:
+            continue
+        span_days = epoch_day(s["last_seen"]) - epoch_day(s["first_seen"])
+        if span_days < MIN_BORROWED_IDENTITY_DAYS:
+            continue
+        for auth_domain in _passing_auth_domains(conn, domain_id, s["source_ip"]):
+            if auth_domain == domain_name or auth_domain in _ESP_DEFAULT_AUTH_DOMAINS:
+                continue
+            bucket = by_auth_domain.setdefault(auth_domain, {"total": 0, "ips": [], "span_days": 0})
+            bucket["total"] += total
+            bucket["ips"].append(s["source_ip"])
+            bucket["span_days"] = max(bucket["span_days"], span_days)
+
+    findings = []
+    for auth_domain, info in by_auth_domain.items():
+        whose = "your own domain " if auth_domain in tracked else ""
+        findings.append({
+            "category": "borrowed_sending_identity", "ref_key": auth_domain,
+            "title": f"{domain_name}: mail persistently authenticates as {auth_domain}, not itself",
+            "detail": (f"{info['total']} msgs across {len(info['ips'])} sending IP(s) "
+                       f"({', '.join(info['ips'])}) over at least {info['span_days']} days consistently pass "
+                       f"SPF/DKIM as {whose}{auth_domain} instead of {domain_name}. This isn't a one-off "
+                       f"misconfiguration -- it looks like {domain_name} sends through {auth_domain}'s verified "
+                       f"ESP identity with a different display From address (a common shared-ESP-account setup). "
+                       f"DMARC alignment can never pass for this traffic unless {domain_name} is verified as its "
+                       f"own sending domain with that provider. As long as this continues, raising {domain_name}'s "
+                       f"DMARC enforcement (pct) will quarantine/reject a growing share of this mail -- if you "
+                       f"don't plan to verify {domain_name} separately, keep its policy at p=none (or a low pct) "
+                       f"rather than following a ramp-up recommendation."),
+        })
+    return findings
 
 
 def update_known_senders(conn, domain_id: int, domain_name: str, settings: dict) -> None:
@@ -887,6 +964,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
             now_day = epoch_day(latest_report_end)
             findings += flag_new_and_failing_senders(conn, domain_id, settings, now_day)
             findings += check_volume_spike(conn, domain_id, domain_name, settings)
+            findings += detect_borrowed_sending_identity(conn, domain_id, domain_name, settings)
         findings += check_staleness(conn, domain_id, domain_name, settings, wall_now)
 
         for f in findings:
@@ -899,7 +977,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
         # four categories were missing that step, so e.g. a failing sender that
         # recovers, or a stale-data warning after ingestion resumes, stayed open forever.
         still_open = {(f["category"], f["ref_key"]) for f in findings}
-        for category in ("new_sender", "failure_investigation"):
+        for category in ("new_sender", "failure_investigation", "borrowed_sending_identity"):
             open_items = conn.execute(
                 "SELECT id, ref_key FROM action_items WHERE domain_id=? AND category=? AND status='open'",
                 (domain_id, category),
