@@ -278,14 +278,20 @@ def _guess_provider(ptr: str):
 def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str,
                            ptr: str = None, skip_lookup: bool = False) -> str:
     """Best-effort, plain-language guess at what an unrecognized sending IP
-    actually is, combining every signal DMARCTool already has:
-      - the sending provider, from reverse DNS (Mailgun, SES, Google, etc.)
-      - which domain(s) it actually authenticates as, from the DMARC report's
-        own SPF/DKIM results -- especially telling when that's one of your
-        OTHER tracked domains, since that's very likely your own infrastructure
-      - whether this exact IP is already labeled for a different domain in
-        your own portfolio -- the strongest signal of all, since you already
-        told DMARCTool what it is
+    actually is, combining every signal DMARCTool already has -- ranked by
+    how trustworthy each one actually is, not just what's available:
+      1. Which domain(s) it actually authenticates as, from the DMARC
+         report's own SPF/DKIM results -- cryptographic proof for this exact
+         message, the most trustworthy signal available.
+      2. Whether this exact IP is already labeled for a different domain in
+         your own portfolio. Weaker than it sounds: ESPs like Mailgun/
+         SendGrid commonly run *shared* sending IP pools reused across many
+         unrelated customer accounts (no dedicated IP purchased), so the same
+         physical IP can legitimately authenticate as completely different,
+         unrelated domains for different customers at different times. If
+         this disagrees with #1, that disagreement itself is the useful
+         finding -- it means "shared pool", not "these domains are related".
+      3. The sending provider name, parsed from reverse DNS.
     Not a certainty -- a starting point for the "What is this?" dropdown, same
     spirit as content_scoring.py's heuristics elsewhere in this tool. Pass
     `ptr` if it's already been looked up (e.g. cached in ptr_checks, or from a
@@ -297,20 +303,31 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
     if ptr is None and not skip_lookup:
         ptr = _reverse_dns(source_ip)
     provider = _guess_provider(ptr)
+    provider_note = f" ({provider})" if provider else ""
     auth_domains = {
         d for d in _passing_auth_domains(conn, domain_id, source_ip)
         if d != domain_name and d not in _ESP_DEFAULT_AUTH_DOMAINS
     }
     cross_domain = _cross_domain_labels(conn, source_ip, domain_id)
+    cross_domain_names = {row["name"] for row in cross_domain}
 
-    if cross_domain:
-        labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
-        return f"this exact IP is already labeled for another domain you track -- {labels}."
+    if auth_domains and cross_domain_names and not (auth_domains & cross_domain_names):
+        cross_labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
+        return (f"likely a SHARED sending IP{provider_note}, not dedicated infrastructure you'd recognize -- "
+                f"for this domain's own mail it actually authenticates as {', '.join(sorted(auth_domains))}, but "
+                f"this exact IP has separately been labeled elsewhere in your portfolio ({cross_labels}). That "
+                f"mismatch usually means the provider recycles this IP across many unrelated customers, not "
+                f"that the two domains are actually related.")
 
     if auth_domains:
-        provider_note = f" via {provider}" if provider else ""
         return (f"authenticates as {', '.join(sorted(auth_domains))}{provider_note} -- if that's "
                 f"a domain/service you use, it's very likely legitimate, just sending under a different identity.")
+
+    if cross_domain_names:
+        labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
+        return (f"this exact IP is already labeled for another domain you track -- {labels}. Worth a caveat: if "
+                f"this is a shared ESP IP pool (common with Mailgun/SendGrid), that alone doesn't guarantee a real "
+                f"relationship -- it's a weaker signal than an actual authenticating domain, which wasn't found here.")
 
     if provider:
         return (f"sent through {provider} (from reverse DNS), but doesn't authenticate as any "
