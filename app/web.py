@@ -520,6 +520,7 @@ def run_checks():
     conn = get_connection()
     run_analysis(conn, verbose=False)
     run_dns_checks(conn, verbose=False)
+    discover_untracked_subdomains(conn, verbose=False)
     run_blocklist_checks(conn, verbose=False)
     run_compliance_checks(conn, verbose=False)
     run_mailgun_checks(conn, verbose=False)
@@ -529,7 +530,7 @@ def run_checks():
     run_listmonk_content_sync(conn, verbose=False)
     run_safe_browsing_checks(conn, verbose=False)
     return RedirectResponse(
-        "/?flash=Analysis, DNS, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, and Safe Browsing checks refreshed.",
+        "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, and Safe Browsing checks refreshed.",
         status_code=303,
     )
 
