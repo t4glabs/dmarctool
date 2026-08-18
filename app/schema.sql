@@ -512,4 +512,17 @@ CREATE TABLE IF NOT EXISTS domain_health_snapshots (
     UNIQUE(domain_id, snapshot_date)
 );
 
+-- Cache for guess_sender_identity()'s WHOIS fallback -- the whois CLI is slow
+-- and sometimes rate-limited by upstream registries, so it's only ever called
+-- live from a background job (never a page render). Caching it here means a
+-- live page (Known Senders table's "What is this?" column, skip_lookup=True)
+-- can still show whatever a background job already discovered for that IP,
+-- instead of nothing. org is nullable: a row can exist to record "we checked
+-- and found nothing" so a dead-end IP isn't re-queried every single cycle.
+CREATE TABLE IF NOT EXISTS ip_whois_cache (
+    source_ip  TEXT PRIMARY KEY,
+    org        TEXT,
+    checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_health_snapshots_domain ON domain_health_snapshots(domain_id, snapshot_date);

@@ -316,6 +316,34 @@ def _whois_org(ip: str, timeout: float = 4.0):
     return None
 
 
+WHOIS_CACHE_RECHECK_HOURS = 24 * 30  # IP network ownership rarely changes; avoid re-hitting rate-limited registries
+
+
+def _cached_whois_org(conn, ip: str, allow_live: bool):
+    """Read-through cache in front of _whois_org() so the slow/rate-limited
+    network call only ever happens once per IP per recheck window, and a live
+    page render (allow_live=False) can still show whatever a background job
+    already discovered instead of nothing. A cached row with org=NULL means
+    "checked, found nothing" -- distinct from "never checked" -- so a dead-end
+    IP isn't re-queried every single background cycle either."""
+    row = conn.execute("SELECT org, checked_at FROM ip_whois_cache WHERE source_ip=?", (ip,)).fetchone()
+    if row:
+        checked_at = datetime.datetime.strptime(row["checked_at"], "%Y-%m-%d %H:%M:%S")
+        fresh = datetime.datetime.utcnow() - checked_at < datetime.timedelta(hours=WHOIS_CACHE_RECHECK_HOURS)
+        if fresh or not allow_live:
+            return row["org"]
+    if not allow_live:
+        return None
+    org = _whois_org(ip)
+    conn.execute(
+        """INSERT INTO ip_whois_cache (source_ip, org, checked_at) VALUES (?, ?, datetime('now'))
+           ON CONFLICT(source_ip) DO UPDATE SET org=excluded.org, checked_at=excluded.checked_at""",
+        (ip, org),
+    )
+    conn.commit()
+    return org
+
+
 def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str,
                            ptr: str = None, skip_lookup: bool = False) -> str:
     """Best-effort, plain-language guess at what an unrecognized sending IP
@@ -345,9 +373,11 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
     _reverse_dns() call the caller already made) to avoid a redundant lookup.
     If `ptr` is None and this is being called from a live web request (not
     the background analysis job), pass skip_lookup=True -- _reverse_dns() and
-    _whois_org() are both blocking network calls (the latter can take several
-    seconds and is sometimes rate-limited), which have no business running
-    synchronously inside a page render."""
+    a fresh WHOIS lookup are both blocking network calls (the latter can take
+    several seconds and is sometimes rate-limited), which have no business
+    running synchronously inside a page render. With skip_lookup=True, the
+    WHOIS step still reads from ip_whois_cache if a background job already
+    looked this IP up -- it just won't trigger a new live lookup."""
     if ptr is None and not skip_lookup:
         ptr = _reverse_dns(source_ip)
     provider = _guess_provider(ptr)
@@ -382,7 +412,7 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
                 f"legitimate if you use {provider} for something, otherwise check {provider}'s own sending/activity "
                 f"logs for a message matching this IP's volume and date range to find out which account sent it.")
 
-    whois_org = None if skip_lookup else _whois_org(source_ip)
+    whois_org = _cached_whois_org(conn, source_ip, allow_live=not skip_lookup)
     if whois_org:
         return (f"reverse DNS didn't match a known email provider, but this IP's network is registered to "
                 f"\"{whois_org}\" (via WHOIS). That's the hosting/cloud company, not necessarily the sender -- "
@@ -399,6 +429,27 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
             "authenticating as any of them, that's a stronger sign of spoofing than a misconfigured integration -- "
             "consider tightening this domain's DMARC policy (raise pct, or move toward p=reject) rather than "
             "trying to identify the sender.")
+
+
+def sender_ip_context(conn, domain_id: int, domain_name: str, source_ip: str) -> str:
+    """Shared by every check module that flags a raw IP in an action item
+    (blocklist.py, compliance.py's PTR check) -- a bare IP on its own tells a
+    reader nothing about whether it's real sending infrastructure or an
+    unrelated one-off spoofing attempt, forcing manual WHOIS/PTR research
+    every time. Bakes in the volume this IP actually sent as this domain plus
+    guess_sender_identity()'s full analysis, computed here where a slow WHOIS
+    call is safe (background-job callers only -- never a live page render)."""
+    sender = conn.execute(
+        "SELECT total_msgs, first_seen FROM known_senders WHERE domain_id=? AND source_ip=?",
+        (domain_id, source_ip),
+    ).fetchone()
+    volume_note = ""
+    if sender:
+        first_seen = datetime.datetime.utcfromtimestamp(sender["first_seen"]).date().isoformat()
+        volume_note = (f"This IP has sent {sender['total_msgs']} message{'s' if sender['total_msgs'] != 1 else ''} "
+                        f"as {domain_name} (first seen {first_seen}). ")
+    guess = guess_sender_identity(conn, domain_id, domain_name, source_ip, skip_lookup=False)
+    return f"{volume_note}{guess[0].upper()}{guess[1:]}"
 
 
 # Minimum span (first_seen to last_seen) a failing sender needs before its

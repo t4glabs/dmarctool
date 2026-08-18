@@ -17,7 +17,7 @@ import ipaddress
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analysis import ensure_default_settings, eligible_known_senders, guess_sender_identity, upsert_system_action
+from app.analysis import ensure_default_settings, eligible_known_senders, sender_ip_context, upsert_system_action
 from app.db import get_connection, init_db
 
 MAX_WORKERS = 10
@@ -77,27 +77,6 @@ def _record(conn, source_ip, status, listed_on, note):
         "INSERT INTO blocklist_checks (source_ip, status, listed_on, note) VALUES (?, ?, ?, ?)",
         (source_ip, status, ",".join(listed_on) if listed_on else None, note),
     )
-
-
-def _ip_context(conn, domain_id: int, domain_name: str, source_ip: str) -> str:
-    """A blocklisted IP shown on its own tells you nothing about whether it's
-    your own real sending infrastructure or a one-off spoofing attempt that
-    happened to already be on a bad list -- this bakes in the volume this IP
-    actually sent as this domain plus guess_sender_identity()'s WHOIS/PTR/
-    auth-domain analysis, computed here in the background job where a slow
-    WHOIS call is safe (never on a live page render), so the action item
-    itself carries the context instead of requiring separate manual research."""
-    sender = conn.execute(
-        "SELECT total_msgs, first_seen FROM known_senders WHERE domain_id=? AND source_ip=?",
-        (domain_id, source_ip),
-    ).fetchone()
-    volume_note = ""
-    if sender:
-        first_seen = datetime.datetime.utcfromtimestamp(sender["first_seen"]).date().isoformat()
-        volume_note = (f"This IP has sent {sender['total_msgs']} message{'s' if sender['total_msgs'] != 1 else ''} "
-                        f"as {domain_name} (first seen {first_seen}). ")
-    guess = guess_sender_identity(conn, domain_id, domain_name, source_ip, skip_lookup=False)
-    return f"{volume_note}{guess[0].upper()}{guess[1:]}"
 
 
 def run_blocklist_checks(conn, verbose: bool = True) -> None:
@@ -162,7 +141,7 @@ def run_blocklist_checks(conn, verbose: bool = True) -> None:
                 upsert_system_action(
                     conn, domain_id, "blocklist", source_ip,
                     f"{domain_name}: sending IP {source_ip} is on a blocklist",
-                    f"{note}. {_ip_context(conn, domain_id, domain_name, source_ip)}",
+                    f"{note}. {sender_ip_context(conn, domain_id, domain_name, source_ip)}",
                 )
         elif status == "clean":
             conn.execute(

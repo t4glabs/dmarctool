@@ -26,7 +26,7 @@ import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 from app.analysis import (
-    all_domains, ensure_default_settings, eligible_known_senders, upsert_system_action,
+    all_domains, ensure_default_settings, eligible_known_senders, sender_ip_context, upsert_system_action,
 )
 from app.db import get_connection, init_db
 
@@ -269,6 +269,20 @@ def _run_ptr(conn, settings, recheck_hours, verbose):
     for row in senders:
         by_ip.setdefault(row["source_ip"], []).append((row["domain_id"], row["domain_name"]))
 
+    # An IP with an already-OPEN ptr_issue stays in the recheck set even if it
+    # later falls below the volume/recency threshold above -- same reasoning
+    # as blocklist.py's identical fix: otherwise it can never re-verify,
+    # clear itself, or pick up the identity context added below.
+    open_ptr_issue_ips = conn.execute(
+        """SELECT DISTINCT ai.ref_key as source_ip, ai.domain_id, d.name as domain_name
+           FROM action_items ai JOIN domains d ON d.id = ai.domain_id
+           WHERE ai.category='ptr_issue' AND ai.status='open' AND ai.ref_key IS NOT NULL"""
+    ).fetchall()
+    for row in open_ptr_issue_ips:
+        by_ip.setdefault(row["source_ip"], [])
+        if (row["domain_id"], row["domain_name"]) not in by_ip[row["source_ip"]]:
+            by_ip[row["source_ip"]].append((row["domain_id"], row["domain_name"]))
+
     to_check = [ip for ip in by_ip if _stale(conn, "ptr_checks", "source_ip", ip, recheck_hours)]
     results = {}
     if to_check:
@@ -287,7 +301,8 @@ def _run_ptr(conn, settings, recheck_hours, verbose):
             for domain_id, domain_name in domains:
                 upsert_system_action(
                     conn, domain_id, "ptr_issue", source_ip,
-                    f"{domain_name}: sending IP {source_ip} has a PTR/reverse-DNS problem", note,
+                    f"{domain_name}: sending IP {source_ip} has a PTR/reverse-DNS problem",
+                    f"{note}. {sender_ip_context(conn, domain_id, domain_name, source_ip)}",
                 )
         else:
             conn.execute(
