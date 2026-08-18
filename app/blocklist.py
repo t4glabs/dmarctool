@@ -17,7 +17,7 @@ import ipaddress
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analysis import ensure_default_settings, eligible_known_senders, upsert_system_action
+from app.analysis import ensure_default_settings, eligible_known_senders, guess_sender_identity, upsert_system_action
 from app.db import get_connection, init_db
 
 MAX_WORKERS = 10
@@ -79,6 +79,27 @@ def _record(conn, source_ip, status, listed_on, note):
     )
 
 
+def _ip_context(conn, domain_id: int, domain_name: str, source_ip: str) -> str:
+    """A blocklisted IP shown on its own tells you nothing about whether it's
+    your own real sending infrastructure or a one-off spoofing attempt that
+    happened to already be on a bad list -- this bakes in the volume this IP
+    actually sent as this domain plus guess_sender_identity()'s WHOIS/PTR/
+    auth-domain analysis, computed here in the background job where a slow
+    WHOIS call is safe (never on a live page render), so the action item
+    itself carries the context instead of requiring separate manual research."""
+    sender = conn.execute(
+        "SELECT total_msgs, first_seen FROM known_senders WHERE domain_id=? AND source_ip=?",
+        (domain_id, source_ip),
+    ).fetchone()
+    volume_note = ""
+    if sender:
+        first_seen = datetime.datetime.utcfromtimestamp(sender["first_seen"]).date().isoformat()
+        volume_note = (f"This IP has sent {sender['total_msgs']} message{'s' if sender['total_msgs'] != 1 else ''} "
+                        f"as {domain_name} (first seen {first_seen}). ")
+    guess = guess_sender_identity(conn, domain_id, domain_name, source_ip, skip_lookup=False)
+    return f"{volume_note}{guess[0].upper()}{guess[1:]}"
+
+
 def run_blocklist_checks(conn, verbose: bool = True) -> None:
     settings = ensure_default_settings(conn)
     recheck_hours = int(settings["blocklist_recheck_hours"])
@@ -92,6 +113,21 @@ def run_blocklist_checks(conn, verbose: bool = True) -> None:
     by_ip = {}
     for row in senders:
         by_ip.setdefault(row["source_ip"], []).append((row["domain_id"], row["domain_name"]))
+
+    # An IP that already has an OPEN blocklist item stays in the recheck set
+    # even if it later falls below the volume/recency threshold above (e.g. a
+    # one-off spoofing attempt that will never send again) -- otherwise it can
+    # never get re-verified, clear itself, or pick up the identity context
+    # added below; it would just sit open forever with stale information.
+    open_blocklist_ips = conn.execute(
+        """SELECT DISTINCT ai.ref_key as source_ip, ai.domain_id, d.name as domain_name
+           FROM action_items ai JOIN domains d ON d.id = ai.domain_id
+           WHERE ai.category='blocklist' AND ai.status='open' AND ai.ref_key IS NOT NULL"""
+    ).fetchall()
+    for row in open_blocklist_ips:
+        by_ip.setdefault(row["source_ip"], [])
+        if (row["domain_id"], row["domain_name"]) not in by_ip[row["source_ip"]]:
+            by_ip[row["source_ip"]].append((row["domain_id"], row["domain_name"]))
 
     # Skip IPs checked within the recheck window -- their last known status
     # (already reflected in blocklist_checks / action_items) just carries forward,
@@ -126,7 +162,7 @@ def run_blocklist_checks(conn, verbose: bool = True) -> None:
                 upsert_system_action(
                     conn, domain_id, "blocklist", source_ip,
                     f"{domain_name}: sending IP {source_ip} is on a blocklist",
-                    note,
+                    f"{note}. {_ip_context(conn, domain_id, domain_name, source_ip)}",
                 )
         elif status == "clean":
             conn.execute(
