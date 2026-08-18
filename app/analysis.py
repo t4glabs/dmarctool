@@ -652,11 +652,17 @@ def update_known_senders(conn, domain_id: int, domain_name: str, settings: dict)
     conn.commit()
 
 
-def likely_causal_senders(conn, domain_id: int, settings: dict) -> list:
+def likely_causal_senders(conn, domain_id: int, domain_name: str, settings: dict, skip_lookup: bool = True) -> list:
     """Senders currently failing badly enough to trigger their own
     failure_investigation item (same thresholds), reused to connect a
     Postmaster DMARC-alignment/deliverability flag back to a concrete likely
-    cause instead of leaving 'fix whichever's flagged' as the only guidance."""
+    cause instead of leaving 'fix whichever's flagged' as the only guidance.
+    Includes the same guess_sender_identity() verdict/headline shown on that
+    failure_investigation item itself, so this note is self-contained --
+    no need to go cross-reference the Known Senders table separately.
+    Defaults to skip_lookup=True (safe for web.py's live-page-render caller);
+    postmaster.py's background-job caller passes skip_lookup=False since a
+    fresh WHOIS lookup is safe there."""
     high_vol = int(settings["high_volume_fail_threshold"])
     high_fail_rate = float(settings["high_fail_rate_threshold"])
     rows = conn.execute("SELECT * FROM known_senders WHERE domain_id = ?", (domain_id,)).fetchall()
@@ -665,7 +671,11 @@ def likely_causal_senders(conn, domain_id: int, settings: dict) -> list:
         total = s["total_msgs"]
         pass_rate = s["pass_msgs"] / total if total else 0
         if total >= high_vol and pass_rate < high_fail_rate:
-            out.append({"source_ip": s["source_ip"], "pass_rate": pass_rate, "total": total})
+            guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], skip_lookup=skip_lookup)
+            out.append({
+                "source_ip": s["source_ip"], "pass_rate": pass_rate, "total": total,
+                "icon": guess["icon"], "headline": guess["headline"],
+            })
     return out
 
 

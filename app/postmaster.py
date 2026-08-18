@@ -318,12 +318,13 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
                 if requirement in ("DMARC_ALIGNMENT", "SPF_AND_DKIM") or (
                     requirement == "DELIVERABILITY" and reason == "SENDER_NOT_COMPLIANT"
                 ):
-                    causal = likely_causal_senders(conn, domain_id, settings)
+                    causal = likely_causal_senders(conn, domain_id, domain_name, settings, skip_lookup=False)
                     if causal:
-                        parts = "; ".join(f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs)" for c in causal)
-                        causal_note = (f" Possible cause: currently-failing sending source(s) -- {parts} -- "
-                                       f"see the matching 'Investigate failing sender' item and Known senders "
-                                       f"in the Senders tab for what they actually authenticate as.")
+                        parts = "; ".join(
+                            f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs) -- {c['icon']} {c['headline']}"
+                            for c in causal
+                        )
+                        causal_note = f" Possible cause: currently-failing sending source(s) -- {parts}."
                 upsert_system_action(
                     conn, domain_id, "postmaster_compliance", ref_key,
                     f"{domain_name}: Gmail flags {requirement.replace('_', ' ').lower()} as needing work",

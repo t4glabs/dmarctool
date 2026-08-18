@@ -125,14 +125,17 @@ def category_remediation(category):
 def _causal_sender_note(causal_senders):
     """Appended to DMARC-alignment-adjacent remediation text when a currently-
     failing sender (same one that would already have its own open
-    failure_investigation item) could plausibly explain the flag -- turns
-    'fix whichever's flagged' into a pointer at a specific IP to go check."""
+    failure_investigation item) could plausibly explain the flag -- names the
+    specific IP AND its guess_sender_identity() verdict inline, so this note
+    is self-contained rather than sending the reader to go cross-reference
+    the matching action item and the Known Senders table separately."""
     if not causal_senders:
         return ""
-    parts = "; ".join(f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs)" for c in causal_senders)
-    return (f" DMARCTool also found a currently-failing sending source that may be causing this: {parts} -- "
-            f"see the matching 'Investigate failing sender' item and the Known senders table (Senders tab) for "
-            f"what it actually authenticates as.")
+    parts = "; ".join(
+        f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs) -- {c['icon']} {c['headline']}"
+        for c in causal_senders
+    )
+    return f" DMARCTool also found a currently-failing sending source that may be causing this: {parts}."
 
 
 def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_spam_rate=None,

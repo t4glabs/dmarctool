@@ -311,7 +311,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     postmaster_reason_by_ref_key = {
         f"{row['postmaster_domain']}:{row['requirement']}": row["reason"] for row in postmaster_compliance
     }
-    postmaster_causal_senders = likely_causal_senders(conn, domain_id, settings)
+    postmaster_causal_senders = likely_causal_senders(conn, domain_id, domain["name"], settings)
     postmaster_spam_sparkline = spam_rate_sparkline(postmaster_daily_series(conn, domain_id, days=60))
 
     ses_window_days = int(settings["ses_stats_window_days"])
