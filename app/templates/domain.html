@@ -86,13 +86,11 @@
       {% if open_items %}
       <div class="actions-list">
         {% for item in open_items %}
-        <div class="item">
+        <div class="item{{ ' verdict-good' if item.no_action_needed else '' }}">
           <div class="title"><span class="badge muted" title="{{ category_help(item.category) }}">{{ category_label(item.category) }}</span> {{ item.title }}</div>
           {% if item.detail %}<div class="detail">{{ item.detail }}</div>{% endif %}
-          {% if item.category == 'blocklist' and item.ip_verdict == 'not_yours' %}
-          <div class="fix">💡 <strong>Nothing to fix here:</strong> this isn't your own sending infrastructure, so there's nothing to request delisting for -- see the verdict above.</div>
-          {% elif item.category == 'failure_investigation' and item.ip_verdict == 'not_yours' %}
-          <div class="fix">💡 <strong>Nothing to fix on your end:</strong> this isn't a misconfigured integration of yours -- it's a spoofing attempt using unrelated infrastructure, see the verdict above.</div>
+          {% if item.reassurance %}
+          <div class="fix">✅ <strong>Nothing to do here:</strong> {{ item.reassurance }}</div>
           {% else %}
           {% set fix = postmaster_remediation(item.ref_key, dns_p, dns_pct, postmaster_stats[0].spam_rate if postmaster_stats else none, postmaster_reason_by_ref_key.get(item.ref_key), google_volume, window_days, postmaster_causal_senders) if item.category == 'postmaster_compliance' else category_remediation(item.category) %}
           {% if fix %}<div class="fix">💡 <strong>How to fix:</strong> {{ fix | urlize(40, target="_blank", rel="noopener") }}</div>{% endif %}

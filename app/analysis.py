@@ -507,11 +507,11 @@ def sender_ip_context(conn, domain_id: int, domain_name: str, source_ip: str, ca
     (blocklist.py, compliance.py's PTR check) -- a bare IP on its own tells a
     reader nothing about whether it's real sending infrastructure or an
     unrelated one-off spoofing attempt, forcing manual WHOIS/PTR research
-    every time. Returns {"verdict", "detail"}: `detail` is a verdict-first,
-    multi-paragraph string (headline, then a summary paragraph combining this
-    IP's real volume/first-seen numbers + guess_sender_identity()'s analysis
-    + an optional category-specific sentence -- e.g. "It's also on a public
-    spam blocklist (...)" -- then an action line), rather than one dense
+    every time. Returns {"verdict", "detail"}: `detail` is a verdict-first
+    string -- headline, then each supporting fact (volume/first-seen, then
+    guess_sender_identity()'s own analysis, then an optional category-
+    specific fact -- e.g. "It's also on a public spam blocklist (...)") as
+    its own bulleted line, then an action line -- rather than one dense
     paragraph mixing all of that together with no visual separation.
     `verdict` lets the caller (e.g. the domain page's "how to fix this" box)
     decide whether generic remediation advice still makes sense for THIS
@@ -526,19 +526,19 @@ def sender_ip_context(conn, domain_id: int, domain_name: str, source_ip: str, ca
         "SELECT total_msgs, first_seen FROM known_senders WHERE domain_id=? AND source_ip=?",
         (domain_id, source_ip),
     ).fetchone()
-    volume_clause = f"This IP as {domain_name}"
+    volume_fact = f"Sent mail pretending to be {domain_name}"
     if sender:
         first_seen = datetime.datetime.utcfromtimestamp(sender["first_seen"]).date().isoformat()
-        volume_clause = (f"This IP sent {sender['total_msgs']} message{'s' if sender['total_msgs'] != 1 else ''} "
-                          f"pretending to be {domain_name} (first seen {first_seen})")
+        volume_fact = (f"Sent {sender['total_msgs']} message{'s' if sender['total_msgs'] != 1 else ''} "
+                       f"pretending to be {domain_name} (first seen {first_seen})")
 
     guess = guess_sender_identity(conn, domain_id, domain_name, source_ip, skip_lookup=False)
-    summary = f"{volume_clause}. {guess['summary']}"
+    bullets = [volume_fact, guess["summary"]]
     if category_fact:
-        fact = category_fact["not_yours"] if guess["verdict"] == "not_yours" else category_fact["otherwise"]
-        summary += f" {fact}"
+        bullets.append(category_fact["not_yours"] if guess["verdict"] == "not_yours" else category_fact["otherwise"])
+    bullet_text = "\n".join(f"• {b}" for b in bullets)
 
-    detail = f"{guess['icon']} {guess['headline']}\n\n{summary}\n\n→ {guess['action']}"
+    detail = f"{guess['icon']} {guess['headline']}\n\n{bullet_text}\n\n→ {guess['action']}"
     return {"verdict": guess["verdict"], "detail": detail}
 
 
@@ -695,9 +695,13 @@ def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, setting
         if is_new and s["classification"] == "unclassified" and total >= 3:
             ptr = _reverse_dns(s["source_ip"])
             guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
-            summary = (f"First seen {day_to_date(first_seen_day)}, {total} msgs, {pass_rate:.0%} pass"
-                       + (f", PTR: {ptr}" if ptr else ", no PTR record") + f". {guess['summary']}")
-            detail = f"{guess['icon']} {guess['headline']}\n\n{summary}\n\n→ {guess['action']}"
+            bullets = [
+                f"First seen {day_to_date(first_seen_day)}, {total} msgs, {pass_rate:.0%} pass",
+                f"PTR: {ptr}" if ptr else "No PTR record",
+                guess["summary"],
+            ]
+            bullet_text = "\n".join(f"• {b}" for b in bullets)
+            detail = f"{guess['icon']} {guess['headline']}\n\n{bullet_text}\n\n→ {guess['action']}"
             findings.append({
                 "category": "new_sender", "ref_key": s["source_ip"],
                 "title": f"New unrecognized sender {s['source_ip']} on this domain",
@@ -708,9 +712,13 @@ def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, setting
             ptr = _reverse_dns(s["source_ip"]) if s["classification"] == "unclassified" else None
             label = classification_label(s["classification"])
             guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
-            summary = (f"{total} msgs, {pass_rate:.0%} pass ({s['fail_msgs']} failing), labeled as: {label}"
-                       + (f", PTR: {ptr}" if ptr else "") + f". {guess['summary']}")
-            detail = f"{guess['icon']} {guess['headline']}\n\n{summary}\n\n→ {guess['action']}"
+            bullets = [
+                f"{total} msgs, {pass_rate:.0%} pass ({s['fail_msgs']} failing)",
+                f"Labeled as: {label}" + (f", PTR: {ptr}" if ptr else ""),
+                guess["summary"],
+            ]
+            bullet_text = "\n".join(f"• {b}" for b in bullets)
+            detail = f"{guess['icon']} {guess['headline']}\n\n{bullet_text}\n\n→ {guess['action']}"
             findings.append({
                 "category": "failure_investigation", "ref_key": s["source_ip"],
                 "title": f"Investigate failing sender {s['source_ip']}",

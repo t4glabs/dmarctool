@@ -131,11 +131,11 @@ def _causal_sender_note(causal_senders):
     the matching action item and the Known Senders table separately."""
     if not causal_senders:
         return ""
-    parts = "; ".join(
-        f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs) -- {c['icon']} {c['headline']}"
+    bullets = "\n".join(
+        f"• {c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs) -- {c['icon']} {c['headline']}"
         for c in causal_senders
     )
-    return f" DMARCTool also found a currently-failing sending source that may be causing this: {parts}."
+    return f"\n\nDMARCTool also found a currently-failing sending source that may be causing this:\n{bullets}"
 
 
 def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_spam_rate=None,

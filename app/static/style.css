@@ -107,11 +107,16 @@ tr:hover td { background: rgba(127,127,127,0.06); }
 .section h2:first-child, .section h2.first { margin-top: 0; }
 .actions-list .item { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
 .actions-list .item:last-child { border-bottom: none; }
+.actions-list .item.verdict-good {
+  background: var(--ok-bg); border: 1px solid var(--ok); border-radius: var(--radius);
+  padding: 0.6rem 0.8rem; margin-bottom: 0.5rem;
+}
+.actions-list .item.verdict-good:not(:last-child) { border-bottom: 1px solid var(--ok); }
 .item .title { font-weight: 600; }
 .item .detail { color: var(--muted); font-size: 0.83rem; margin-top: 0.15rem; white-space: pre-line; }
 .fix {
   font-size: 0.83rem; margin: 0.45rem 0; padding: 0.5rem 0.7rem; border-radius: 6px;
-  background: var(--accent-bg); border-left: 3px solid var(--accent);
+  background: var(--accent-bg); border-left: 3px solid var(--accent); white-space: pre-line;
 }
 .info-wrap { position: relative; display: inline-block; }
 .info-btn {

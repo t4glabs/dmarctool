@@ -320,11 +320,11 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
                 ):
                     causal = likely_causal_senders(conn, domain_id, domain_name, settings, skip_lookup=False)
                     if causal:
-                        parts = "; ".join(
-                            f"{c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs) -- {c['icon']} {c['headline']}"
+                        bullets = "\n".join(
+                            f"• {c['source_ip']} ({c['pass_rate']:.0%} pass, {c['total']} msgs) -- {c['icon']} {c['headline']}"
                             for c in causal
                         )
-                        causal_note = f" Possible cause: currently-failing sending source(s) -- {parts}."
+                        causal_note = f"\n\nPossible cause -- currently-failing sending source(s):\n{bullets}"
                 upsert_system_action(
                     conn, domain_id, "postmaster_compliance", ref_key,
                     f"{domain_name}: Gmail flags {requirement.replace('_', ' ').lower()} as needing work",

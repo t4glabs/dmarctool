@@ -176,6 +176,33 @@ def index(request: Request, flash: str = None):
     return templates.TemplateResponse(request, "index.html", {"domains": domains, "flash": flash})
 
 
+# For these IP-bearing action-item categories, once guess_sender_identity()
+# reaches one of these verdicts the underlying question the finding raised
+# ("is this really you?" / "do you need to fix this yourself?") is already
+# answered -- the card gets a calm green treatment instead of looking as
+# alarming as an unresolved item, and the generic "how to fix" advice
+# (request delisting, check your SPF/DKIM setup) gets replaced with a plain
+# one-line reason it doesn't apply here. blocklist/ptr_issue only count
+# "not_yours" this way, since being blocklisted or missing a PTR record is
+# still a real problem for infrastructure that IS legitimately yours;
+# new_sender/failure_investigation count "legitimate" too, since the whole
+# point of those findings is resolved either way.
+_NO_ACTION_VERDICTS = {
+    "blocklist": {"not_yours"},
+    "ptr_issue": {"not_yours"},
+    "new_sender": {"legitimate", "not_yours"},
+    "failure_investigation": {"legitimate", "not_yours"},
+}
+_REASSURANCE = {
+    ("blocklist", "not_yours"): "this isn't your own sending infrastructure, so there's nothing to request delisting for.",
+    ("ptr_issue", "not_yours"): "this isn't your own sending infrastructure, so its PTR/reverse-DNS setup isn't yours to fix.",
+    ("new_sender", "legitimate"): "this authenticates properly under a different identity -- it's a real service, not something suspicious.",
+    ("new_sender", "not_yours"): "this looks like a spoofing attempt using unrelated infrastructure, not a real integration of yours.",
+    ("failure_investigation", "legitimate"): "this authenticates properly under a different identity, not a misconfigured integration.",
+    ("failure_investigation", "not_yours"): "this is a spoofing attempt using unrelated infrastructure, not a misconfigured integration of yours.",
+}
+
+
 @app.get("/domain/{name}", response_class=HTMLResponse)
 def domain_detail(request: Request, name: str, flash: str = None):
     conn = get_connection()
@@ -230,20 +257,24 @@ def domain_detail(request: Request, name: str, flash: str = None):
            ORDER BY created_at DESC""",
         (domain_id,),
     ).fetchall()
-    # For blocklist/failure_investigation items specifically: the generic
-    # "how to fix" advice (request delisting / check your SPF-DKIM setup)
-    # doesn't make sense when the IP isn't this domain's own infrastructure
-    # at all (a spoofing attempt rather than a misconfigured integration) --
-    # skip_lookup=True since this is a live page render, so it reads whatever
-    # guess_sender_identity() already worked out in the background job (via
-    # ip_whois_cache) rather than a fresh WHOIS call here.
-    open_items = [
-        dict(item, ip_verdict=(
+    # For every IP-bearing category: compute the same guess_sender_identity()
+    # verdict already baked into these items' own detail text, so the
+    # template can style the whole card calmly and swap in a one-line
+    # reassurance once the underlying question is answered, instead of every
+    # item looking equally alarming regardless of severity. skip_lookup=True
+    # since this is a live page render -- reads whatever guess_sender_identity()
+    # already worked out in the background job (via ip_whois_cache), never a
+    # fresh WHOIS call here.
+    def _with_verdict(item):
+        verdict = (
             guess_sender_identity(conn, domain_id, domain["name"], item["ref_key"], skip_lookup=True)["verdict"]
-            if item["category"] in ("blocklist", "failure_investigation") and item["ref_key"] else None
-        ))
-        for item in open_items
-    ]
+            if item["category"] in _NO_ACTION_VERDICTS and item["ref_key"] else None
+        )
+        no_action = verdict in _NO_ACTION_VERDICTS.get(item["category"], set())
+        reassurance = _REASSURANCE.get((item["category"], verdict)) if no_action else None
+        return dict(item, ip_verdict=verdict, no_action_needed=no_action, reassurance=reassurance)
+
+    open_items = [_with_verdict(item) for item in open_items]
 
     senders = conn.execute(
         "SELECT * FROM known_senders WHERE domain_id=? ORDER BY total_msgs DESC LIMIT 50", (domain_id,)
