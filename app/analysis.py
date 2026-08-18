@@ -176,6 +176,14 @@ def _reverse_dns(ip: str, timeout: float = 1.5):
 
 
 def _suggest_classification(conn, domain_id: int, domain_name: str, source_ip: str) -> str:
+    """The mails.<domain> bulk-sending convention is used by more ESPs than
+    just Amazon SES -- Mailgun, Google Workspace, and others all show up
+    under it in practice -- so this checks reverse DNS to tell them apart
+    instead of assuming SES for every match (a real mislabeling bug found
+    when a domain owner asked why there was no "Mailgun" option at all:
+    Mailgun/Google/Outlook senders were all being auto-labeled "ses_newsletter").
+    Falls back to unclassified rather than guessing wrong when PTR doesn't
+    clearly confirm a known provider."""
     row = conn.execute(
         """SELECT DISTINCT ar.domain FROM record_auth_results ar
            JOIN report_records rr ON rr.id = ar.record_id
@@ -185,7 +193,14 @@ def _suggest_classification(conn, domain_id: int, domain_name: str, source_ip: s
     ).fetchall()
     auth_domains = {r["domain"] for r in row}
     if f"mails.{domain_name}" in auth_domains:
-        return "ses_newsletter"
+        provider = _guess_provider(_reverse_dns(source_ip))
+        if provider == "Mailgun":
+            return "mailgun"
+        if provider == "Amazon SES":
+            return "ses_newsletter"
+        if provider == "Google Workspace / Gmail":
+            return "workspace"
+        return "unclassified"
     if domain_name in auth_domains:
         return "primary_domain"
     return "unclassified"
@@ -244,6 +259,7 @@ _ESP_PTR_PATTERNS = (
     ("mtasv.net", "SparkPost"),
     ("postmarkapp.com", "Postmark"),
     ("sendinblue.com", "Brevo (Sendinblue)"),
+    ("mailchannels.net", "MailChannels"),
 )
 
 

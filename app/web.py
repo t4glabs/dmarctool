@@ -74,7 +74,7 @@ templates.env.globals.update({
     "postmaster_remediation": postmaster_remediation,
 })
 
-CLASSIFICATIONS = ["unclassified", "ses_newsletter", "ses_pool", "workspace", "primary_domain", "suspicious", "ignored"]
+CLASSIFICATIONS = ["unclassified", "ses_newsletter", "ses_pool", "mailgun", "workspace", "primary_domain", "suspicious", "ignored"]
 
 app = FastAPI(title="DMARCTool")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
