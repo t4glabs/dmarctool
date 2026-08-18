@@ -31,7 +31,7 @@
         <h2 style="font-size:16px; color:#9a6700; margin:0 0 10px 0;">👀 What we're still working on</h2>
         <ul style="font-size:15px; line-height:1.6; padding-left:20px; margin:0;">
           {% for item in still_open %}
-          <li style="margin-bottom:8px;">{{ item[0]|upper }}{{ item[1:] }}. We're on it.</li>
+          <li style="margin-bottom:8px;">{{ item.story[0]|upper }}{{ item.story[1:] }}.{% if item.detail %} {{ item.detail }}.{% endif %} We're on it.</li>
           {% endfor %}
         </ul>
         {% if contact_cta %}

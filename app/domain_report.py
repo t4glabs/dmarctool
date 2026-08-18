@@ -216,12 +216,27 @@ def _ses_rate_impact(conn, config_set: str, around: datetime.datetime):
     return _rate_drop_sentence(before, after)
 
 
-def _suppression_story(count: int) -> str:
-    return (f"{count} email address{'es' if count != 1 else ''} stopped accepting your mail during this time "
-            f"(usually a typo, a full inbox, or an account that's closed). These are now automatically skipped "
-            f"so they don't drag down your other emails. Keeping a clean list like this is exactly what helps "
-            f"your future emails land in the inbox instead of getting filtered out, so it's worth removing them "
-            f"from your own list too")
+MAX_SAMPLE_EMAILS = 3  # how many actual addresses to name before falling back to "and N more"
+
+
+def _suppression_story(count: int, sample_emails=None) -> str:
+    """Naming a few of the real addresses (this is the domain owner's own
+    subscriber list, not a third party's) makes "some people" concrete --
+    the reader can picture who actually stopped receiving mail, rather than
+    an abstract count."""
+    base = (f"{count} email address{'es' if count != 1 else ''} stopped accepting your mail during this time "
+            f"(usually a typo, a full inbox, or an account that's closed)")
+    if sample_emails:
+        shown = sample_emails[:MAX_SAMPLE_EMAILS]
+        names = ", ".join(shown)
+        remaining = len(sample_emails) - len(shown)
+        if remaining > 0:
+            names += f", and {remaining} more"
+        base += f", including {names}"
+    base += (". These are now automatically skipped so they don't drag down your other emails. Keeping a clean "
+             "list like this is exactly what helps your future emails land in the inbox instead of getting "
+             "filtered out, so it's worth removing them from your own list too")
+    return base
 
 
 def _explain_policy_for_owner(p: str, pct) -> str:
@@ -305,13 +320,13 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str):
 
         if category in ("mailgun_new_suppressions", "ses_new_suppressions"):
             table = "mailgun_suppressions" if category == "mailgun_new_suppressions" else "ses_suppressions"
-            count = conn.execute(
-                f"SELECT COUNT(*) as n FROM {table} WHERE domain_id=? AND first_seen_at BETWEEN ? AND ?",
+            emails = [x["email"] for x in conn.execute(
+                f"SELECT email FROM {table} WHERE domain_id=? AND first_seen_at BETWEEN ? AND ? ORDER BY first_seen_at",
                 (domain_id, start_str, end_str),
-            ).fetchone()["n"] or 0
-            if count <= 0:
+            ).fetchall()]
+            if not emails:
                 continue
-            items.append({"story": _suppression_story(count), "impact": None})
+            items.append({"story": _suppression_story(len(emails), emails), "impact": None})
             continue
 
         impact = None
@@ -334,8 +349,70 @@ def _still_open_categories(conn, domain_id: int) -> set:
     return {r["category"] for r in rows if r["category"] not in _OPERATOR_ONLY_CATEGORIES}
 
 
-def _still_open_problems(conn, domain_id: int):
-    return [_plain_problem(c) for c in _still_open_categories(conn, domain_id)]
+def _reputation_rate_detail(conn, category: str, ref_key: str, start_str: str, end_str: str):
+    """Real bounce/complaint numbers for THIS report's own window on a still-
+    open reputation issue -- turns "more than usual" into an actual count
+    and rate the reader can picture. Returns None rather than a fabricated
+    figure when there's no volume to compute one from."""
+    start_day, end_day = start_str[:10], end_str[:10]
+    if category == "mailgun_reputation":
+        row = conn.execute(
+            """SELECT SUM(accepted) as total, SUM(failed_perm) as bounced, SUM(complained) as complained
+               FROM mailgun_daily_stats WHERE mailgun_domain=? AND day BETWEEN ? AND ?""",
+            (ref_key, start_day, end_day),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """SELECT SUM(delivered) as total, SUM(bounced) as bounced, SUM(complained) as complained
+               FROM ses_event_counts WHERE configuration_set=? AND day BETWEEN ? AND ?""",
+            (ref_key, start_day, end_day),
+        ).fetchone()
+    total = row["total"] or 0
+    bad = (row["bounced"] or 0) + (row["complained"] or 0)
+    if not total or not bad:
+        return None
+    days = max(1, (datetime.datetime.strptime(end_day, "%Y-%m-%d") - datetime.datetime.strptime(start_day, "%Y-%m-%d")).days)
+    rate = bad * 100 / total
+    return (f"That's about {bad} out of the {total} emails you sent over the last {days} days, "
+            f"roughly {rate:.1f}%")
+
+
+def _still_open_items(conn, domain_id: int, start_str: str, end_str: str):
+    """Still-open action items, one per category (same dedup as the
+    dashboard's own list), each carrying as concrete a "detail" clause as we
+    can honestly compute for THIS report's window -- real sample addresses
+    for suppressions, a real count/rate for reputation issues. `detail` is
+    None when we don't have enough to say something concrete without
+    guessing (matches _resolved_items' "impact" discipline)."""
+    rows = conn.execute(
+        """SELECT category, MAX(ref_key) as ref_key FROM action_items
+           WHERE domain_id=? AND status='open' AND category IS NOT NULL
+           GROUP BY category""",
+        (domain_id,),
+    ).fetchall()
+    items = []
+    for r in rows:
+        category, ref_key = r["category"], r["ref_key"]
+        if category in _OPERATOR_ONLY_CATEGORIES:
+            continue
+
+        if category in ("mailgun_new_suppressions", "ses_new_suppressions") and ref_key:
+            table = "mailgun_suppressions" if category == "mailgun_new_suppressions" else "ses_suppressions"
+            key_col = "mailgun_domain" if category == "mailgun_new_suppressions" else "configuration_set"
+            emails = [x["email"] for x in conn.execute(
+                f"""SELECT email FROM {table} WHERE domain_id=? AND {key_col}=? AND first_seen_at BETWEEN ? AND ?
+                    ORDER BY first_seen_at""",
+                (domain_id, ref_key, start_str, end_str),
+            ).fetchall()]
+            if emails:
+                items.append({"story": _suppression_story(len(emails), emails), "detail": None})
+                continue
+
+        detail = None
+        if category in (_MAILGUN_RATE_IMPACT_CATEGORIES | _SES_RATE_IMPACT_CATEGORIES) and ref_key:
+            detail = _reputation_rate_detail(conn, category, ref_key, start_str, end_str)
+        items.append({"story": _plain_problem(category), "detail": detail})
+    return items
 
 
 def _contact_aikyam_cta(still_open_categories: set):
@@ -598,7 +675,7 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
 
 def build_domain_report(conn, domain_id: int, domain_name: str,
                          period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
-    """Returns {"resolved": [{"story","impact"}, ...], "still_open": [...],
+    """Returns {"resolved": [{"story","impact"}, ...], "still_open": [{"story","detail"}, ...],
     "deliverability": str, "protection": str, "newsletter": str|None,
     "blocklist_events": int, "protection_tightened": str|None,
     "spam_trend": str|None, "risk_warning": str|None, "comparison": str|None,
@@ -614,7 +691,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
 
     resolved = _resolved_items(conn, domain_id, start_str, end_str)
     still_open_categories = _still_open_categories(conn, domain_id)
-    still_open = [_plain_problem(c) for c in still_open_categories]
+    still_open = _still_open_items(conn, domain_id, start_str, end_str)
 
     total, passed, rate = domain_window_stats(conn, domain_id, start_epoch, end_epoch)
     _, _, prev_rate = domain_window_stats(conn, domain_id, prev_start_epoch, start_epoch)
