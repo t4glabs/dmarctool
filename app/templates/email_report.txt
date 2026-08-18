@@ -34,8 +34,8 @@ GOOGLE'S OWN VIEW OF YOUR MAIL
 YOUR NEWSLETTER'S REACH
 {{ newsletter }}
 {% endif %}
-{%- if blocklist_events %}
-NOTE: one of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }}. We're keeping watch.
+{%- if blocklist_good_news %}
+🛡️ {{ blocklist_good_news }}
 {% endif %}
 {%- if comparison %}
 HOW YOU COMPARE

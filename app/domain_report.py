@@ -29,8 +29,8 @@ no new dependency.
 import argparse
 import datetime
 
-from app.analysis import (current_policy_run, domain_window_stats, ensure_default_settings, epoch_day,
-                           recent_campaigns, sending_cadence)
+from app.analysis import (cached_whois_org, current_policy_run, domain_window_stats, ensure_default_settings,
+                           epoch_day, guess_sender_identity, recent_campaigns, sending_cadence)
 from app.config import get_secret
 from app.db import get_connection, init_db
 from app.mailgun import send_message
@@ -296,13 +296,17 @@ def save_report_settings(conn, domain_id: int, recipient_email: str, recipient_l
     conn.commit()
 
 
-def _resolved_items(conn, domain_id: int, start_str: str, end_str: str):
+def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklist_real_ips: set = frozenset()):
     """Resolved action items in this window as {"story", "impact"} dicts,
     one per category (matching how they're deduplicated in the dashboard's
     own action-items list) -- excludes manual_log rows (status='logged', not
     a system-detected problem) and operator-only categories. `impact` is a
     real, computed before/after clause, or None when no material change was
-    found -- never a fabricated number."""
+    found -- never a fabricated number. `blocklist_real_ips` -- computed once
+    by build_domain_report() via _blocklist_split() -- skips the generic
+    "blocklist" line here when the representative IP for this window turns
+    out to be a spoofing attempt rather than a real concern; that case gets
+    its own good-news story elsewhere instead."""
     rows = conn.execute(
         """SELECT category, MIN(resolved_at) as resolved_at, MAX(ref_key) as ref_key
            FROM action_items
@@ -315,6 +319,8 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str):
     for r in rows:
         category = r["category"]
         if category in _OPERATOR_ONLY_CATEGORIES:
+            continue
+        if category == "blocklist" and r["ref_key"] not in blocklist_real_ips:
             continue
         resolved_at = datetime.datetime.strptime(r["resolved_at"], "%Y-%m-%d %H:%M:%S")
 
@@ -340,13 +346,26 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str):
     return items
 
 
-def _still_open_categories(conn, domain_id: int) -> set:
+def _still_open_categories(conn, domain_id: int, blocklist_real_ips: set = frozenset()) -> set:
+    """Distinct open, reader-facing categories -- used to gate the contact-
+    Aikyam CTA and the tips library. A currently-open "blocklist" item only
+    counts here if at least one of its IPs is a real concern (not a spoofing
+    attempt already handled elsewhere), otherwise there's nothing left to
+    act on for that category."""
     rows = conn.execute(
-        """SELECT DISTINCT category FROM action_items
+        """SELECT DISTINCT category, ref_key FROM action_items
            WHERE domain_id=? AND status='open' AND category IS NOT NULL""",
         (domain_id,),
     ).fetchall()
-    return {r["category"] for r in rows if r["category"] not in _OPERATOR_ONLY_CATEGORIES}
+    categories = set()
+    for r in rows:
+        category = r["category"]
+        if category in _OPERATOR_ONLY_CATEGORIES:
+            continue
+        if category == "blocklist" and r["ref_key"] not in blocklist_real_ips:
+            continue
+        categories.add(category)
+    return categories
 
 
 def _reputation_rate_detail(conn, category: str, ref_key: str, start_str: str, end_str: str):
@@ -377,13 +396,14 @@ def _reputation_rate_detail(conn, category: str, ref_key: str, start_str: str, e
             f"roughly {rate:.1f}%")
 
 
-def _still_open_items(conn, domain_id: int, start_str: str, end_str: str):
+def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blocklist_real_ips: set = frozenset()):
     """Still-open action items, one per category (same dedup as the
     dashboard's own list), each carrying as concrete a "detail" clause as we
     can honestly compute for THIS report's window -- real sample addresses
     for suppressions, a real count/rate for reputation issues. `detail` is
     None when we don't have enough to say something concrete without
-    guessing (matches _resolved_items' "impact" discipline)."""
+    guessing (matches _resolved_items' "impact" discipline). `blocklist_real_ips`
+    -- see _resolved_items() for why the "blocklist" category is filtered."""
     rows = conn.execute(
         """SELECT category, MAX(ref_key) as ref_key FROM action_items
            WHERE domain_id=? AND status='open' AND category IS NOT NULL
@@ -394,6 +414,8 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str):
     for r in rows:
         category, ref_key = r["category"], r["ref_key"]
         if category in _OPERATOR_ONLY_CATEGORIES:
+            continue
+        if category == "blocklist" and ref_key not in blocklist_real_ips:
             continue
 
         if category in ("mailgun_new_suppressions", "ses_new_suppressions") and ref_key:
@@ -600,24 +622,44 @@ def _health_comparison(conn, domain_id: int):
             f"aikyam supports right now.")
 
 
-def _blocklist_events(conn, domain_id: int, start_str: str, end_str: str):
-    """Any blocklist listing among this domain's known sending IPs during the
-    window -- known_senders is only used here for the *set of IPs*, which is
-    stable identity data, not the cumulative counters (see the module-level
-    caution elsewhere in this codebase about known_senders not being safe for
-    period-diffing counts)."""
-    ips = [r["source_ip"] for r in conn.execute(
-        "SELECT DISTINCT source_ip FROM known_senders WHERE domain_id=?", (domain_id,)
-    ).fetchall()]
-    if not ips:
-        return 0
-    placeholders = ",".join("?" for _ in ips)
-    row = conn.execute(
-        f"""SELECT COUNT(*) as n FROM blocklist_checks
-            WHERE source_ip IN ({placeholders}) AND status='listed' AND checked_at BETWEEN ? AND ?""",
-        (*ips, start_str, end_str),
-    ).fetchone()
-    return row["n"] or 0
+def _blocklist_split(conn, domain_id: int, domain_name: str, start_str: str, end_str: str):
+    """Every distinct IP flagged on a public blocklist for this domain that's
+    either still open or was resolved during this window, split by
+    guess_sender_identity()'s verdict. A one-off spoofing attempt that was
+    already on a public blocklist is good news worth celebrating -- DMARC
+    protection working exactly as intended, with nothing to do with this
+    domain's own sending setup -- so it's treated completely differently
+    from an IP that might genuinely be this domain's own infrastructure,
+    which still needs the reader's attention as a real problem. Returns
+    (good_news_story_or_None, {ref_keys that are real concerns, not spoofers}).
+    skip_lookup=True throughout -- this only ever runs from a report render
+    (background job or live preview/test-send), never triggering a fresh
+    WHOIS call; it just reads whatever the background blocklist check has
+    already cached."""
+    rows = conn.execute(
+        """SELECT DISTINCT ref_key FROM action_items
+           WHERE domain_id=? AND category='blocklist' AND ref_key IS NOT NULL
+             AND (status='open' OR (status IN ('done','dismissed') AND resolved_at BETWEEN ? AND ?))""",
+        (domain_id, start_str, end_str),
+    ).fetchall()
+    good_ips, real_ips = [], []
+    for r in rows:
+        ip = r["ref_key"]
+        verdict = guess_sender_identity(conn, domain_id, domain_name, ip, skip_lookup=True)["verdict"]
+        (good_ips if verdict == "not_yours" else real_ips).append(ip)
+
+    good_story = None
+    if good_ips:
+        n = len(good_ips)
+        sample_orgs = [org for ip in good_ips[:2] if (org := cached_whois_org(conn, ip, allow_live=False))]
+        example = f" -- for example, one came from \"{sample_orgs[0]}\"" if sample_orgs else ""
+        good_story = (
+            f"DMARCTool caught {n} attempt{'s' if n != 1 else ''} to send fake email pretending to be your "
+            f"organization{example}. Each one was already on a public \"known troublemaker\" list and came from "
+            f"an ordinary home/business internet connection, not any platform you actually use -- so it was never "
+            f"a real risk to your reputation. This is exactly what your email protection is for."
+        )
+    return good_story, set(real_ips)
 
 
 def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, end_date: str, prev_start_date: str):
@@ -677,7 +719,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
                          period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
     """Returns {"resolved": [{"story","impact"}, ...], "still_open": [{"story","detail"}, ...],
     "deliverability": str, "protection": str, "newsletter": str|None,
-    "blocklist_events": int, "protection_tightened": str|None,
+    "blocklist_good_news": str|None, "protection_tightened": str|None,
     "spam_trend": str|None, "risk_warning": str|None, "comparison": str|None,
     "contact_cta": str|None, "tips": [str, ...]} -- plain-language sections
     ready to drop into the email templates. `resolved` items carry a real,
@@ -689,9 +731,10 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     end_epoch = int(period_end.timestamp())
     prev_start_epoch = start_epoch - (end_epoch - start_epoch)
 
-    resolved = _resolved_items(conn, domain_id, start_str, end_str)
-    still_open_categories = _still_open_categories(conn, domain_id)
-    still_open = _still_open_items(conn, domain_id, start_str, end_str)
+    blocklist_good_news, blocklist_real_ips = _blocklist_split(conn, domain_id, domain_name, start_str, end_str)
+    resolved = _resolved_items(conn, domain_id, start_str, end_str, blocklist_real_ips)
+    still_open_categories = _still_open_categories(conn, domain_id, blocklist_real_ips)
+    still_open = _still_open_items(conn, domain_id, start_str, end_str, blocklist_real_ips)
 
     total, passed, rate = domain_window_stats(conn, domain_id, start_epoch, end_epoch)
     _, _, prev_rate = domain_window_stats(conn, domain_id, prev_start_epoch, start_epoch)
@@ -717,8 +760,6 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         (period_start - (period_end - period_start)).date().isoformat(),
     )
 
-    blocklist_events = _blocklist_events(conn, domain_id, start_str, end_str)
-
     protection_tightened = _protection_tightened(conn, domain_id, period_start)
     spam_trend = _spam_rate_trend(conn, domain_id, period_end)
     risk_warning = _risk_warning(conn, domain_id, period_end)
@@ -733,7 +774,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "deliverability": deliverability,
         "protection": protection,
         "newsletter": newsletter,
-        "blocklist_events": blocklist_events,
+        "blocklist_good_news": blocklist_good_news,
         "protection_tightened": protection_tightened,
         "spam_trend": spam_trend,
         "risk_warning": risk_warning,

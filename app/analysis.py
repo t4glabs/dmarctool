@@ -319,7 +319,7 @@ def _whois_org(ip: str, timeout: float = 4.0):
 WHOIS_CACHE_RECHECK_HOURS = 24 * 30  # IP network ownership rarely changes; avoid re-hitting rate-limited registries
 
 
-def _cached_whois_org(conn, ip: str, allow_live: bool):
+def cached_whois_org(conn, ip: str, allow_live: bool):
     """Read-through cache in front of _whois_org() so the slow/rate-limited
     network call only ever happens once per IP per recheck window, and a live
     page render (allow_live=False) can still show whatever a background job
@@ -480,7 +480,7 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
                        f"sending/activity logs for a message matching this IP's volume and date range."),
         }
 
-    whois_org = _cached_whois_org(conn, source_ip, allow_live=not skip_lookup)
+    whois_org = cached_whois_org(conn, source_ip, allow_live=not skip_lookup)
     org_class = _classify_whois_org(whois_org)
 
     if org_class == "consumer_isp":

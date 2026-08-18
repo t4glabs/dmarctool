@@ -80,9 +80,9 @@
       </div>
       {% endif %}
 
-      {% if blocklist_events %}
-      <div style="margin-bottom:24px; background:#fff5f5; border-radius:6px; padding:14px 16px;">
-        <p style="font-size:15px; margin:0; color:#b42318;">⚠️ One of your sending computers was temporarily flagged by a spam-safety list {{ blocklist_events }} time{{ 's' if blocklist_events != 1 else '' }}. We're keeping watch.</p>
+      {% if blocklist_good_news %}
+      <div style="margin-bottom:24px; background:#f0f7f0; border-radius:6px; padding:14px 16px;">
+        <p style="font-size:15px; line-height:1.6; margin:0; color:#1a7f37;">🛡️ {{ blocklist_good_news }}</p>
       </div>
       {% endif %}
 
