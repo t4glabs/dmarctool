@@ -4,7 +4,7 @@
 
 {% set fix_note_ns = namespace(id=0) %}
 {% macro fix_note(text) %}{% if text %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="How to fix this">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover>💡 <strong>How to fix:</strong> {{ text | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
-{% macro guess_note(guess) %}{% if guess %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Best guess at what this is">🔎</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong>{{ guess.icon }} {{ guess.headline }}</strong>{{ "\n\n" }}{{ guess.summary | urlize(40, target="_blank", rel="noopener") }}{{ "\n\n→ " }}{{ guess.action | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
+{% macro guess_note(guess) %}{% if guess %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Best guess at what this is">?</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong>{{ guess.icon }} {{ guess.headline }}</strong>{{ "\n\n" }}{{ guess.summary | urlize(40, target="_blank", rel="noopener") }}{{ "\n\n→ " }}{{ guess.action | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
 
 <div class="back"><a href="/">&larr; all domains</a></div>
 <h1>{{ domain.name }}</h1>
@@ -86,7 +86,7 @@
       {% if open_items %}
       <div class="actions-list">
         {% for item in open_items %}
-        <div class="item{{ ' verdict-good' if item.no_action_needed else '' }}">
+        <div class="item{{ ' verdict-good' if item.no_action_needed else '' }}{{ ' verdict-bad' if item.ip_flagged else '' }}">
           <div class="title"><span class="badge muted" title="{{ category_help(item.category) }}">{{ category_label(item.category) }}</span> {{ item.title }}</div>
           {% if item.detail %}<div class="detail">{{ item.detail }}</div>{% endif %}
           {% if item.reassurance %}

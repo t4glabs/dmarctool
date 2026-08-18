@@ -365,6 +365,10 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
     """Best-effort, plain-language guess at what an unrecognized sending IP
     actually is, combining every signal DMARCTool already has -- ranked by
     how trustworthy each one actually is, not just what's available:
+      0. Whether a human already manually flagged this exact IP as
+         "suspicious" while reviewing a different domain -- checked before
+         everything else below, since a deliberate human judgment call
+         outranks even cryptographic authentication.
       1. Which domain(s) it actually authenticates as, from the DMARC
          report's own SPF/DKIM results -- cryptographic proof for this exact
          message, the most trustworthy signal available.
@@ -386,9 +390,11 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
     every caller (the Known Senders table's popover, and sender_ip_context()
     for action items) can render a clear "here's the bottom line" followed by
     the reasoning, instead of burying the verdict inside a wall of caveats.
-    "verdict" is one of "legitimate" | "maybe" | "not_yours" | "unclear" --
-    callers use it to decide things like whether a generic "how to fix this"
-    box still makes sense (it doesn't, for "not_yours"). Not a certainty --
+    "verdict" is one of "flagged" | "legitimate" | "maybe" | "not_yours" |
+    "unclear" -- callers use it to decide things like whether a generic
+    "how to fix this" box still makes sense (it doesn't, for "not_yours"),
+    or whether to show an urgent warning instead of a calm one ("flagged").
+    Not a certainty --
     a starting point, same spirit as content_scoring.py's heuristics
     elsewhere in this tool. Pass `ptr` if it's already been looked up (e.g.
     cached in ptr_checks, or from a _reverse_dns() call the caller already
@@ -409,6 +415,25 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
     }
     cross_domain = _cross_domain_labels(conn, source_ip, domain_id)
     cross_domain_names = {row["name"] for row in cross_domain}
+
+    # A human already reviewed this exact IP and flagged it as suspicious
+    # while looking at a different domain -- that's a stronger signal than
+    # cryptographic authentication, which only proves *who* technically sent
+    # a message, not whether they're trustworthy. Checked first, ahead of
+    # every other signal below, so it can never get softened into "probably
+    # just a shared ESP pool."
+    flagged_domains = [row["name"] for row in cross_domain if row["classification"] == "suspicious"]
+    if flagged_domains:
+        return {
+            "verdict": "flagged",
+            "icon": "🚨",
+            "headline": "Flagged as suspicious elsewhere in your portfolio",
+            "summary": (f"You've already marked this exact IP as suspicious (spam or spoofing) while reviewing "
+                        f"{', '.join(flagged_domains)}. That's a stronger signal than authentication alone -- "
+                        f"worth treating this with real caution here too, even if it also authenticates as "
+                        f"something else."),
+            "action": "Consider marking this sender suspicious here as well, and keep an eye on where else this IP shows up.",
+        }
 
     if auth_domains and cross_domain_names and not (auth_domains & cross_domain_names):
         cross_labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)

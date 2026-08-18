@@ -220,6 +220,7 @@ CLASSIFICATION_LABELS = {
     "ses_pool": "Amazon SES sending pool",
     "workspace": "Google Workspace mail",
     "primary_domain": "Regular company email",
+    "suspicious": "Suspicious (spam or spoofing)",
     "ignored": "Ignored (marked as fine)",
 }
 
@@ -229,6 +230,7 @@ CLASSIFICATION_HELP = {
     "ses_pool": "Manually labeled as part of your Amazon SES sending pool.",
     "workspace": "Manually labeled as Google Workspace mail.",
     "primary_domain": "This sender signs its mail using your main domain name directly (often regular company mailbox traffic).",
+    "suspicious": "You've flagged this sender as suspicious, spam, or a spoofing attempt. If this exact IP ever shows up on another domain you track, that domain's \"What is this?\" guess will call out this label as a warning.",
     "ignored": "You've marked this sender as fine -- it won't be called out again.",
 }
 

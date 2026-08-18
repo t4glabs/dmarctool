@@ -112,6 +112,11 @@ tr:hover td { background: rgba(127,127,127,0.06); }
   padding: 0.6rem 0.8rem; margin-bottom: 0.5rem;
 }
 .actions-list .item.verdict-good:not(:last-child) { border-bottom: 1px solid var(--ok); }
+.actions-list .item.verdict-bad {
+  background: var(--bad-bg); border: 1px solid var(--bad); border-radius: var(--radius);
+  padding: 0.6rem 0.8rem; margin-bottom: 0.5rem;
+}
+.actions-list .item.verdict-bad:not(:last-child) { border-bottom: 1px solid var(--bad); }
 .item .title { font-weight: 600; }
 .item .detail { color: var(--muted); font-size: 0.83rem; margin-top: 0.15rem; white-space: pre-line; }
 .fix {

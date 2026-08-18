@@ -74,7 +74,7 @@ templates.env.globals.update({
     "postmaster_remediation": postmaster_remediation,
 })
 
-CLASSIFICATIONS = ["unclassified", "ses_newsletter", "ses_pool", "workspace", "primary_domain", "ignored"]
+CLASSIFICATIONS = ["unclassified", "ses_newsletter", "ses_pool", "workspace", "primary_domain", "suspicious", "ignored"]
 
 app = FastAPI(title="DMARCTool")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -272,7 +272,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         )
         no_action = verdict in _NO_ACTION_VERDICTS.get(item["category"], set())
         reassurance = _REASSURANCE.get((item["category"], verdict)) if no_action else None
-        return dict(item, ip_verdict=verdict, no_action_needed=no_action, reassurance=reassurance)
+        return dict(item, ip_verdict=verdict, no_action_needed=no_action, reassurance=reassurance,
+                    ip_flagged=(verdict == "flagged"))
 
     open_items = [_with_verdict(item) for item in open_items]
 
