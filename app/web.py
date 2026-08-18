@@ -230,16 +230,17 @@ def domain_detail(request: Request, name: str, flash: str = None):
            ORDER BY created_at DESC""",
         (domain_id,),
     ).fetchall()
-    # For blocklist items specifically: the generic "request delisting" advice
-    # doesn't make sense when the IP isn't this domain's own infrastructure at
-    # all (a one-off spoofing attempt that happened to already be on a public
-    # list) -- skip_lookup=True since this is a live page render, so it reads
-    # whatever sender_ip_context() already worked out in the background job
-    # (via ip_whois_cache) rather than a fresh WHOIS call here.
+    # For blocklist/failure_investigation items specifically: the generic
+    # "how to fix" advice (request delisting / check your SPF-DKIM setup)
+    # doesn't make sense when the IP isn't this domain's own infrastructure
+    # at all (a spoofing attempt rather than a misconfigured integration) --
+    # skip_lookup=True since this is a live page render, so it reads whatever
+    # guess_sender_identity() already worked out in the background job (via
+    # ip_whois_cache) rather than a fresh WHOIS call here.
     open_items = [
         dict(item, ip_verdict=(
             guess_sender_identity(conn, domain_id, domain["name"], item["ref_key"], skip_lookup=True)["verdict"]
-            if item["category"] == "blocklist" and item["ref_key"] else None
+            if item["category"] in ("blocklist", "failure_investigation") and item["ref_key"] else None
         ))
         for item in open_items
     ]

@@ -194,7 +194,7 @@ def _suggest_classification(conn, domain_id: int, domain_name: str, source_ip: s
 def _passing_auth_domains(conn, domain_id: int, source_ip: str) -> dict:
     """{domain: {mechanisms}} for every SPF/DKIM domain that actually PASSED
     for this sender's messages, per the DMARC report's own recorded auth
-    results -- the shared core behind both _evaluated_auth_domains (per-sender
+    results -- the shared core behind both guess_sender_identity (per-sender
     detail text) and detect_borrowed_sending_identity (cross-sender pattern)."""
     rows = conn.execute(
         """SELECT rar.mechanism, rar.domain, COUNT(*) as n
@@ -224,28 +224,6 @@ def _cross_domain_labels(conn, source_ip: str, exclude_domain_id: int):
            WHERE ks.source_ip = ? AND ks.domain_id != ? AND ks.classification != 'unclassified'""",
         (source_ip, exclude_domain_id),
     ).fetchall()
-
-
-def _evaluated_auth_domains(conn, domain_id: int, source_ip: str) -> str:
-    """What a failing sender's messages actually authenticate as, per the DMARC
-    report's own recorded SPF/DKIM results -- the single most useful fact when
-    triaging a consistently-failing sender. A sender that fails DMARC for the
-    tracked domain but *passes* SPF/DKIM as some other domain almost always
-    means a misconfigured shared ESP/mailing setup pointed at the wrong From
-    address (e.g. another one of your own domains' sending config), not
-    spoofing -- worth saying explicitly rather than leaving it to guesswork."""
-    by_domain = _passing_auth_domains(conn, domain_id, source_ip)
-    cross_domain = _cross_domain_labels(conn, source_ip, domain_id)
-    cross_note = ""
-    if cross_domain:
-        labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
-        cross_note = f" This exact IP is already labeled elsewhere in your portfolio -- {labels}."
-    if not by_domain:
-        return ("no SPF/DKIM authentication passed for this sender at all -- could be spoofed mail, "
-                "not a misconfigured integration." + cross_note)
-    parts = [f"{d} ({'/'.join(sorted(m))} pass)" for d, m in by_domain.items()]
-    return (f"actually authenticates as: {', '.join(parts)} -- likely a misconfigured sender/From-address "
-            f"on that domain's setup, not spoofing.{cross_note}")
 
 
 # Recognizable reverse-DNS patterns for common sending providers -- short and
@@ -719,10 +697,10 @@ def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, setting
         if total >= high_vol and pass_rate < high_fail_rate:
             ptr = _reverse_dns(s["source_ip"]) if s["classification"] == "unclassified" else None
             label = classification_label(s["classification"])
-            auth_note = _evaluated_auth_domains(conn, domain_id, s["source_ip"])
-            detail = (f"{total} msgs, {pass_rate:.0%} pass ({s['fail_msgs']} failing), "
-                      f"labeled as: {label}" + (f", PTR: {ptr}" if ptr else "")
-                      + f". {auth_note[0].upper()}{auth_note[1:]}")
+            guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
+            summary = (f"{total} msgs, {pass_rate:.0%} pass ({s['fail_msgs']} failing), labeled as: {label}"
+                       + (f", PTR: {ptr}" if ptr else "") + f". {guess['summary']}")
+            detail = f"{guess['icon']} {guess['headline']}\n\n{summary}\n\n→ {guess['action']}"
             findings.append({
                 "category": "failure_investigation", "ref_key": s["source_ip"],
                 "title": f"Investigate failing sender {s['source_ip']}",
