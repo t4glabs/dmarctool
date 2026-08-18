@@ -652,11 +652,11 @@ def _blocklist_split(conn, domain_id: int, domain_name: str, start_str: str, end
     if good_ips:
         n = len(good_ips)
         sample_orgs = [org for ip in good_ips[:2] if (org := cached_whois_org(conn, ip, allow_live=False))]
-        example = f" -- for example, one came from \"{sample_orgs[0]}\"" if sample_orgs else ""
+        example = f", for example one came from \"{sample_orgs[0]}\"" if sample_orgs else ""
         good_story = (
-            f"DMARCTool caught {n} attempt{'s' if n != 1 else ''} to send fake email pretending to be your "
+            f"We caught {n} attempt{'s' if n != 1 else ''} to send fake email pretending to be your "
             f"organization{example}. Each one was already on a public \"known troublemaker\" list and came from "
-            f"an ordinary home/business internet connection, not any platform you actually use -- so it was never "
+            f"an ordinary home/business internet connection, not any platform you actually use. It was never "
             f"a real risk to your reputation. This is exactly what your email protection is for."
         )
     return good_story, set(real_ips)
