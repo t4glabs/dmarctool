@@ -344,8 +344,46 @@ def _cached_whois_org(conn, ip: str, allow_live: bool):
     return org
 
 
+# Consumer/residential/mobile ISPs never legitimately run bulk email
+# infrastructure for a small nonprofit's newsletter -- an IP registered to one
+# of these is a strong, plain signal that a low-volume sender using it is a
+# spoofer, not "possibly your own setup". Deliberately not exhaustive (same
+# "good enough, not exhaustive" tradeoff as _ESP_PTR_PATTERNS above) -- covers
+# the major national telecoms most likely to show up in real spoofing
+# attempts, plus generic residential-ISP naming patterns.
+_CONSUMER_ISP_KEYWORDS = (
+    "CHINANET", "CHINA MOBILE", "CHINA UNICOM", "CHINA TELECOM", "KOREA TELECOM", "PLDT",
+    "COMCAST", "AT&T", "VERIZON", "CHARTER COMMUNICATIONS", "COX COMMUNICATIONS",
+    "BSNL", "AIRTEL", "RELIANCE JIO", "VODAFONE", "DEUTSCHE TELEKOM", "TELEFONICA",
+    "TELKOM", "TELSTRA", "BROADBAND", "RESIDENTIAL", "DSL", "CABLE", "BSKYB", "VIRGIN MEDIA",
+)
+
+# Major cloud/hosting providers CAN legitimately run a customer's real mail-
+# sending app -- these get a softer "worth checking" verdict rather than the
+# confident "not yours" one above, since a genuine service you use might run
+# on one of these.
+_CLOUD_HOSTING_KEYWORDS = (
+    "AMAZON", "AWS", "GOOGLE", "MICROSOFT", "AZURE", "DIGITALOCEAN", "HETZNER", "OVH",
+    "LINODE", "VULTR", "ALIBABA", "TENCENT", "ORACLE", "CLOUDFLARE", "FASTLY", "RACKSPACE",
+)
+
+
+def _classify_whois_org(org: str) -> str:
+    """"consumer_isp" | "cloud_hosting" | "unknown" -- the distinction that
+    decides whether an unrecognized IP gets a confident "not your
+    infrastructure" verdict or a hedged "worth checking" one."""
+    if not org:
+        return "unknown"
+    upper = org.upper()
+    if any(kw in upper for kw in _CONSUMER_ISP_KEYWORDS):
+        return "consumer_isp"
+    if any(kw in upper for kw in _CLOUD_HOSTING_KEYWORDS):
+        return "cloud_hosting"
+    return "unknown"
+
+
 def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str,
-                           ptr: str = None, skip_lookup: bool = False) -> str:
+                           ptr: str = None, skip_lookup: bool = False) -> dict:
     """Best-effort, plain-language guess at what an unrecognized sending IP
     actually is, combining every signal DMARCTool already has -- ranked by
     how trustworthy each one actually is, not just what's available:
@@ -365,23 +403,28 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
          registered owner via WHOIS (a much vaguer signal: "Google LLC" or
          "Amazon Technologies Inc." just means *some* customer's app is
          running on that cloud, not which one -- worded accordingly below).
-    When nothing resolves, returns concrete manual next steps instead of just
-    "go figure it out" -- the process to follow, not just a shrug. Not a
-    certainty -- a starting point for the "What is this?" dropdown, same
-    spirit as content_scoring.py's heuristics elsewhere in this tool. Pass
-    `ptr` if it's already been looked up (e.g. cached in ptr_checks, or from a
-    _reverse_dns() call the caller already made) to avoid a redundant lookup.
-    If `ptr` is None and this is being called from a live web request (not
-    the background analysis job), pass skip_lookup=True -- _reverse_dns() and
-    a fresh WHOIS lookup are both blocking network calls (the latter can take
-    several seconds and is sometimes rate-limited), which have no business
-    running synchronously inside a page render. With skip_lookup=True, the
-    WHOIS step still reads from ip_whois_cache if a background job already
-    looked this IP up -- it just won't trigger a new live lookup."""
+    Returns a dict {"verdict", "icon", "headline", "summary", "action"} --
+    verdict-first and structured, rather than one dense hedging paragraph, so
+    every caller (the Known Senders table's popover, and sender_ip_context()
+    for action items) can render a clear "here's the bottom line" followed by
+    the reasoning, instead of burying the verdict inside a wall of caveats.
+    "verdict" is one of "legitimate" | "maybe" | "not_yours" | "unclear" --
+    callers use it to decide things like whether a generic "how to fix this"
+    box still makes sense (it doesn't, for "not_yours"). Not a certainty --
+    a starting point, same spirit as content_scoring.py's heuristics
+    elsewhere in this tool. Pass `ptr` if it's already been looked up (e.g.
+    cached in ptr_checks, or from a _reverse_dns() call the caller already
+    made) to avoid a redundant lookup. If `ptr` is None and this is being
+    called from a live web request (not the background analysis job), pass
+    skip_lookup=True -- _reverse_dns() and a fresh WHOIS lookup are both
+    blocking network calls (the latter can take several seconds and is
+    sometimes rate-limited), which have no business running synchronously
+    inside a page render. With skip_lookup=True, the WHOIS step still reads
+    from ip_whois_cache if a background job already looked this IP up -- it
+    just won't trigger a new live lookup."""
     if ptr is None and not skip_lookup:
         ptr = _reverse_dns(source_ip)
     provider = _guess_provider(ptr)
-    provider_note = f" ({provider})" if provider else ""
     auth_domains = {
         d for d in _passing_auth_domains(conn, domain_id, source_ip)
         if d != domain_name and d not in _ESP_DEFAULT_AUTH_DOMAINS
@@ -391,65 +434,134 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
 
     if auth_domains and cross_domain_names and not (auth_domains & cross_domain_names):
         cross_labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
-        return (f"likely a SHARED sending IP{provider_note}, not dedicated infrastructure you'd recognize -- "
-                f"for this domain's own mail it actually authenticates as {', '.join(sorted(auth_domains))}, but "
-                f"this exact IP has separately been labeled elsewhere in your portfolio ({cross_labels}). That "
-                f"mismatch usually means the provider recycles this IP across many unrelated customers, not "
-                f"that the two domains are actually related.")
+        provider_note = f" ({provider})" if provider else ""
+        return {
+            "verdict": "legitimate",
+            "icon": "✅",
+            "headline": f"Shared sending IP{provider_note}, not dedicated infrastructure",
+            "summary": (f"It authenticates as {', '.join(sorted(auth_domains))} for this domain's own mail, but "
+                        f"this exact IP has separately been labeled elsewhere in your portfolio ({cross_labels}). "
+                        f"That mismatch usually just means the provider recycles this IP across many unrelated "
+                        f"customers, not that the two domains are actually related."),
+            "action": "No action needed -- this is normal behavior for a shared-IP email provider like Mailgun or SendGrid.",
+        }
 
     if auth_domains:
-        return (f"authenticates as {', '.join(sorted(auth_domains))}{provider_note} -- if that's "
-                f"a domain/service you use, it's very likely legitimate, just sending under a different identity.")
+        return {
+            "verdict": "legitimate",
+            "icon": "✅",
+            "headline": "Likely legitimate",
+            "summary": (f"It authenticates as {', '.join(sorted(auth_domains))}"
+                        + (f" ({provider})" if provider else "") + "."),
+            "action": (f"No action needed if {', '.join(sorted(auth_domains))} is a domain or service you use -- "
+                       f"this is just mail sent under a different identity."),
+        }
 
     if cross_domain_names:
         labels = "; ".join(f"{row['name']}: {classification_label(row['classification'])}" for row in cross_domain)
-        return (f"this exact IP is already labeled for another domain you track -- {labels}. Worth a caveat: if "
-                f"this is a shared ESP IP pool (common with Mailgun/SendGrid), that alone doesn't guarantee a real "
-                f"relationship -- it's a weaker signal than an actual authenticating domain, which wasn't found here.")
+        return {
+            "verdict": "maybe",
+            "icon": "❓",
+            "headline": "Possibly related to another domain you track",
+            "summary": (f"This exact IP is already labeled for another domain you track ({labels}). If that's a "
+                        f"shared ESP IP pool (common with Mailgun/SendGrid), that alone doesn't guarantee a real "
+                        f"relationship -- it's a weaker signal than an actual authenticating domain, which wasn't "
+                        f"found here."),
+            "action": "Worth a look if you don't recognize the connection; otherwise no action needed.",
+        }
 
     if provider:
-        return (f"sent through {provider} (from reverse DNS), but doesn't authenticate as any domain you track -- "
-                f"legitimate if you use {provider} for something, otherwise check {provider}'s own sending/activity "
-                f"logs for a message matching this IP's volume and date range to find out which account sent it.")
+        return {
+            "verdict": "maybe",
+            "icon": "✅",
+            "headline": f"Likely legitimate ({provider})",
+            "summary": f"It's sent through {provider}, based on its reverse DNS, but doesn't authenticate as any domain you track.",
+            "action": (f"Legitimate if you use {provider} for something; otherwise check {provider}'s own "
+                       f"sending/activity logs for a message matching this IP's volume and date range."),
+        }
 
     whois_org = _cached_whois_org(conn, source_ip, allow_live=not skip_lookup)
+    org_class = _classify_whois_org(whois_org)
+
+    if org_class == "consumer_isp":
+        return {
+            "verdict": "not_yours",
+            "icon": "✅",
+            "headline": "Not your infrastructure -- likely a blocked spoofing attempt",
+            "summary": (f"It's a home/business internet connection (\"{whois_org}\"), not Mailgun, SES, Google, "
+                        f"or any platform you use -- consumer internet providers never run bulk email "
+                        f"infrastructure like this."),
+            "action": "No action needed. This is DMARC protection working as intended.",
+        }
+
+    if org_class == "cloud_hosting":
+        return {
+            "verdict": "maybe",
+            "icon": "❓",
+            "headline": "Possibly your infrastructure -- worth checking",
+            "summary": (f"It's hosted on {whois_org}, a cloud/hosting provider -- this could be a real app or "
+                        f"service you use, or it could be a spoofer renting cloud infrastructure."),
+            "action": f"Check whether you (or a service you use) run anything on {whois_org} that could plausibly send mail as this domain.",
+        }
+
     if whois_org:
-        return (f"reverse DNS didn't match a known email provider, but this IP's network is registered to "
-                f"\"{whois_org}\" (via WHOIS). That's the hosting/cloud company, not necessarily the sender -- "
-                f"if it's a major cloud provider (Google, AWS, Azure, DigitalOcean, Hetzner, OVH, etc.), it likely "
-                f"means one specific app or account on that cloud is sending this, not the provider itself. To "
-                f"narrow it down: check whether you (or a service you use) run anything on {whois_org}'s "
-                f"infrastructure that could plausibly send mail as this domain.")
+        return {
+            "verdict": "unclear",
+            "icon": "❓",
+            "headline": "Unclear -- worth a quick look",
+            "summary": f"Its network is registered to \"{whois_org}\", which doesn't clearly look like either a residential ISP or a major cloud provider.",
+            "action": f"Check whether you (or a service you use) run anything on {whois_org}'s infrastructure that could plausibly send mail as this domain.",
+        }
 
-    return ("genuinely unfamiliar -- no provider (from reverse DNS or WHOIS), authenticating domain, or prior "
-            "labeling found for this IP. To investigate by hand: (1) note the PTR/rDNS shown in the Known Senders "
-            "table, if any; (2) check whether the volume here is a one-off blip or growing over time -- a single "
-            "small burst that never recurs is usually low-risk noise, while steady/growing volume deserves more "
-            "attention; (3) if this same IP starts showing up across multiple of your tracked domains without ever "
-            "authenticating as any of them, that's a stronger sign of spoofing than a misconfigured integration -- "
-            "consider tightening this domain's DMARC policy (raise pct, or move toward p=reject) rather than "
-            "trying to identify the sender.")
+    return {
+        "verdict": "unclear",
+        "icon": "❓",
+        "headline": "Genuinely unfamiliar",
+        "summary": "No provider, authenticating domain, or prior labeling was found for this IP.",
+        "action": ("If this same IP starts showing up across multiple of your tracked domains without ever "
+                   "authenticating as any of them, that's a stronger sign of spoofing than a misconfigured "
+                   "integration -- a single one-off is usually low-risk noise."),
+    }
 
 
-def sender_ip_context(conn, domain_id: int, domain_name: str, source_ip: str) -> str:
+def sender_ip_context(conn, domain_id: int, domain_name: str, source_ip: str, category_fact: dict = None) -> dict:
     """Shared by every check module that flags a raw IP in an action item
     (blocklist.py, compliance.py's PTR check) -- a bare IP on its own tells a
     reader nothing about whether it's real sending infrastructure or an
     unrelated one-off spoofing attempt, forcing manual WHOIS/PTR research
-    every time. Bakes in the volume this IP actually sent as this domain plus
-    guess_sender_identity()'s full analysis, computed here where a slow WHOIS
-    call is safe (background-job callers only -- never a live page render)."""
+    every time. Returns {"verdict", "detail"}: `detail` is a verdict-first,
+    multi-paragraph string (headline, then a summary paragraph combining this
+    IP's real volume/first-seen numbers + guess_sender_identity()'s analysis
+    + an optional category-specific sentence -- e.g. "It's also on a public
+    spam blocklist (...)" -- then an action line), rather than one dense
+    paragraph mixing all of that together with no visual separation.
+    `verdict` lets the caller (e.g. the domain page's "how to fix this" box)
+    decide whether generic remediation advice still makes sense for THIS
+    specific IP -- it doesn't, for "not_yours". `category_fact`, if given, is
+    a {"not_yours": str, "otherwise": str} pair -- the wording needs to
+    differ ("this fake attempt was already going nowhere" vs "this needs
+    fixing"), and the verdict is only known after guess_sender_identity()
+    runs, so the caller can't safely pick one string up front. Computed here
+    where a slow WHOIS call is safe (background-job callers only -- never a
+    live page render)."""
     sender = conn.execute(
         "SELECT total_msgs, first_seen FROM known_senders WHERE domain_id=? AND source_ip=?",
         (domain_id, source_ip),
     ).fetchone()
-    volume_note = ""
+    volume_clause = f"This IP as {domain_name}"
     if sender:
         first_seen = datetime.datetime.utcfromtimestamp(sender["first_seen"]).date().isoformat()
-        volume_note = (f"This IP has sent {sender['total_msgs']} message{'s' if sender['total_msgs'] != 1 else ''} "
-                        f"as {domain_name} (first seen {first_seen}). ")
+        volume_clause = (f"This IP sent {sender['total_msgs']} message{'s' if sender['total_msgs'] != 1 else ''} "
+                          f"pretending to be {domain_name} (first seen {first_seen})")
+
     guess = guess_sender_identity(conn, domain_id, domain_name, source_ip, skip_lookup=False)
-    return f"{volume_note}{guess[0].upper()}{guess[1:]}"
+    summary = f"{volume_clause}. {guess['summary']}"
+    if category_fact:
+        fact = category_fact["not_yours"] if guess["verdict"] == "not_yours" else category_fact["otherwise"]
+        summary += f" {fact}"
+
+    detail = f"{guess['icon']} {guess['headline']}\n\n{summary}\n\n→ {guess['action']}"
+    return {"verdict": guess["verdict"], "detail": detail}
 
 
 # Minimum span (first_seen to last_seen) a failing sender needs before its
@@ -595,9 +707,9 @@ def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, setting
         if is_new and s["classification"] == "unclassified" and total >= 3:
             ptr = _reverse_dns(s["source_ip"])
             guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
-            detail = (f"First seen {day_to_date(first_seen_day)}, {total} msgs, "
-                      f"{pass_rate:.0%} pass" + (f", PTR: {ptr}" if ptr else ", no PTR record")
-                      + f" Best guess: {guess}")
+            summary = (f"First seen {day_to_date(first_seen_day)}, {total} msgs, {pass_rate:.0%} pass"
+                       + (f", PTR: {ptr}" if ptr else ", no PTR record") + f". {guess['summary']}")
+            detail = f"{guess['icon']} {guess['headline']}\n\n{summary}\n\n→ {guess['action']}"
             findings.append({
                 "category": "new_sender", "ref_key": s["source_ip"],
                 "title": f"New unrecognized sender {s['source_ip']} on this domain",

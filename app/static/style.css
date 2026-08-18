@@ -108,7 +108,7 @@ tr:hover td { background: rgba(127,127,127,0.06); }
 .actions-list .item { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
 .actions-list .item:last-child { border-bottom: none; }
 .item .title { font-weight: 600; }
-.item .detail { color: var(--muted); font-size: 0.83rem; margin-top: 0.15rem; }
+.item .detail { color: var(--muted); font-size: 0.83rem; margin-top: 0.15rem; white-space: pre-line; }
 .fix {
   font-size: 0.83rem; margin: 0.45rem 0; padding: 0.5rem 0.7rem; border-radius: 6px;
   background: var(--accent-bg); border-left: 3px solid var(--accent);
@@ -123,7 +123,7 @@ tr:hover td { background: rgba(127,127,127,0.06); }
 .info-btn:hover { border-color: var(--accent); color: var(--accent); }
 .fix-popover.fix {
   position: fixed; inset: auto; margin: 0; z-index: 20;
-  width: max-content; max-width: 320px; white-space: normal; text-align: left;
+  width: max-content; max-width: 320px; white-space: pre-line; text-align: left;
   border: none; border-left: 3px solid var(--accent); background: var(--card-raised);
   box-shadow: 0 6px 20px rgba(0,0,0,0.3); overflow: visible;
 }

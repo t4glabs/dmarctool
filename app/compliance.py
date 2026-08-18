@@ -298,11 +298,16 @@ def _run_ptr(conn, settings, recheck_hours, verbose):
         if verbose:
             print(f"[PTR] {source_ip} ({', '.join(n for _, n in domains)}): {status} -- {note}")
         if status in ("ptr_missing", "mismatch"):
+            category_fact = {
+                "not_yours": "It also has a reverse-DNS problem, unsurprising for a spoofing attempt rather than real infrastructure.",
+                "otherwise": f"It also has a reverse-DNS problem ({note}), which can make legitimate mail from it look untrustworthy to receivers.",
+            }
             for domain_id, domain_name in domains:
+                ctx = sender_ip_context(conn, domain_id, domain_name, source_ip, category_fact=category_fact)
                 upsert_system_action(
                     conn, domain_id, "ptr_issue", source_ip,
                     f"{domain_name}: sending IP {source_ip} has a PTR/reverse-DNS problem",
-                    f"{note}. {sender_ip_context(conn, domain_id, domain_name, source_ip)}",
+                    ctx["detail"],
                 )
         else:
             conn.execute(

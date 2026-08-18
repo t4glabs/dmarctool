@@ -137,11 +137,17 @@ def run_blocklist_checks(conn, verbose: bool = True) -> None:
             print(f"  {status}: {note}")
 
         if status == "listed":
+            listed_str = ", ".join(listed_on)
+            category_fact = {
+                "not_yours": f"It's also on a public spam blocklist ({listed_str}), so this exact attempt was already going to be rejected elsewhere too.",
+                "otherwise": f"It's also on a public spam blocklist ({listed_str}), which can send mail straight to spam or get it silently rejected.",
+            }
             for domain_id, domain_name in domains:
+                ctx = sender_ip_context(conn, domain_id, domain_name, source_ip, category_fact=category_fact)
                 upsert_system_action(
                     conn, domain_id, "blocklist", source_ip,
                     f"{domain_name}: sending IP {source_ip} is on a blocklist",
-                    f"{note}. {sender_ip_context(conn, domain_id, domain_name, source_ip)}",
+                    ctx["detail"],
                 )
         elif status == "clean":
             conn.execute(
