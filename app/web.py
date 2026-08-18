@@ -529,7 +529,7 @@ def classify_sender(name: str, ip: str, classification: str = Form(...)):
         (classification, domain["id"], ip),
     )
     conn.commit()
-    return RedirectResponse(f"/domain/{name}", status_code=303)
+    return RedirectResponse(f"/domain/{name}#senders", status_code=303)
 
 
 @app.post("/domain/{name}/log")
