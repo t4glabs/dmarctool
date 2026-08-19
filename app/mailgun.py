@@ -35,6 +35,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from app.analysis import ensure_default_settings, upsert_system_action
+from app.bounce_reasons import categorize_bounce
 from app.config import get_secret
 from app.db import get_connection, init_db
 
@@ -178,18 +179,24 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
     suppressions, so this is deliberately given its own, shorter window
     (mailgun_events_window_days) rather than reusing the full stats window.
     Returns ({email_address: {"display": name_or_None, "delivered": n,
-    "failed": n}}, error)."""
+    "failed": n}}, [per-failure detail dicts], error) -- the failure list
+    carries one entry per individual bounced/rejected message (recipient,
+    plain-language category via bounce_reasons.categorize_bounce(), raw
+    reason, bounce type, timestamp), so a reader can download exactly the
+    addresses behind one identity+category combination instead of one
+    combined CSV they'd have to filter by hand."""
     begin = email.utils.format_datetime(
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=window_days)
     )
     breakdown = {}
+    failures = []
     for event in ("delivered", "failed"):
         url = (f"{API_BASE}/{mailgun_domain}/events?event={event}"
                f"&begin={urllib.parse.quote(begin)}&ascending=yes&limit=300")
         while url:
             data, err = _get(url, api_key)
             if err:
-                return None, err
+                return None, None, err
             items = data.get("items", [])
             for item in items:
                 headers = (item.get("message") or {}).get("headers") or {}
@@ -202,9 +209,26 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
                 entry[event] += 1
                 if display and not entry["display"]:
                     entry["display"] = display
+                if event == "failed":
+                    ds = item.get("delivery-status") or {}
+                    reason_text = ds.get("message") or ds.get("description") or item.get("reason") or ""
+                    severity = item.get("severity")
+                    bounce_type = {"permanent": "Permanent", "temporary": "Transient"}.get(severity)
+                    occurred_at = None
+                    ts = item.get("timestamp")
+                    if ts:
+                        occurred_at = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                    failures.append({
+                        "from_address": addr,
+                        "recipient": item.get("recipient", ""),
+                        "category": categorize_bounce(reason_text, bounce_type),
+                        "reason": reason_text,
+                        "bounce_type": bounce_type,
+                        "occurred_at": occurred_at,
+                    })
             nxt = data.get("paging", {}).get("next")
             url = nxt if nxt and items else None
-    return breakdown, None
+    return breakdown, failures, None
 
 
 def _identity_breakdown_note(breakdown: dict, window_days: int, top_n: int = 5) -> str:
@@ -244,9 +268,9 @@ def _fetch_all(mailgun_domain, api_key, window_days, events_window_days):
     for endpoint, kind in SUPPRESSION_KINDS.items():
         items, err = fetch_suppressions(mailgun_domain, endpoint, api_key)
         suppressions[kind] = (items, err)
-    identity, identity_err = fetch_identity_breakdown(mailgun_domain, api_key, events_window_days)
+    identity, identity_failures, identity_err = fetch_identity_breakdown(mailgun_domain, api_key, events_window_days)
     return {"stats": (stats, stats_err), "daily": daily, "suppressions": suppressions,
-            "identity": (identity, identity_err)}
+            "identity": (identity, identity_failures, identity_err)}
 
 
 def run_mailgun_checks(conn, verbose: bool = True) -> None:
@@ -290,7 +314,7 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
     for mailgun_domain in to_check:
         domain_id, domain_name = matches[mailgun_domain]
 
-        identity_breakdown, identity_err = fetched[mailgun_domain]["identity"]
+        identity_breakdown, identity_failures, identity_err = fetched[mailgun_domain]["identity"]
         if identity_err:
             if verbose:
                 print(f"[mailgun] {mailgun_domain}: identity breakdown fetch failed -- {identity_err}")
@@ -303,6 +327,15 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
                        (domain_id, mailgun_domain, from_address, from_display, window_days, delivered, failed)
                        VALUES (?,?,?,?,?,?,?)""",
                     (domain_id, mailgun_domain, addr, c["display"], events_window_days, c["delivered"], c["failed"]),
+                )
+            conn.execute("DELETE FROM mailgun_identity_failures WHERE mailgun_domain=?", (mailgun_domain,))
+            for f in identity_failures:
+                conn.execute(
+                    """INSERT INTO mailgun_identity_failures
+                       (domain_id, mailgun_domain, from_address, recipient, category, reason, bounce_type, occurred_at)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (domain_id, mailgun_domain, f["from_address"], f["recipient"], f["category"],
+                     f["reason"], f["bounce_type"], f["occurred_at"]),
                 )
 
         stats, err = fetched[mailgun_domain]["stats"]

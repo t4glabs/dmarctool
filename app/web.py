@@ -330,6 +330,22 @@ def domain_detail(request: Request, name: str, flash: str = None):
            ORDER BY mailgun_domain, failed DESC, delivered DESC""",
         (domain_id,),
     ).fetchall()
+    # Keyed by "mailgun_domain|from_address" (Jinja can't easily do tuple-key
+    # dict lookups) -- lets the template offer one download link per
+    # identity+category combination that actually has failures, instead of a
+    # single "download everything" link the reader has to filter by hand.
+    mailgun_identity_categories = {}
+    for row in conn.execute(
+        """SELECT mailgun_domain, from_address, category, COUNT(*) as n
+           FROM mailgun_identity_failures WHERE domain_id=?
+           GROUP BY mailgun_domain, from_address, category
+           ORDER BY n DESC""",
+        (domain_id,),
+    ):
+        key = f"{row['mailgun_domain']}|{row['from_address']}"
+        mailgun_identity_categories.setdefault(key, []).append(
+            {"category": row["category"], "count": row["n"]}
+        )
 
     postmaster_stats = conn.execute(
         """SELECT * FROM postmaster_stats WHERE domain_id=?
@@ -436,6 +452,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mailgun_suppression_counts": mailgun_suppression_counts,
         "mailgun_rate_sparkline": mailgun_rate_sparkline,
         "mailgun_identity_stats": mailgun_identity_stats,
+        "mailgun_identity_categories": mailgun_identity_categories,
         "postmaster_stats": postmaster_stats,
         "postmaster_compliance": postmaster_compliance,
         "postmaster_reason_by_ref_key": postmaster_reason_by_ref_key,
@@ -501,6 +518,41 @@ def download_suppressions(name: str):
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{name}_suppressions.csv"'},
+    )
+
+
+@app.get("/domain/{name}/mailgun_identity_failures.csv")
+def download_mailgun_identity_failures(name: str, mailgun_domain: str, from_address: str, category: str = None):
+    """One sender identity's failed messages, optionally narrowed to one
+    bounce-reason category -- so a domain owner can pull exactly "no such
+    user" or "mailbox full" for one specific identity instead of the whole
+    combined suppression list and filtering it by hand."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+
+    query = """SELECT recipient, category, bounce_type, reason, occurred_at FROM mailgun_identity_failures
+               WHERE domain_id=? AND mailgun_domain=? AND from_address=?"""
+    params = [domain["id"], mailgun_domain, from_address]
+    if category:
+        query += " AND category=?"
+        params.append(category)
+    query += " ORDER BY occurred_at"
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["recipient", "category", "bounce_type", "reason", "occurred_at"])
+    for r in conn.execute(query, params):
+        writer.writerow([r["recipient"], r["category"], r["bounce_type"] or "", r["reason"] or "", r["occurred_at"] or ""])
+
+    safe_identity = from_address.replace("@", "_at_")
+    safe_category = re.sub(r"[^A-Za-z0-9]+", "_", category).strip("_") if category else "all"
+    filename = f"{name}_{safe_identity}_{safe_category}_failures.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

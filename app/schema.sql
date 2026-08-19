@@ -214,6 +214,25 @@ CREATE TABLE IF NOT EXISTS mailgun_identity_stats (
 );
 CREATE INDEX IF NOT EXISTS idx_mailgun_identity_domain ON mailgun_identity_stats(domain_id, mailgun_domain);
 
+-- Per-recipient detail behind mailgun_identity_stats' failed counts -- one
+-- row per failed message, with its plain-language category (via
+-- bounce_reasons.categorize_bounce()) so a specific identity+category
+-- combination can be downloaded as its own CSV instead of one big list the
+-- reader has to filter by hand. Same replace-fresh-each-check lifecycle as
+-- mailgun_identity_stats.
+CREATE TABLE IF NOT EXISTS mailgun_identity_failures (
+    id             INTEGER PRIMARY KEY,
+    domain_id      INTEGER NOT NULL REFERENCES domains(id),
+    mailgun_domain TEXT NOT NULL,
+    from_address   TEXT NOT NULL,
+    recipient      TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    reason         TEXT,
+    bounce_type    TEXT,
+    occurred_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mailgun_identity_failures ON mailgun_identity_failures(domain_id, mailgun_domain, from_address, category);
+
 CREATE INDEX IF NOT EXISTS idx_mailgun_stats_domain ON mailgun_stats(domain_id, checked_at);
 
 CREATE TABLE IF NOT EXISTS mailgun_suppressions (
