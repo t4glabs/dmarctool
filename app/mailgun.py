@@ -167,11 +167,25 @@ def fetch_suppressions(mailgun_domain: str, kind: str, api_key: str):
 
 
 def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int):
-    """Delivered/failed counts per real "From" identity, via Mailgun's Events
-    API -- fetch_stats() above only gives one blended number for the whole
-    Mailgun domain, which hides the real picture when several different
-    websites/campaigns share one Mailgun account (a common Aikyam setup:
-    several beneficiary orgs' mail going out under one shared domain).
+    """Delivered/retried/failed counts per real "From" identity, via
+    Mailgun's Events API -- fetch_stats() above only gives one blended
+    number for the whole Mailgun domain, which hides the real picture when
+    several different websites/campaigns share one Mailgun account (a
+    common Aikyam setup: several beneficiary orgs' mail going out under one
+    shared domain).
+
+    Deduplicates by (recipient, message-id) before counting anything as a
+    failure. Mailgun automatically retries a message that gets a temporary
+    (4xx) response on a backoff schedule -- found via a real investigation
+    that one recipient's 18 raw "failed" events were actually just 3 real
+    messages, each retried 6 times after a temporary rejection, all 3 of
+    which eventually delivered fine. Counting every retry attempt as its
+    own failure would have overstated that identity's real failure rate by
+    a wide margin. A message only counts as a genuine failure here if it
+    never shows up as delivered at all; one that needed retries but got
+    through is tracked separately as "retried_ok" -- worth knowing about
+    (a slow/strict recipient server), but not a real problem.
+
     Groups by the actual From email address parsed out of each event's own
     message headers, not by whichever Mailgun domain the event happens to be
     filed under. Mailgun's own event-log retention is limited (usually
@@ -179,17 +193,20 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
     suppressions, so this is deliberately given its own, shorter window
     (mailgun_events_window_days) rather than reusing the full stats window.
     Returns ({email_address: {"display": name_or_None, "delivered": n,
-    "failed": n}}, [per-failure detail dicts], error) -- the failure list
-    carries one entry per individual bounced/rejected message (recipient,
-    plain-language category via bounce_reasons.categorize_bounce(), raw
-    reason, bounce type, timestamp), so a reader can download exactly the
-    addresses behind one identity+category combination instead of one
-    combined CSV they'd have to filter by hand."""
+    "retried_ok": n, "failed": n}}, [per-failure detail dicts], error) --
+    the failure list carries one entry per message that never ultimately
+    delivered (recipient, plain-language category via
+    bounce_reasons.categorize_bounce() using its LAST retry attempt, raw
+    reason, bounce type, timestamp of that last attempt), so a reader can
+    download exactly the addresses behind one identity+category combination
+    instead of one combined CSV they'd have to filter by hand."""
     begin = email.utils.format_datetime(
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=window_days)
     )
-    breakdown = {}
-    failures = []
+    delivered_keys = set()       # {(recipient, message_id)} -- eventually succeeded, however many attempts it took
+    failed_attempts = {}         # (recipient, message_id) -> latest failure detail (ascending order => last write is the final attempt)
+    identity_by_key = {}         # (recipient, message_id) -> (addr, display)
+
     for event in ("delivered", "failed"):
         url = (f"{API_BASE}/{mailgun_domain}/events?event={event}"
                f"&begin={urllib.parse.quote(begin)}&ascending=yes&limit=300")
@@ -205,11 +222,14 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
                     continue
                 display, addr = email.utils.parseaddr(raw_from)
                 addr = (addr or raw_from).lower()
-                entry = breakdown.setdefault(addr, {"display": None, "delivered": 0, "failed": 0})
-                entry[event] += 1
-                if display and not entry["display"]:
-                    entry["display"] = display
-                if event == "failed":
+                recipient = item.get("recipient", "")
+                message_id = headers.get("message-id", "")
+                key = (recipient, message_id)
+                identity_by_key[key] = (addr, display)
+
+                if event == "delivered":
+                    delivered_keys.add(key)
+                else:
                     ds = item.get("delivery-status") or {}
                     reason_text = ds.get("message") or ds.get("description") or item.get("reason") or ""
                     severity = item.get("severity")
@@ -218,16 +238,43 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
                     ts = item.get("timestamp")
                     if ts:
                         occurred_at = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                    failures.append({
-                        "from_address": addr,
-                        "recipient": item.get("recipient", ""),
-                        "category": categorize_bounce(reason_text, bounce_type),
+                    failed_attempts[key] = {
+                        "recipient": recipient,
                         "reason": reason_text,
                         "bounce_type": bounce_type,
                         "occurred_at": occurred_at,
-                    })
+                    }
             nxt = data.get("paging", {}).get("next")
             url = nxt if nxt and items else None
+
+    breakdown = {}
+    failures = []
+    for key in delivered_keys:
+        addr, display = identity_by_key[key]
+        entry = breakdown.setdefault(addr, {"display": None, "delivered": 0, "retried_ok": 0, "failed": 0})
+        entry["delivered"] += 1
+        if key in failed_attempts:
+            entry["retried_ok"] += 1
+        if display and not entry["display"]:
+            entry["display"] = display
+
+    for key, detail in failed_attempts.items():
+        if key in delivered_keys:
+            continue  # eventually succeeded -- already counted as retried_ok above, not a real failure
+        addr, display = identity_by_key[key]
+        entry = breakdown.setdefault(addr, {"display": None, "delivered": 0, "retried_ok": 0, "failed": 0})
+        entry["failed"] += 1
+        if display and not entry["display"]:
+            entry["display"] = display
+        failures.append({
+            "from_address": addr,
+            "recipient": detail["recipient"],
+            "category": categorize_bounce(detail["reason"], detail["bounce_type"]),
+            "reason": detail["reason"],
+            "bounce_type": detail["bounce_type"],
+            "occurred_at": detail["occurred_at"],
+        })
+
     return breakdown, failures, None
 
 
@@ -324,9 +371,10 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
             for addr, c in identity_breakdown.items():
                 conn.execute(
                     """INSERT INTO mailgun_identity_stats
-                       (domain_id, mailgun_domain, from_address, from_display, window_days, delivered, failed)
-                       VALUES (?,?,?,?,?,?,?)""",
-                    (domain_id, mailgun_domain, addr, c["display"], events_window_days, c["delivered"], c["failed"]),
+                       (domain_id, mailgun_domain, from_address, from_display, window_days, delivered, retried_ok, failed)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (domain_id, mailgun_domain, addr, c["display"], events_window_days,
+                     c["delivered"], c["retried_ok"], c["failed"]),
                 )
             conn.execute("DELETE FROM mailgun_identity_failures WHERE mailgun_domain=?", (mailgun_domain,))
             for f in identity_failures:

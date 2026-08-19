@@ -209,6 +209,7 @@ CREATE TABLE IF NOT EXISTS mailgun_identity_stats (
     from_display   TEXT,
     window_days    INTEGER NOT NULL,
     delivered      INTEGER NOT NULL DEFAULT 0,
+    retried_ok     INTEGER NOT NULL DEFAULT 0,  -- subset of `delivered` that needed at least one retry after a temporary rejection before succeeding
     failed         INTEGER NOT NULL DEFAULT 0,
     checked_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );

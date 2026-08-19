@@ -524,17 +524,20 @@
       <p class="muted" style="margin:0 0 0.5rem 0; font-size:0.82rem">
         The real "From" identity behind each message, pulled from Mailgun's own event log -- useful when one Mailgun
         account is shared across several websites or campaigns, since the bounce rate above is one blended number
-        for all of them combined. Sorted by failures first, so whoever's actually causing an elevated rate shows up
-        at the top. Where a row failed at all, download exactly the addresses behind one bounce-reason category --
-        no need to filter a combined CSV by hand.
+        for all of them combined. "Failed" here only counts messages that never got through at all -- Mailgun
+        automatically retries a message that gets a temporary rejection (e.g. the recipient's server rate-limiting
+        or greylisting you), so a message that needed a retry but eventually delivered shows up under "Needed a
+        retry" instead of inflating the real failure count. Sorted by failures first. Where a row failed at all,
+        download exactly the addresses behind one bounce-reason category -- no need to filter a combined CSV by hand.
       </p>
       <div class="table-wrap">
       <table>
-        <tr><th>From identity</th><th>Delivered</th><th>Failed</th><th>Failure rate</th><th>Download by reason</th></tr>
+        <tr><th>From identity</th><th>Delivered</th><th>Needed a retry</th><th>Failed</th><th>Failure rate</th><th>Download by reason</th></tr>
         {% for s in mailgun_identity_stats %}
         <tr>
           <td>{{ (s.from_display + " <" + s.from_address + ">") if s.from_display else s.from_address }}</td>
           <td>{{ s.delivered }}</td>
+          <td>{{ s.retried_ok if s.retried_ok else "-" }}</td>
           <td>{{ s.failed }}</td>
           <td>{{ "%.0f"|format(100 * s.failed / (s.delivered + s.failed)) if (s.delivered + s.failed) else "-" }}%</td>
           <td>
