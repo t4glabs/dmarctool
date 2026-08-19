@@ -26,6 +26,14 @@ from app.db import get_connection, init_db
 
 MAX_WORKERS = 10
 
+# Used only to compare *direction* of a live-vs-expected mismatch -- a
+# regression (protection got weaker) is a materially more urgent event than
+# an advancement reports haven't caught up to yet (which is routine lag,
+# already worded calmly below). Local to this module since the comparison
+# here is simpler than domain_report.py's own health-scoring use of the
+# same concept -- not worth a cross-module dependency for a 3-entry map.
+_POLICY_STRENGTH = {"none": 0, "quarantine": 1, "reject": 2}
+
 
 def dig_txt(domain: str, timeout: float = 5.0):
     """Raw TXT record strings for _dmarc.<domain>, or None on lookup failure."""
@@ -109,14 +117,28 @@ def check_domain(conn, domain_id: int, domain_name: str, records=None) -> dict:
     expected_source = "manual_log" if manual_run else ("report" if report_run else None)
 
     matches = None
+    weakened = False
     note = "matches expected policy"
     if expected is not None:
         expected_pct = 100 if expected["pct"] is None else expected["pct"]  # RFC 7489 default
         matches = (expected["p"] == parsed_p and expected_pct == parsed_pct)
         if not matches:
+            # Direction matters more than the mismatch itself: reports lag behind
+            # a recent *improvement* by design (routine, already worded calmly),
+            # but a live policy that's *weaker* than the last known-good state
+            # means protection just dropped -- worth flagging as its own, more
+            # urgent thing regardless of whether the baseline is report-derived
+            # or manually logged, since a weakening is exactly the kind of event
+            # reports haven't had time to reflect yet either way.
+            live_strength = (_POLICY_STRENGTH.get(parsed_p, -1), parsed_pct)
+            expected_strength = (_POLICY_STRENGTH.get(expected["p"], -1), expected_pct)
+            weakened = live_strength < expected_strength
             note = (f"live DNS shows p={parsed_p}/pct={parsed_pct}, {expected_source} data shows "
                     f"p={expected['p']}/pct={expected_pct}")
-            if expected_source == "report":
+            if weakened:
+                note += (". This looks like your protection just got weaker, not report lag -- worth "
+                         "confirming this was an intentional change.")
+            elif expected_source == "report":
                 note += " -- if you changed DNS recently this may just be report lag, not a real problem"
     else:
         note = "no prior report or manual-log data to compare against yet"
@@ -124,18 +146,31 @@ def check_domain(conn, domain_id: int, domain_name: str, records=None) -> dict:
     _record(conn, domain_id, "ok", txt_value, parsed_p, parsed_pct,
             (1 if matches else 0) if matches is not None else None, note)
 
-    if matches is False:
-        upsert_system_action(conn, domain_id, "dns_drift", None,
-                              f"{domain_name}: live DNS disagrees with {expected_source} data", note)
-    else:
+    if matches is False and weakened:
+        upsert_system_action(conn, domain_id, "dns_policy_weakened", None,
+                              f"{domain_name}: DMARC protection appears to have weakened", note)
         conn.execute(
             """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                WHERE domain_id=? AND category='dns_drift' AND status='open'""",
             (domain_id,),
         )
+    elif matches is False:
+        upsert_system_action(conn, domain_id, "dns_drift", None,
+                              f"{domain_name}: live DNS disagrees with {expected_source} data", note)
+        conn.execute(
+            """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+               WHERE domain_id=? AND category='dns_policy_weakened' AND status='open'""",
+            (domain_id,),
+        )
+    else:
+        conn.execute(
+            """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+               WHERE domain_id=? AND category IN ('dns_drift', 'dns_policy_weakened') AND status='open'""",
+            (domain_id,),
+        )
 
     return {"status": "ok", "txt_value": txt_value, "parsed_p": parsed_p, "parsed_pct": parsed_pct,
-            "matches": matches, "expected_source": expected_source, "note": note}
+            "matches": matches, "weakened": weakened, "expected_source": expected_source, "note": note}
 
 
 def run_dns_checks(conn, verbose: bool = True) -> None:

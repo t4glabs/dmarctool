@@ -48,6 +48,7 @@ from app.postmaster import run_postmaster_checks
 from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest
 from app.safe_browsing import run_safe_browsing_checks
+from app.mta_sts import run_mta_sts_checks
 from app.watchlist import build_watchlist
 from app.ingest import ingest_source
 from app.labels import (
@@ -102,6 +103,7 @@ def _startup():
         run_ses_account_checks(c, verbose=False)
         run_listmonk_content_sync(c, verbose=False)
         run_safe_browsing_checks(c, verbose=False)
+        run_mta_sts_checks(c, verbose=False)
         run_report_emails(c, verbose=False)
 
     _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
@@ -221,6 +223,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ).fetchall()
     safe_browsing = conn.execute(
         "SELECT * FROM safe_browsing_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
+    ).fetchone()
+    mta_sts = conn.execute(
+        "SELECT * FROM mta_sts_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
     ).fetchone()
 
     report_run = current_policy_run(conn, domain_id)
@@ -497,6 +502,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "report_preview_text": report_preview_text,
         "dns_history": dns_history,
         "safe_browsing": safe_browsing,
+        "mta_sts": mta_sts,
         "verdicts": verdicts,
     })
 
@@ -761,8 +767,9 @@ def run_checks():
     run_ses_account_checks(conn, verbose=False)
     run_listmonk_content_sync(conn, verbose=False)
     run_safe_browsing_checks(conn, verbose=False)
+    run_mta_sts_checks(conn, verbose=False)
     return RedirectResponse(
-        "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, and Safe Browsing checks refreshed.",
+        "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, Safe Browsing, and MTA-STS checks refreshed.",
         status_code=303,
     )
 

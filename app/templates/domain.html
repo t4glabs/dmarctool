@@ -193,6 +193,32 @@
           {% endif %}
         </span>
       </div>
+      <div class="row">
+        <span class="label" title="MTA-STS (RFC 8461) makes mail servers require TLS encryption when delivering to you, protecting inbound mail against downgrade/interception attacks. Optional and newer than SPF/DKIM/DMARC -- most small domains haven't set this up, which is fine on its own.">MTA-STS</span>
+        <span>
+          {% if not mta_sts or mta_sts.mta_sts_status == 'not_set_up' %}
+            <span class="badge muted" title="{{ mta_sts.mta_sts_note if mta_sts else 'Not checked yet' }}">Not set up</span>
+          {% elif mta_sts.mta_sts_status == 'broken' %}
+            <span class="badge bad" title="{{ mta_sts.mta_sts_note }}">Broken</span>{{ fix_note(category_remediation('mta_sts_broken')) }}
+          {% elif mta_sts.mta_sts_mode == 'enforce' %}
+            <span class="badge ok" title="{{ mta_sts.mta_sts_note }}">Enforced</span>
+          {% else %}
+            <span class="badge warn" title="{{ mta_sts.mta_sts_note }}">{{ mta_sts.mta_sts_mode|capitalize if mta_sts.mta_sts_mode else "OK" }}</span>
+          {% endif %}
+        </span>
+      </div>
+      <div class="row">
+        <span class="label" title="TLS-RPT (RFC 8460) gives you visibility into TLS delivery failures for inbound mail via a reporting address. Optional, most useful alongside MTA-STS.">TLS-RPT</span>
+        <span>
+          {% if not mta_sts or mta_sts.tlsrpt_status == 'not_set_up' %}
+            <span class="badge muted" title="{{ mta_sts.tlsrpt_note if mta_sts else 'Not checked yet' }}">Not set up</span>
+          {% elif mta_sts.tlsrpt_status == 'broken' %}
+            <span class="badge bad" title="{{ mta_sts.tlsrpt_note }}">Broken</span>
+          {% else %}
+            <span class="badge ok" title="{{ mta_sts.tlsrpt_note }}">Configured</span>
+          {% endif %}
+        </span>
+      </div>
     </div>
 
     <div class="section">

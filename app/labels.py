@@ -10,6 +10,7 @@ CATEGORY_LABELS = {
     "failure_investigation": "Sender failing checks",
     "borrowed_sending_identity": "Persistently sends as another domain",
     "dns_drift": "DNS mismatch",
+    "dns_policy_weakened": "Protection weakened",
     "data_stale": "Reports not up to date",
     "blocklist": "Sending IP blocklisted",
     "ptr_issue": "PTR record issue",
@@ -32,6 +33,7 @@ CATEGORY_LABELS = {
     "sending_cadence_irregular": "Irregular newsletter sending cadence",
     "volume_spike": "Sudden volume increase",
     "safe_browsing_flagged": "Domain flagged unsafe",
+    "mta_sts_broken": "MTA-STS misconfigured",
     "untracked_sending_subdomain": "Untracked sending subdomain found",
 }
 
@@ -41,6 +43,7 @@ CATEGORY_HELP = {
     "failure_investigation": "A sending source with a lot of messages is failing authentication -- could be misconfigured, or could be someone spoofing your domain.",
     "borrowed_sending_identity": "Over a sustained period (not a one-off blip), this domain's failing mail actually authenticates as a different domain -- typically a shared ESP account (e.g. Mailgun) verified under one domain but used with a different display \"From\" address per site. This isn't a mistake to fix so much as a structural limit: DMARC alignment can never pass for this traffic as-is, and it will get worse as enforcement (pct) increases.",
     "dns_drift": "What your DNS record actually says right now doesn't match what we expect, based on your reports or your own change log.",
+    "dns_policy_weakened": "Your live DMARC record now enforces less than it used to (a lower percentage, or a step back toward none/quarantine) -- unlike routine drift, this specifically means protection dropped, not that reports just haven't caught up to an improvement yet.",
     "data_stale": "No new DMARC reports have been ingested in a while, so recommendations may be based on old data.",
     "blocklist": "One of this domain's known sending IPs showed up on a public spam blocklist -- mail from it may be getting silently rejected or spam-foldered by receivers that check that list.",
     "ptr_issue": "Gmail requires a sending IP's reverse DNS (PTR) to resolve to a hostname that in turn resolves back to that same IP. Missing or mismatched PTR records are one of Gmail's explicit sender requirements.",
@@ -63,6 +66,7 @@ CATEGORY_HELP = {
     "sending_cadence_irregular": "Gmail's guidance is explicit: \"send email at a consistent rate, avoid sending in bursts.\" This domain's gap between the two most recent newsletters is a lot shorter or longer than its own historical average.",
     "volume_spike": "Your recent daily sending volume is well above your own trailing average. Gmail's guidance is to ramp volume up gradually -- a sudden jump (even of genuinely good mail) can trigger rate limiting or hurt reputation.",
     "safe_browsing_flagged": "Google Safe Browsing has flagged this domain (or a URL on it) as unsafe -- e.g. malware or phishing. This can independently hurt email deliverability and trust, separate from your DMARC/authentication setup.",
+    "mta_sts_broken": "MTA-STS (which protects inbound mail to you against TLS downgrade/interception) has a DNS record advertising it, but the actual policy file is missing or invalid -- worse than never setting it up, since it invites mail servers that check for it to find a dangling policy.",
     "untracked_sending_subdomain": "A common sending subdomain (e.g. mail.<domain>) publishes its own DMARC record, separate from this domain's, but isn't tracked here as its own domain. A subdomain's DMARC record and reports are completely independent of its parent's -- if someone set this up for sending, DMARCTool has had zero visibility into it until now.",
 }
 
@@ -75,6 +79,7 @@ CATEGORY_REMEDIATION = {
     "failure_investigation": "In the Known senders table (Senders tab), check whether this IP's hostname (PTR) matches a service you use, and whether it's covered by your SPF record's includes or signs with a DKIM selector your DNS actually publishes (Gmail sender requirements table, Authentication tab). Consistent, high-volume failures from one source are usually a misconfigured ESP integration, not spoofing.",
     "borrowed_sending_identity": "Two options: (1) verify this domain as its own sending domain with the ESP shown (e.g. add it in Mailgun alongside the shared one, publish the SPF/DKIM records it gives you under this domain's own DNS) so it authenticates as itself, or (2) if you don't plan to do that, keep this domain's DMARC policy at p=none (or a low pct) rather than following a ramp-up recommendation -- raising enforcement will only quarantine/reject more of this domain's own mail over time without fixing the underlying cause.",
     "dns_drift": "Update your DMARC TXT record to match what you intended. If you changed it on purpose, log it under Log a manual action in the Manual Log tab so this stops being flagged as unexpected drift.",
+    "dns_policy_weakened": "Check who/what changed this domain's DMARC TXT record -- your registrar or DNS host's change history can usually show this. If it was intentional, log it under Log a manual action in the Manual Log tab; if you don't recognize the change, treat it as a possible compromise and restore the stronger policy immediately.",
     "data_stale": "Go to the Overview page (the domain list) and use the \"Add new reports\" upload form to bring this domain's data current.",
     "blocklist": "Request delisting directly: Spamhaus -> https://check.spamhaus.org/ (look up the IP, follow its removal link) -- Barracuda -> https://www.barracudacentral.org/rbl/removal-request . Before requesting removal, check for a real cause (compromised sender, sudden spam complaints, or a shared IP with a bad neighbor) or it may relist quickly. Once delisted, the Blocklist column under Known senders (Senders tab) will show Clean again within a few hours.",
     "ptr_issue": "If this is your own dedicated IP (not a shared ESP pool), add or fix its reverse DNS (PTR) record via your hosting/cloud provider's control panel -- for AWS EC2/SES dedicated IPs this means opening an AWS Support case to set a custom PTR. Shared ESP pool IPs (SES, Mailgun) already have this managed for you; this only needs action if it's your own infrastructure. See the PTR/rDNS column under Known senders (Senders tab) for which IP this is.",
@@ -96,6 +101,7 @@ CATEGORY_REMEDIATION = {
     "sending_cadence_irregular": "If this was intentional (a planned schedule change), no action needed -- it'll stop flagging once your baseline catches up. If not, try to keep future sends on a more consistent schedule going forward.",
     "volume_spike": "If this jump was intentional (a planned campaign), no action needed -- it should stop flagging once your baseline catches up. If it wasn't intentional, check for a misconfigured automation/loop in Listmonk or your ESP that's resending or duplicating messages. Either way, avoid stacking another big increase on top of this one until it settles.",
     "safe_browsing_flagged": "Check https://transparencyreport.google.com/safe-browsing/search for the specific flagged URL/reason. If it's your own website, scan for and remove malware/injected content, then request a review in Google Search Console. If it's a third-party link in a footer/widget you don't control, remove it.",
+    "mta_sts_broken": "Either fix the policy file at https://mta-sts.<domain>/.well-known/mta-sts.txt so it's reachable and valid (mode: enforce/testing/none, at least one mx: line, a max_age), or remove the _mta-sts DNS TXT record entirely if you don't intend to use MTA-STS right now -- a record with no working policy is worse than neither.",
     "dns_missing": "Publish a DMARC TXT record at _dmarc.<your domain> in your DNS host's control panel. A safe starting point: \"v=DMARC1; p=none; rua=mailto:you@yourdomain.com\" -- p=none only monitors, it doesn't block anything, so it's safe to publish immediately. Once it's live (can take a few minutes to an hour to propagate), log it under Log a manual action in the Manual Log tab.",
     "dns_multiple": "Your DNS host has more than one TXT record at _dmarc.<your domain> -- mail providers can't tell which one to trust and may ignore your policy entirely as a result. Open your DNS control panel, list all TXT records for that exact name, and delete all but one (merge their content first if they differ). Most registrars show every record for a name on one screen, so this is usually a one-time cleanup.",
     "spf_missing": "Publish an SPF TXT record at your domain's apex (not a subdomain) listing everything that sends mail as you -- e.g. \"v=spf1 include:_spf.google.com include:mailgun.org ~all\" adjusted for whichever of Google Workspace/SES/Mailgun/etc. you actually use. Each provider's own setup docs give you the exact include: value to add. See the Gmail sender requirements table above once it's published to confirm it's being read correctly.",

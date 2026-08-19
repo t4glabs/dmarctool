@@ -497,6 +497,28 @@ CREATE TABLE IF NOT EXISTS safe_browsing_checks (
 
 CREATE INDEX IF NOT EXISTS idx_safe_browsing_checks_domain ON safe_browsing_checks(domain_id, checked_at);
 
+-- MTA-STS (RFC 8461) protects inbound mail delivery to a domain against
+-- SMTP TLS downgrade/interception; TLS-RPT (RFC 8460) gives visibility into
+-- TLS delivery failures. Both are optional, newer protocols most small
+-- domains haven't set up -- 'not_set_up' is the normal, unremarkable state,
+-- not an action item; 'broken' means a domain started down this path (a DNS
+-- record exists) but it's actually misconfigured, which is worse than never
+-- setting it up at all.
+CREATE TABLE IF NOT EXISTS mta_sts_checks (
+    id              INTEGER PRIMARY KEY,
+    domain_id       INTEGER NOT NULL REFERENCES domains(id),
+    checked_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    mta_sts_status  TEXT NOT NULL,  -- 'not_set_up'|'broken'|'ok'
+    mta_sts_mode    TEXT,           -- 'enforce'|'testing'|'none'
+    mta_sts_mx      TEXT,           -- comma-separated mx patterns from the policy file
+    mta_sts_max_age TEXT,
+    mta_sts_note    TEXT,
+    tlsrpt_status   TEXT NOT NULL,  -- 'not_set_up'|'broken'|'ok'
+    tlsrpt_rua      TEXT,
+    tlsrpt_note     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mta_sts_checks_domain ON mta_sts_checks(domain_id, checked_at);
+
 -- Tunable thresholds for the recommendation engine
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,

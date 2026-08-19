@@ -46,6 +46,9 @@ DEFAULT_INTERVAL_DAYS = 30
 # count baked into the sentence, not a static phrase).
 _PROBLEM_STORY = {
     "dns_drift": "the settings that protect your website's name in emails weren't set up the way they should have been",
+    "dns_policy_weakened": ("your protection against fake emails using your name got weaker recently, not just "
+                             "out of date on our end -- someone or something actually changed a setting on your "
+                             "website's domain"),
     "blocklist": "one of the computers sending your emails ended up on a public \"don't trust this sender\" list, which can send your mail straight to spam",
     "ptr_issue": "one of your sending computers wasn't labeled correctly on the internet, which makes some email services distrust it",
     "mailgun_reputation": "more of your emails than usual were bouncing back or being marked as spam",
@@ -99,7 +102,7 @@ _OPERATOR_ONLY_CATEGORIES = {
 # contact Aikyam directly, rather than just listing the problem and moving on.
 _URGENT_STILL_OPEN_CATEGORIES = {
     "mailgun_reputation", "ses_reputation", "ses_reputation_watch",
-    "ses_rejected", "blocklist", "safe_browsing_flagged",
+    "ses_rejected", "blocklist", "safe_browsing_flagged", "dns_policy_weakened",
 }
 
 # Gmail/Postmaster's own calibration points, reused from the same thresholds
