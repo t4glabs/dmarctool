@@ -325,6 +325,11 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ):
         mailgun_suppression_counts.setdefault(row["mailgun_domain"], {})[row["kind"]] = row["n"]
     mailgun_rate_sparkline = dual_rate_sparkline(mailgun_daily_series(conn, domain_id, days=60))
+    mailgun_identity_stats = conn.execute(
+        """SELECT * FROM mailgun_identity_stats WHERE domain_id=?
+           ORDER BY mailgun_domain, failed DESC, delivered DESC""",
+        (domain_id,),
+    ).fetchall()
 
     postmaster_stats = conn.execute(
         """SELECT * FROM postmaster_stats WHERE domain_id=?
@@ -430,6 +435,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mailgun_stats": mailgun_stats,
         "mailgun_suppression_counts": mailgun_suppression_counts,
         "mailgun_rate_sparkline": mailgun_rate_sparkline,
+        "mailgun_identity_stats": mailgun_identity_stats,
         "postmaster_stats": postmaster_stats,
         "postmaster_compliance": postmaster_compliance,
         "postmaster_reason_by_ref_key": postmaster_reason_by_ref_key,

@@ -518,6 +518,29 @@
 
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
       <div class="sparkline">{{ mailgun_rate_sparkline | safe }}</div>
+
+      {% if mailgun_identity_stats %}
+      <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">By sender identity ({{ mailgun_identity_stats[0].window_days }}d)</h3>
+      <p class="muted" style="margin:0 0 0.5rem 0; font-size:0.82rem">
+        The real "From" identity behind each message, pulled from Mailgun's own event log -- useful when one Mailgun
+        account is shared across several websites or campaigns, since the bounce rate above is one blended number
+        for all of them combined. Sorted by failures first, so whoever's actually causing an elevated rate shows up
+        at the top.
+      </p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>From identity</th><th>Delivered</th><th>Failed</th><th>Failure rate</th></tr>
+        {% for s in mailgun_identity_stats %}
+        <tr>
+          <td>{{ (s.from_display + " <" + s.from_address + ">") if s.from_display else s.from_address }}</td>
+          <td>{{ s.delivered }}</td>
+          <td>{{ s.failed }}</td>
+          <td>{{ "%.0f"|format(100 * s.failed / (s.delivered + s.failed)) if (s.delivered + s.failed) else "-" }}%</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
 

@@ -194,6 +194,26 @@ CREATE TABLE IF NOT EXISTS mailgun_stats (
     unsubscribed   INTEGER
 );
 
+-- Delivered/failed counts per real From-header identity, from Mailgun's
+-- Events API -- stats/total above only gives one blended number for the
+-- whole Mailgun domain, which hides the real picture when several different
+-- websites/campaigns share one Mailgun account (a common Aikyam setup: many
+-- beneficiary orgs' mail going out under one shared domain). Replaced fresh
+-- on each check (delete-then-insert per mailgun_domain) rather than kept as
+-- history -- this is "who's failing right now", not a trend to chart.
+CREATE TABLE IF NOT EXISTS mailgun_identity_stats (
+    id             INTEGER PRIMARY KEY,
+    domain_id      INTEGER NOT NULL REFERENCES domains(id),
+    mailgun_domain TEXT NOT NULL,
+    from_address   TEXT NOT NULL,
+    from_display   TEXT,
+    window_days    INTEGER NOT NULL,
+    delivered      INTEGER NOT NULL DEFAULT 0,
+    failed         INTEGER NOT NULL DEFAULT 0,
+    checked_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mailgun_identity_domain ON mailgun_identity_stats(domain_id, mailgun_domain);
+
 CREATE INDEX IF NOT EXISTS idx_mailgun_stats_domain ON mailgun_stats(domain_id, checked_at);
 
 CREATE TABLE IF NOT EXISTS mailgun_suppressions (

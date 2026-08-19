@@ -343,6 +343,11 @@ SETTINGS_META = {
         "help": "How many days of delivered/bounced/complained/unsubscribed history to pull from Mailgun each time.",
         "example": "30 means the numbers shown reflect the last 30 days, not your all-time totals.",
     },
+    "mailgun_events_window_days": {
+        "label": "Mailgun sender-identity breakdown lookback window",
+        "help": "How many days of Mailgun's own event log to pull to break bounces/deliveries down by the real \"From\" identity that sent them -- useful when one Mailgun account is shared across several websites or campaigns. Kept shorter than the stats window since it's a heavier per-domain pull.",
+        "example": "7 means the breakdown reflects the last 7 days, not your full stats window.",
+    },
     "mailgun_bounce_rate_warn": {
         "label": "Mailgun bounce rate that triggers a flag",
         "help": "If the share of accepted mail that permanently bounced goes above this, you'll get an action item -- high bounce rates are the clearest sign of a stale list.",
@@ -464,7 +469,7 @@ SETTINGS_GROUPS = [
         "compliance_recheck_hours", "spf_lookup_warn_threshold", "dkim_min_bits",
     ]),
     ("📨 Mailgun", [
-        "mailgun_recheck_hours", "mailgun_stats_window_days",
+        "mailgun_recheck_hours", "mailgun_stats_window_days", "mailgun_events_window_days",
         "mailgun_bounce_rate_warn", "mailgun_complaint_rate_warn",
     ]),
     ("📮 Google Postmaster Tools", [

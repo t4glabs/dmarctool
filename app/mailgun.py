@@ -12,6 +12,12 @@ domain or any subdomain, e.g. `mails.pattic.org` under tracked `pattic.org`):
   - suppression lists (bounces/complaints/unsubscribes) -- literal addresses
     Mailgun has stopped sending to, which is the actual "clean your list" data:
     these are worth pruning from Listmonk too.
+  - a delivered/failed breakdown by the real "From" identity in each message
+    (via Mailgun's Events API), for domains where one Mailgun account is
+    shared across several websites/campaigns (a common Aikyam setup) -- the
+    stats/total endpoint above only gives one blended number for the whole
+    Mailgun domain, which hides which specific sender identity is actually
+    causing an elevated bounce/complaint rate.
 
 Uses stdlib `urllib` (no new dependency) and the API key in secrets.env --
 never hardcoded, never stored in the SQLite DB. If no key is configured, this
@@ -159,6 +165,68 @@ def fetch_suppressions(mailgun_domain: str, kind: str, api_key: str):
     return items, None
 
 
+def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int):
+    """Delivered/failed counts per real "From" identity, via Mailgun's Events
+    API -- fetch_stats() above only gives one blended number for the whole
+    Mailgun domain, which hides the real picture when several different
+    websites/campaigns share one Mailgun account (a common Aikyam setup:
+    several beneficiary orgs' mail going out under one shared domain).
+    Groups by the actual From email address parsed out of each event's own
+    message headers, not by whichever Mailgun domain the event happens to be
+    filed under. Mailgun's own event-log retention is limited (usually
+    ~30 days depending on plan), and events are heavier per-page than
+    suppressions, so this is deliberately given its own, shorter window
+    (mailgun_events_window_days) rather than reusing the full stats window.
+    Returns ({email_address: {"display": name_or_None, "delivered": n,
+    "failed": n}}, error)."""
+    begin = email.utils.format_datetime(
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=window_days)
+    )
+    breakdown = {}
+    for event in ("delivered", "failed"):
+        url = (f"{API_BASE}/{mailgun_domain}/events?event={event}"
+               f"&begin={urllib.parse.quote(begin)}&ascending=yes&limit=300")
+        while url:
+            data, err = _get(url, api_key)
+            if err:
+                return None, err
+            items = data.get("items", [])
+            for item in items:
+                headers = (item.get("message") or {}).get("headers") or {}
+                raw_from = headers.get("from")
+                if not raw_from:
+                    continue
+                display, addr = email.utils.parseaddr(raw_from)
+                addr = (addr or raw_from).lower()
+                entry = breakdown.setdefault(addr, {"display": None, "delivered": 0, "failed": 0})
+                entry[event] += 1
+                if display and not entry["display"]:
+                    entry["display"] = display
+            nxt = data.get("paging", {}).get("next")
+            url = nxt if nxt and items else None
+    return breakdown, None
+
+
+def _identity_breakdown_note(breakdown: dict, window_days: int, top_n: int = 5) -> str:
+    """Top-N failing identities as bullet lines, appended to the
+    mailgun_reputation action item -- turns a single blended bounce rate
+    into "who specifically is causing it" when a Mailgun domain is shared
+    across several websites or campaigns. Only identities with at least one
+    failure are considered; returns "" (no section added) when there's
+    nothing to show, e.g. no matching event-log data for the window."""
+    failing = {addr: c for addr, c in breakdown.items() if c["failed"] > 0}
+    if not failing:
+        return ""
+    ranked = sorted(failing.items(), key=lambda kv: kv[1]["failed"], reverse=True)[:top_n]
+    bullets = "\n".join(
+        f"• {(c['display'] + ' <' + addr + '>') if c['display'] else addr}: "
+        f"{c['failed']} of {c['delivered'] + c['failed']} failed "
+        f"({c['failed'] / (c['delivered'] + c['failed']):.0%})"
+        for addr, c in ranked
+    )
+    return f"\n\nBy sender identity (last {window_days}d):\n{bullets}"
+
+
 def _stale(conn, mailgun_domain, recheck_hours):
     row = conn.execute(
         "SELECT MAX(checked_at) as last_checked FROM mailgun_stats WHERE mailgun_domain=?", (mailgun_domain,)
@@ -169,14 +237,16 @@ def _stale(conn, mailgun_domain, recheck_hours):
     return last_dt < datetime.datetime.utcnow() - datetime.timedelta(hours=recheck_hours)
 
 
-def _fetch_all(mailgun_domain, api_key, window_days):
+def _fetch_all(mailgun_domain, api_key, window_days, events_window_days):
     """All network I/O for one domain -- no DB access, safe to run concurrently."""
     stats, daily, stats_err = fetch_stats(mailgun_domain, api_key, window_days)
     suppressions = {}
     for endpoint, kind in SUPPRESSION_KINDS.items():
         items, err = fetch_suppressions(mailgun_domain, endpoint, api_key)
         suppressions[kind] = (items, err)
-    return {"stats": (stats, stats_err), "daily": daily, "suppressions": suppressions}
+    identity, identity_err = fetch_identity_breakdown(mailgun_domain, api_key, events_window_days)
+    return {"stats": (stats, stats_err), "daily": daily, "suppressions": suppressions,
+            "identity": (identity, identity_err)}
 
 
 def run_mailgun_checks(conn, verbose: bool = True) -> None:
@@ -189,6 +259,7 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
 
     recheck_hours = int(settings["mailgun_recheck_hours"])
     window_days = int(settings["mailgun_stats_window_days"])
+    events_window_days = int(settings["mailgun_events_window_days"])
     bounce_warn = float(settings["mailgun_bounce_rate_warn"])
     complaint_warn = float(settings["mailgun_complaint_rate_warn"])
 
@@ -213,11 +284,27 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
     if to_check:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(to_check))) as ex:
             fetched = dict(zip(
-                to_check, ex.map(lambda mg: _fetch_all(mg, api_key, window_days), to_check)
+                to_check, ex.map(lambda mg: _fetch_all(mg, api_key, window_days, events_window_days), to_check)
             ))
 
     for mailgun_domain in to_check:
         domain_id, domain_name = matches[mailgun_domain]
+
+        identity_breakdown, identity_err = fetched[mailgun_domain]["identity"]
+        if identity_err:
+            if verbose:
+                print(f"[mailgun] {mailgun_domain}: identity breakdown fetch failed -- {identity_err}")
+            identity_breakdown = {}
+        else:
+            conn.execute("DELETE FROM mailgun_identity_stats WHERE mailgun_domain=?", (mailgun_domain,))
+            for addr, c in identity_breakdown.items():
+                conn.execute(
+                    """INSERT INTO mailgun_identity_stats
+                       (domain_id, mailgun_domain, from_address, from_display, window_days, delivered, failed)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (domain_id, mailgun_domain, addr, c["display"], events_window_days, c["delivered"], c["failed"]),
+                )
+
         stats, err = fetched[mailgun_domain]["stats"]
         if err:
             if verbose:
@@ -258,7 +345,8 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
                     conn, domain_id, "mailgun_reputation", mailgun_domain,
                     f"{domain_name}: Mailgun bounce/complaint rate is elevated ({mailgun_domain})",
                     f"{bounce_rate:.2%} bounced, {complaint_rate:.2%} complained over the last {window_days}d "
-                    f"({accepted} accepted). Check list quality before sending more.",
+                    f"({accepted} accepted). Check list quality before sending more."
+                    + _identity_breakdown_note(identity_breakdown, events_window_days),
                 )
             else:
                 conn.execute(

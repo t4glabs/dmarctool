@@ -54,6 +54,7 @@ DEFAULT_SETTINGS = {
     "dkim_min_bits": "1024",            # Gmail's hard minimum RSA DKIM key length (2048 recommended)
     "mailgun_recheck_hours": "6",        # don't re-poll the Mailgun API more often than this
     "mailgun_stats_window_days": "30",   # lookback window for Mailgun delivered/bounced/complained stats
+    "mailgun_events_window_days": "7",   # lookback window for the per-sender-identity breakdown (event-log pull, kept shorter than the stats window since it's heavier per domain)
     "mailgun_bounce_rate_warn": "0.05",  # bounce rate (of accepted) that triggers a flag
     "mailgun_complaint_rate_warn": "0.001",  # complaint rate (of accepted) that triggers a flag
     "postmaster_recheck_hours": "24",     # Postmaster Tools data itself lags/aggregates daily
