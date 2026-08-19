@@ -64,6 +64,21 @@ _SES_INTERNAL_PATTERNS = [
     ("email validation", "Suppressed pre-emptively by SES (address-quality check)"),
 ]
 
+# Mailgun's own equivalent of the SES-internal patterns above -- these mean
+# Mailgun already knew the address was dead and refused to even attempt
+# delivery, which is a materially different, more actionable situation than
+# a fresh bounce: it means the *sending list itself* still has this address
+# on it somewhere upstream (Listmonk, a CRM, whatever generates the send),
+# not that the recipient's mail server just rejected this one message.
+# Surfaced directly by a real case: a recipient kept reappearing across
+# multiple check cycles under "Other permanent failure" -- once given its
+# own category, it read immediately as "this address needs removing from
+# wherever the list lives," not "investigate this bounce."
+_MAILGUN_INTERNAL_PATTERNS = [
+    ("previously bounced address", "Already suppressed by Mailgun (remove from your sending list, not a fresh bounce)"),
+    ("not delivering to unsubscribed address", "Already suppressed by Mailgun (recipient unsubscribed)"),
+]
+
 # Checked before coded-status matching -- more reliable when a mail server
 # reports something specific in plain text, and needed for formats (Yahoo/AOL's
 # "NNN.NN", Gmail's plain English) that don't carry a proper RFC 3463 code.
@@ -98,6 +113,10 @@ def categorize_bounce(reason: str, bounce_type: str = None) -> str:
     lower = reason.lower()
 
     for needle, category in _SES_INTERNAL_PATTERNS:
+        if needle in lower:
+            return category
+
+    for needle, category in _MAILGUN_INTERNAL_PATTERNS:
         if needle in lower:
             return category
 
