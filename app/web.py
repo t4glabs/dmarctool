@@ -171,12 +171,50 @@ def build_domain_summary(conn, domain_row, settings):
     }
 
 
+def build_portfolio_overview(conn, domains: list) -> dict:
+    """Cross-domain security signals that don't show up on any single
+    domain's own card -- meant to answer "what needs attention across
+    everything" in one glance instead of clicking into each of 15+ domains
+    one at a time (the exact ad-hoc SQL this replaces got run by hand
+    several times over the course of building this tool). The no-DMARC/
+    stale/weakened/MTA-STS-broken counts are derived from the same
+    build_domain_summary() data already computed for the grid below --
+    no extra queries needed, since open_counts already carries every
+    category. Only the cross-domain "suspicious" sender list is genuinely
+    new data: a manually-flagged IP is exactly the kind of thing worth
+    seeing across the whole portfolio at once, not just when it happens to
+    resurface on another domain's own page."""
+    no_dmarc = [d["name"] for d in domains if d["dns_status"] == "missing"]
+    stale = [d["name"] for d in domains if "data_stale" in d["open_counts"]]
+    weakened = [d["name"] for d in domains if "dns_policy_weakened" in d["open_counts"]]
+    mta_sts_broken = [d["name"] for d in domains if "mta_sts_broken" in d["open_counts"]]
+
+    suspicious = conn.execute(
+        """SELECT DISTINCT d.name as domain_name, ks.source_ip FROM known_senders ks
+           JOIN domains d ON d.id = ks.domain_id
+           WHERE ks.classification = 'suspicious'
+           ORDER BY d.name, ks.source_ip"""
+    ).fetchall()
+    suspicious_by_ip = {}
+    for row in suspicious:
+        suspicious_by_ip.setdefault(row["source_ip"], []).append(row["domain_name"])
+
+    return {
+        "no_dmarc": no_dmarc,
+        "stale": stale,
+        "weakened": weakened,
+        "mta_sts_broken": mta_sts_broken,
+        "suspicious_by_ip": suspicious_by_ip,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, flash: str = None):
     conn = get_connection()
     settings = ensure_default_settings(conn)
     domains = [build_domain_summary(conn, d, settings) for d in all_domains(conn)]
-    return templates.TemplateResponse(request, "index.html", {"domains": domains, "flash": flash})
+    overview = build_portfolio_overview(conn, domains)
+    return templates.TemplateResponse(request, "index.html", {"domains": domains, "overview": overview, "flash": flash})
 
 
 # For these IP-bearing action-item categories, once guess_sender_identity()

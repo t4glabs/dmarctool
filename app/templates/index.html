@@ -19,6 +19,52 @@
   </ul>
 </details>
 
+{% if overview.no_dmarc or overview.weakened or overview.suspicious_by_ip or overview.mta_sts_broken or overview.stale %}
+<div class="section" style="margin-bottom:1.2rem;">
+  <h2 class="first" style="margin-top:0">🛡️ Portfolio security overview</h2>
+  <p class="muted" style="margin-top:0">The handful of things worth checking across every domain at once, instead of clicking into each one.</p>
+
+  {% if overview.no_dmarc %}
+  <div class="row">
+    <span class="label" title="These domains have no DMARC record at all -- anyone can spoof them right now with zero protection or visibility">No DMARC record at all</span>
+    <span>{% for name in overview.no_dmarc %}<a href="/domain/{{ name }}" class="badge bad" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
+  </div>
+  {% endif %}
+
+  {% if overview.weakened %}
+  <div class="row">
+    <span class="label" title="Live DNS now enforces less than the last known-good baseline -- possibly an unintentional or unauthorized change">Protection weakened</span>
+    <span>{% for name in overview.weakened %}<a href="/domain/{{ name }}" class="badge bad" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
+  </div>
+  {% endif %}
+
+  {% if overview.suspicious_by_ip %}
+  <div class="row">
+    <span class="label" title="IPs manually flagged as suspicious (spam or spoofing) while reviewing a domain -- shown here since the same IP showing up elsewhere in your portfolio is a stronger signal than authentication alone">Sender IPs flagged suspicious</span>
+    <span>
+      {% for ip, names in overview.suspicious_by_ip.items() %}
+      <span class="badge warn" title="Flagged while reviewing: {{ names|join(', ') }}" style="margin-right:0.3rem;">{{ ip }}</span>
+      {% endfor %}
+    </span>
+  </div>
+  {% endif %}
+
+  {% if overview.mta_sts_broken %}
+  <div class="row">
+    <span class="label" title="A DNS record advertises MTA-STS but the actual policy file is missing or invalid -- worse than never setting it up">MTA-STS misconfigured</span>
+    <span>{% for name in overview.mta_sts_broken %}<a href="/domain/{{ name }}" class="badge warn" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
+  </div>
+  {% endif %}
+
+  {% if overview.stale %}
+  <div class="row">
+    <span class="label" title="No fresh DMARC reports in a while for these domains -- every other finding for them may be out of date until this is resolved">No fresh reports in a while</span>
+    <span>{% for name in overview.stale %}<a href="/domain/{{ name }}" class="badge muted" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% set ns = namespace(total_open=0, domains_with_issues=0) %}
 {% for d in domains %}
   {% if d.open_counts %}
