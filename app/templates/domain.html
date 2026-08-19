@@ -5,6 +5,7 @@
 {% set fix_note_ns = namespace(id=0) %}
 {% macro fix_note(text) %}{% if text %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="How to fix this">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover>💡 <strong>How to fix:</strong> {{ text | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
 {% macro guess_note(guess) %}{% if guess %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Best guess at what this is">?</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong>{{ guess.icon }} {{ guess.headline }}</strong>{{ "\n\n" }}{{ guess.summary | urlize(40, target="_blank", rel="noopener") }}{{ "\n\n→ " }}{{ guess.action | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
+{% macro download_menu(links) %}{% if links %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Download by reason">⬇</button><div class="fix-popover fix download-menu" id="fix-{{ fix_note_ns.id }}" popover><strong style="display:block; margin-bottom:0.4rem;">Download by reason</strong>{% for l in links %}<a href="{{ l.url }}" style="display:block; padding:0.2rem 0;">{{ l.label }}</a>{% endfor %}</div></span>{% endif %}{% endmacro %}
 
 <div class="back"><a href="/">&larr; all domains</a></div>
 <h1>{{ domain.name }}</h1>
@@ -419,9 +420,13 @@
       </p>
       <div class="table-wrap">
       <table>
-        <tr><th>Category</th><th>Count</th></tr>
-        {% for category, n in bounce_categories %}
-        <tr><td>{{ category }}</td><td>{{ n }}</td></tr>
+        <tr><th>Category</th><th>Count</th><th>Download</th></tr>
+        {% for b in bounce_categories %}
+        <tr>
+          <td>{{ b.category }}</td>
+          <td>{{ b.count }}</td>
+          <td><a href="{{ b.download_url }}" class="muted" style="font-size:0.85rem;">⬇ CSV</a></td>
+        </tr>
         {% endfor %}
       </table>
       </div>
@@ -532,7 +537,7 @@
       </p>
       <div class="table-wrap">
       <table>
-        <tr><th>From identity</th><th>Delivered</th><th>Needed a retry</th><th>Failed</th><th>Failure rate</th><th>Download by reason</th></tr>
+        <tr><th>From identity</th><th>Delivered</th><th>Needed a retry</th><th>Failed</th><th>Failure rate</th><th>Download</th></tr>
         {% for s in mailgun_identity_stats %}
         <tr>
           <td>{{ (s.from_display + " <" + s.from_address + ">") if s.from_display else s.from_address }}</td>
@@ -540,14 +545,7 @@
           <td>{{ s.retried_ok if s.retried_ok else "-" }}</td>
           <td>{{ s.failed }}</td>
           <td>{{ "%.0f"|format(100 * s.failed / (s.delivered + s.failed)) if (s.delivered + s.failed) else "-" }}%</td>
-          <td>
-            {% if s.failed > 0 %}
-            {% for c in mailgun_identity_categories.get(s.mailgun_domain ~ "|" ~ s.from_address, []) %}
-            <a href="/domain/{{ domain.name }}/mailgun_identity_failures.csv?mailgun_domain={{ s.mailgun_domain|urlencode }}&from_address={{ s.from_address|urlencode }}&category={{ c.category|urlencode }}" style="font-size:0.78rem; display:inline-block; margin:0 0.5rem 0.2rem 0; white-space:nowrap;">⬇ {{ c.category }} ({{ c.count }})</a>
-            {% endfor %}
-            <a href="/domain/{{ domain.name }}/mailgun_identity_failures.csv?mailgun_domain={{ s.mailgun_domain|urlencode }}&from_address={{ s.from_address|urlencode }}" class="muted" style="font-size:0.78rem; white-space:nowrap;">⬇ all ({{ s.failed }})</a>
-            {% endif %}
-          </td>
+          <td>{{ download_menu(mailgun_identity_downloads.get(s.mailgun_domain ~ "|" ~ s.from_address, [])) }}</td>
         </tr>
         {% endfor %}
       </table>

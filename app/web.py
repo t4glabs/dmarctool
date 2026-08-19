@@ -15,6 +15,7 @@ import io
 import re
 import shutil
 import tempfile
+import urllib.parse
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 from pathlib import Path
 
@@ -334,7 +335,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
     # dict lookups) -- lets the template offer one download link per
     # identity+category combination that actually has failures, instead of a
     # single "download everything" link the reader has to filter by hand.
-    mailgun_identity_categories = {}
+    # URLs are built here, not in the template, so the template just renders
+    # <a> tags in a popover menu instead of a wall of inline links per row.
+    mailgun_identity_downloads = {}
     for row in conn.execute(
         """SELECT mailgun_domain, from_address, category, COUNT(*) as n
            FROM mailgun_identity_failures WHERE domain_id=?
@@ -343,9 +346,19 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ):
         key = f"{row['mailgun_domain']}|{row['from_address']}"
-        mailgun_identity_categories.setdefault(key, []).append(
-            {"category": row["category"], "count": row["n"]}
+        base = f"/domain/{name}/mailgun_identity_failures.csv?" + urllib.parse.urlencode(
+            {"mailgun_domain": row["mailgun_domain"], "from_address": row["from_address"]}
         )
+        mailgun_identity_downloads.setdefault(key, []).append(
+            {"label": f"{row['category']} ({row['n']})", "url": f"{base}&category={urllib.parse.quote(row['category'])}"}
+        )
+    for row in mailgun_identity_stats:
+        if row["failed"] > 0:
+            key = f"{row['mailgun_domain']}|{row['from_address']}"
+            base = f"/domain/{name}/mailgun_identity_failures.csv?" + urllib.parse.urlencode(
+                {"mailgun_domain": row["mailgun_domain"], "from_address": row["from_address"]}
+            )
+            mailgun_identity_downloads.setdefault(key, []).append({"label": f"All ({row['failed']})", "url": base})
 
     postmaster_stats = conn.execute(
         """SELECT * FROM postmaster_stats WHERE domain_id=?
@@ -395,7 +408,11 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10)
     engagement = subscriber_engagement_summary(conn, domain_id)
-    bounce_categories = bounce_category_breakdown(conn, domain_id)
+    bounce_categories = [
+        {"category": category, "count": n,
+         "download_url": f"/domain/{name}/bounce_category.csv?" + urllib.parse.urlencode({"category": category})}
+        for category, n in bounce_category_breakdown(conn, domain_id)
+    ]
     display_names = display_name_summary(conn, domain_id)
     cadence = sending_cadence(conn, domain_id)
 
@@ -452,7 +469,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mailgun_suppression_counts": mailgun_suppression_counts,
         "mailgun_rate_sparkline": mailgun_rate_sparkline,
         "mailgun_identity_stats": mailgun_identity_stats,
-        "mailgun_identity_categories": mailgun_identity_categories,
+        "mailgun_identity_downloads": mailgun_identity_downloads,
         "postmaster_stats": postmaster_stats,
         "postmaster_compliance": postmaster_compliance,
         "postmaster_reason_by_ref_key": postmaster_reason_by_ref_key,
@@ -518,6 +535,48 @@ def download_suppressions(name: str):
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{name}_suppressions.csv"'},
+    )
+
+
+@app.get("/domain/{name}/bounce_category.csv")
+def download_bounce_category(name: str, category: str):
+    """One plain-language bounce category (see the "Bounce reasons" table),
+    combined across Mailgun and SES -- same underlying data and
+    categorize_bounce() call as download_suppressions() above, just
+    pre-filtered to one category instead of the full combined list."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    domain_id = domain["id"]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["source", "source_domain", "email", "bounce_type", "reason", "first_seen", "last_seen"])
+
+    for r in conn.execute(
+        """SELECT mailgun_domain, email, reason, first_seen_at, last_checked_at
+           FROM mailgun_suppressions WHERE domain_id=? AND kind='bounce' ORDER BY email""",
+        (domain_id,),
+    ):
+        if categorize_bounce(r["reason"], None) == category:
+            writer.writerow(["mailgun", r["mailgun_domain"], r["email"], "", r["reason"] or "",
+                              r["first_seen_at"], r["last_checked_at"]])
+
+    for r in conn.execute(
+        """SELECT configuration_set, email, bounce_type, reason, first_seen_at, last_seen_at
+           FROM ses_suppressions WHERE domain_id=? AND kind='bounce' ORDER BY email""",
+        (domain_id,),
+    ):
+        if categorize_bounce(r["reason"], r["bounce_type"]) == category:
+            writer.writerow(["ses", r["configuration_set"], r["email"], r["bounce_type"] or "", r["reason"] or "",
+                              r["first_seen_at"], r["last_seen_at"]])
+
+    safe_category = re.sub(r"[^A-Za-z0-9]+", "_", category).strip("_")
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}_{safe_category}_bounces.csv"'},
     )
 
 
