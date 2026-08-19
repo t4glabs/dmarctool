@@ -195,11 +195,15 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
     Returns ({email_address: {"display": name_or_None, "delivered": n,
     "retried_ok": n, "failed": n}}, [per-failure detail dicts], error) --
     the failure list carries one entry per message that never ultimately
-    delivered (recipient, plain-language category via
+    delivered (recipient, subject, plain-language category via
     bounce_reasons.categorize_bounce() using its LAST retry attempt, raw
     reason, bounce type, timestamp of that last attempt), so a reader can
     download exactly the addresses behind one identity+category combination
-    instead of one combined CSV they'd have to filter by hand."""
+    instead of one combined CSV they'd have to filter by hand. The subject
+    matters in its own right for an identity that sends the same templated
+    report for many different underlying sites (e.g. Plausible Analytics'
+    "Weekly report for <site>.org") -- it's the only place that site's name
+    actually appears, since From/To never carry it."""
     begin = email.utils.format_datetime(
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=window_days)
     )
@@ -240,6 +244,7 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
                         occurred_at = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
                     failed_attempts[key] = {
                         "recipient": recipient,
+                        "subject": headers.get("subject", ""),
                         "reason": reason_text,
                         "bounce_type": bounce_type,
                         "occurred_at": occurred_at,
@@ -269,6 +274,7 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
         failures.append({
             "from_address": addr,
             "recipient": detail["recipient"],
+            "subject": detail["subject"],
             "category": categorize_bounce(detail["reason"], detail["bounce_type"]),
             "reason": detail["reason"],
             "bounce_type": detail["bounce_type"],
@@ -380,9 +386,9 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
             for f in identity_failures:
                 conn.execute(
                     """INSERT INTO mailgun_identity_failures
-                       (domain_id, mailgun_domain, from_address, recipient, category, reason, bounce_type, occurred_at)
-                       VALUES (?,?,?,?,?,?,?,?)""",
-                    (domain_id, mailgun_domain, f["from_address"], f["recipient"], f["category"],
+                       (domain_id, mailgun_domain, from_address, recipient, subject, category, reason, bounce_type, occurred_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (domain_id, mailgun_domain, f["from_address"], f["recipient"], f["subject"], f["category"],
                      f["reason"], f["bounce_type"], f["occurred_at"]),
                 )
 

@@ -219,14 +219,19 @@ CREATE INDEX IF NOT EXISTS idx_mailgun_identity_domain ON mailgun_identity_stats
 -- row per failed message, with its plain-language category (via
 -- bounce_reasons.categorize_bounce()) so a specific identity+category
 -- combination can be downloaded as its own CSV instead of one big list the
--- reader has to filter by hand. Same replace-fresh-each-check lifecycle as
--- mailgun_identity_stats.
+-- reader has to filter by hand. `subject` matters in its own right for a
+-- shared identity that sends the same kind of report for many different
+-- underlying sites (e.g. Plausible Analytics' "Weekly report for
+-- <site>.org" -- the subject is the only place that site's name actually
+-- appears, since the From/To don't carry it). Same replace-fresh-each-check
+-- lifecycle as mailgun_identity_stats.
 CREATE TABLE IF NOT EXISTS mailgun_identity_failures (
     id             INTEGER PRIMARY KEY,
     domain_id      INTEGER NOT NULL REFERENCES domains(id),
     mailgun_domain TEXT NOT NULL,
     from_address   TEXT NOT NULL,
     recipient      TEXT NOT NULL,
+    subject        TEXT,
     category       TEXT NOT NULL,
     reason         TEXT,
     bounce_type    TEXT,

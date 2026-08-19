@@ -49,6 +49,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "mailgun_identity_stats", {
         "retried_ok": "INTEGER NOT NULL DEFAULT 0",
     })
+    _ensure_columns(conn, "mailgun_identity_failures", {
+        "subject": "TEXT",
+    })
     conn.commit()
 
 

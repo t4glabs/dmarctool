@@ -591,7 +591,7 @@ def download_mailgun_identity_failures(name: str, mailgun_domain: str, from_addr
     if not domain:
         raise HTTPException(status_code=404, detail="domain not found")
 
-    query = """SELECT recipient, category, bounce_type, reason, occurred_at FROM mailgun_identity_failures
+    query = """SELECT recipient, subject, category, bounce_type, reason, occurred_at FROM mailgun_identity_failures
                WHERE domain_id=? AND mailgun_domain=? AND from_address=?"""
     params = [domain["id"], mailgun_domain, from_address]
     if category:
@@ -601,9 +601,10 @@ def download_mailgun_identity_failures(name: str, mailgun_domain: str, from_addr
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["recipient", "category", "bounce_type", "reason", "occurred_at"])
+    writer.writerow(["recipient", "subject", "category", "bounce_type", "reason", "occurred_at"])
     for r in conn.execute(query, params):
-        writer.writerow([r["recipient"], r["category"], r["bounce_type"] or "", r["reason"] or "", r["occurred_at"] or ""])
+        writer.writerow([r["recipient"], r["subject"] or "", r["category"], r["bounce_type"] or "",
+                          r["reason"] or "", r["occurred_at"] or ""])
 
     safe_identity = from_address.replace("@", "_at_")
     safe_category = re.sub(r"[^A-Za-z0-9]+", "_", category).strip("_") if category else "all"
