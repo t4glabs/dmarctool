@@ -650,6 +650,17 @@ CREATE TABLE IF NOT EXISTS mailgun_campaigns (
 );
 CREATE INDEX IF NOT EXISTS idx_mailgun_campaigns_domain ON mailgun_campaigns(domain_id, send_day);
 
+-- When each Mailgun domain was last scanned for newsletters. Needed because
+-- most domains legitimately have NO newsletters, so "newest row in
+-- mailgun_campaigns" can never serve as a last-checked marker for them --
+-- they'd look stale forever and get re-paginated on every single run (~8s of
+-- API waiting each, which made the interactive "Refresh now" button block for
+-- almost two minutes).
+CREATE TABLE IF NOT EXISTS mailgun_campaign_scans (
+    mailgun_domain TEXT PRIMARY KEY,
+    scanned_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- How far behind the SES event queue is, recorded after every drain (see
 -- app/ses_events.py). Matters because a backlog makes every delivery/open/
 -- click/bounce number in the dashboard a partial count -- one campaign sat

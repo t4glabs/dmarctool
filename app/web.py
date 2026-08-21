@@ -21,7 +21,7 @@ from datetime import date as _date, datetime as _datetime, timedelta as _timedel
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -109,41 +109,48 @@ templates.env.globals.update({
 
 CLASSIFICATIONS = ["unclassified", "ses_newsletter", "ses_pool", "mailgun", "workspace", "primary_domain", "suspicious", "ignored"]
 
-app = FastAPI(title="DMARCTool")
+CSRF_COOKIE_NAME = "csrf_token"
+
+async def csrf_protect(request: Request):
+    """CSRF check (double-submit cookie): every state-changing request must
+    carry a csrf_token form field matching this browser's csrf_token cookie.
+    The cookie's value never leaves this app's own pages, so a third-party
+    page can't know what value to forge into a hidden POST.
+
+    Deliberately a DEPENDENCY, not middleware. Reading the body inside a
+    BaseHTTPMiddleware consumes it, and Starlette does not replay it for the
+    endpoint -- so every form POST silently arrived with zero fields. That
+    broke /settings (saved nothing), /ingest and the manual log (422), and
+    would have wiped recipient emails on the report-settings form, whose
+    fields default to Form(""). As a dependency it shares the endpoint's own
+    Request, whose parsed form Starlette caches, so reading it here is free
+    and the endpoint still sees everything.
+    """
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+    form = await request.form()
+    submitted = form.get("csrf_token")
+    if not cookie_token or not submitted or not secrets.compare_digest(cookie_token, str(submitted)):
+        raise HTTPException(
+            status_code=403,
+            detail="This form's security check failed (missing or expired) -- reload the page and try again.",
+        )
+
+
+app = FastAPI(title="DMARCTool", dependencies=[Depends(csrf_protect)])
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 _scheduler = BackgroundScheduler()
 
-CSRF_COOKIE_NAME = "csrf_token"
 
 
 @app.middleware("http")
-async def security_and_audit_middleware(request: Request, call_next):
-    """Two concerns in one pass, both prompted by this app now sitting behind
-    a Cloudflare Tunnel (with Cloudflare Access in front of it) instead of
-    being purely local-only:
-
-    1. CSRF (double-submit cookie): every POST must carry a csrf_token form
-       field matching this browser's csrf_token cookie. The cookie's value
-       never leaves this app's own pages (it's only ever embedded into forms
-       server-side, via base.html's <meta> tag + the shared submit-listener
-       JS -- see chart-tooltip.js's neighbor script in base.html), so a
-       third-party page can't know what value to forge into a hidden POST.
-    2. Access logging (app.access_log) -- who hit this app and did what.
-    """
+async def audit_middleware(request: Request, call_next):
+    """Issues the CSRF cookie and records every request (app.access_log).
+    Deliberately does NOT touch the request body -- see csrf_protect()."""
     cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
     request.state.csrf_token = cookie_token or secrets.token_urlsafe(32)
-
-    if request.method == "POST":
-        form = await request.form()
-        submitted = form.get("csrf_token")
-        if not cookie_token or not submitted or not secrets.compare_digest(cookie_token, submitted):
-            response = Response(
-                "This form's security check failed (missing or expired) -- reload the page and try again.",
-                status_code=403, media_type="text/plain",
-            )
-            record_access(get_connection(), request, response.status_code)
-            return response
 
     response = await call_next(request)
 

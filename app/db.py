@@ -7,8 +7,20 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # timeout is the busy-wait before giving up on a locked database. Python's
+    # 5s default is far too short here: the background job holds write
+    # transactions across slow network I/O (draining SQS for up to 5 minutes,
+    # paginating Mailgun's event API), so a request that arrives mid-job -- the
+    # "Refresh now" button especially -- hit "database is locked" outright.
+    # That only started showing up once the scheduler was fixed to actually
+    # run on time; before that the job almost never fired, so nothing collided.
+    conn = sqlite3.connect(db_path, timeout=60.0)
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets readers carry on while a writer is active, which is exactly this
+    # app's shape: one long background writer plus page renders that only read.
+    # Persistent once set, so this is effectively a one-time migration.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 60000")
     conn.row_factory = sqlite3.Row
     return conn
 

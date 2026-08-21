@@ -243,6 +243,19 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
     return campaigns, None
 
 
+def _stale(conn, mailgun_domain, recheck_hours):
+    """True if this Mailgun domain hasn't been scanned for newsletters within
+    `recheck_hours`, per mailgun_campaign_scans."""
+    row = conn.execute(
+        "SELECT scanned_at AS last FROM mailgun_campaign_scans WHERE mailgun_domain=?",
+        (mailgun_domain,),
+    ).fetchone()
+    if not row or not row["last"]:
+        return True
+    last = datetime.datetime.strptime(row["last"], "%Y-%m-%d %H:%M:%S")
+    return last < datetime.datetime.utcnow() - datetime.timedelta(hours=recheck_hours)
+
+
 def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
     settings = ensure_default_settings(conn)
     api_key = get_secret("MAILGUN_API_KEY")
@@ -253,6 +266,7 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
 
     window_days = int(settings["mailgun_newsletter_window_days"])
     min_recipients = int(settings["mailgun_newsletter_min_recipients"])
+    recheck_hours = int(settings["mailgun_recheck_hours"])
 
     mg_domains, err = list_mailgun_domains(api_key)
     if err:
@@ -263,6 +277,13 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
 
     total = 0
     for mailgun_domain, (domain_id, domain_name) in matches.items():
+        # Rate-limit per domain, matching how mailgun.py gates its own checks.
+        # Without this, every call re-paginated five event types across every
+        # matched domain -- ~110s of pure API waiting -- which is fine for a
+        # 6-hourly background job but made the interactive "Refresh now"
+        # button block for over two minutes on every press.
+        if not _stale(conn, mailgun_domain, recheck_hours):
+            continue
         t_open, t_click = fetch_tracking_settings(mailgun_domain, api_key)
         campaigns, cerr = fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
                                            tracking_open=t_open, tracking_click=t_click)
@@ -296,6 +317,16 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
                  None if c["tracking_click_setting"] is None else int(c["tracking_click_setting"])),
             )
             total += 1
+        conn.execute(
+            """INSERT INTO mailgun_campaign_scans (mailgun_domain, scanned_at) VALUES (?, datetime('now'))
+               ON CONFLICT(mailgun_domain) DO UPDATE SET scanned_at=datetime('now')""",
+            (mailgun_domain,),
+        )
+        # Commit per domain rather than once at the end: the loop makes several
+        # paginated Mailgun API calls per domain, and holding one write
+        # transaction open across all of that network latency is what blocked
+        # other writers long enough to matter.
+        conn.commit()
         if verbose and campaigns:
             print(f"[mailgun-campaigns] {mailgun_domain} ({domain_name}): {len(campaigns)} newsletter(s)")
     conn.commit()
