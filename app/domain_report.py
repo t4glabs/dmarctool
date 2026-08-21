@@ -33,6 +33,7 @@ from app.analysis import (cached_whois_org, current_policy_run, domain_window_st
                            epoch_day, guess_sender_identity, recent_campaigns, sending_cadence)
 from app.config import get_secret
 from app.db import get_connection, init_db
+from app.domain_expiry import days_until
 from app.mailgun import send_message
 
 DEFAULT_INTERVAL_DAYS = 30
@@ -79,6 +80,7 @@ _PROBLEM_STORY = {
     "subject_spam_risk": "the subject line of one of your newsletters looked similar to what spam filters watch out for",
     "sending_cadence_irregular": ("your newsletters haven't been going out on a very consistent schedule lately, "
                                    "and a steady rhythm helps mailbox providers trust your mail more"),
+    "domain_expiring_soon": "your website's domain name registration is coming up for renewal soon",
 }
 _GENERIC_PROBLEM_STORY = "something about your website's email setup needed attention"
 
@@ -103,6 +105,7 @@ _OPERATOR_ONLY_CATEGORIES = {
 _URGENT_STILL_OPEN_CATEGORIES = {
     "mailgun_reputation", "ses_reputation", "ses_reputation_watch",
     "ses_rejected", "blocklist", "safe_browsing_flagged", "dns_policy_weakened",
+    "domain_expiring_soon",
 }
 
 # Gmail/Postmaster's own calibration points, reused from the same thresholds
@@ -129,6 +132,7 @@ _TIP_LIBRARY = {
     "spf_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "dns_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "dkim_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can -- if it lapses, your website and all your email stop working right away, and someone else could register it.",
 }
 _CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or month each time. A predictable "
                      "rhythm helps mailbox providers trust your mail more, and helps your readers know when to "
@@ -399,6 +403,21 @@ def _reputation_rate_detail(conn, category: str, ref_key: str, start_str: str, e
             f"roughly {rate:.1f}%")
 
 
+def _domain_expiry_detail(conn, domain_id: int):
+    """Real expiry date + days-left for the still-open domain_expiring_soon
+    item -- same "make it concrete, not just a generic phrase" discipline as
+    _reputation_rate_detail. Returns None if the latest check somehow has no
+    expires_at (shouldn't happen if the item is open, but never guess)."""
+    row = conn.execute(
+        "SELECT expires_at FROM domain_expiry_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1",
+        (domain_id,),
+    ).fetchone()
+    if not row or not row["expires_at"]:
+        return None
+    days_left = days_until(row["expires_at"])
+    return f"It's due to expire on {row['expires_at']}, which is {days_left} day{'s' if days_left != 1 else ''} away"
+
+
 def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blocklist_real_ips: set = frozenset()):
     """Still-open action items, one per category (same dedup as the
     dashboard's own list), each carrying as concrete a "detail" clause as we
@@ -436,6 +455,8 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
         detail = None
         if category in (_MAILGUN_RATE_IMPACT_CATEGORIES | _SES_RATE_IMPACT_CATEGORIES) and ref_key:
             detail = _reputation_rate_detail(conn, category, ref_key, start_str, end_str)
+        elif category == "domain_expiring_soon":
+            detail = _domain_expiry_detail(conn, domain_id)
         items.append({"story": _plain_problem(category), "detail": detail})
     return items
 
@@ -785,6 +806,15 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "contact_cta": contact_cta,
         "tips": tips,
     }
+
+
+def report_period_for_domain(conn, domain_id: int):
+    """Public wrapper around _report_period for callers outside this module
+    (e.g. the interactive client-view route in web.py) that need the exact
+    same period a real/preview send would use, without reaching into a
+    private helper."""
+    row = get_report_settings(conn, domain_id)
+    return _report_period(row, datetime.datetime.utcnow())
 
 
 def _report_period(row, now: datetime.datetime):

@@ -1,6 +1,8 @@
 """Server-rendered SVG sparkline for the pass-rate trend -- no JS charting
 library, no CDN, no build step; just a string of SVG markup dropped into the template."""
 
+import math
+
 
 def pass_rate_sparkline(series, threshold: float = 0.99, width: int = 640, height: int = 140) -> str:
     """series: list of (date, total, passed, rate) as returned by analysis.daily_pass_series."""
@@ -45,9 +47,10 @@ def pass_rate_sparkline(series, threshold: float = 0.99, width: int = 640, heigh
     dots = []
     for i, rate in points_with_data:
         color = "currentColor"
+        tooltip = f"{series[i][0]}: {rate:.1%} ({series[i][2]}/{series[i][1]})"
         dots.append(
-            f'<circle cx="{x_for(i):.1f}" cy="{y_for(rate):.1f}" r="2" fill="{color}" opacity="0.8">'
-            f'<title>{series[i][0]}: {rate:.1%} ({series[i][2]}/{series[i][1]})</title></circle>'
+            f'<circle cx="{x_for(i):.1f}" cy="{y_for(rate):.1f}" r="3" fill="{color}" opacity="0.8" '
+            f'data-tooltip="{tooltip}"/>'
         )
 
     svg = f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
@@ -105,9 +108,10 @@ def spam_rate_sparkline(series, width: int = 640, height: int = 140) -> str:
     dots = []
     for i, rate in points_with_data:
         style = "fill:var(--bad)" if rate >= 0.003 else ("fill:var(--warn)" if rate >= 0.001 else "fill:currentColor")
+        tooltip = f"{series[i][0]}: {rate:.3%}"
         dots.append(
-            f'<circle cx="{x_for(i):.1f}" cy="{y_for(rate):.1f}" r="2.3" style="{style}" opacity="0.9">'
-            f'<title>{series[i][0]}: {rate:.3%}</title></circle>'
+            f'<circle cx="{x_for(i):.1f}" cy="{y_for(rate):.1f}" r="3" style="{style}" opacity="0.9" '
+            f'data-tooltip="{tooltip}"/>'
         )
 
     return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
@@ -150,8 +154,8 @@ def dual_rate_sparkline(series, width: int = 640, height: int = 140,
         pts = " ".join(f"{x_for(i):.1f},{y_for(r):.1f}" for i, r in points)
         line = f'<polyline points="{pts}" fill="none" style="stroke:{style_color}" stroke-width="1.75" opacity="0.9"/>'
         dots = "".join(
-            f'<circle cx="{x_for(i):.1f}" cy="{y_for(r):.1f}" r="2.2" style="fill:{style_color}" opacity="0.9">'
-            f'<title>{series[i][0]}: {r:.2%}</title></circle>'
+            f'<circle cx="{x_for(i):.1f}" cy="{y_for(r):.1f}" r="2.8" style="fill:{style_color}" opacity="0.9" '
+            f'data-tooltip="{series[i][0]}: {r:.2%}"/>'
             for i, r in points
         )
         return line, dots
@@ -203,7 +207,7 @@ def volume_bar_chart(series, width: int = 640, height: int = 140) -> str:
         y = pad_t + plot_h - h
         bars.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{h:.1f}" '
-            f'fill="currentColor" opacity="0.75"><title>{series[i][0]}: {c}</title></rect>'
+            f'fill="currentColor" opacity="0.75" data-tooltip="{series[i][0]}: {c}"/>'
         )
 
     first_date, last_date = series[0][0], series[-1][0]
@@ -214,4 +218,124 @@ def volume_bar_chart(series, width: int = 640, height: int = 140) -> str:
   {''.join(bars)}
   <text x="{pad_l}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6">{first_date}</text>
   <text x="{width - pad_r}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6" text-anchor="end">{last_date}</text>
+</svg>'''
+
+
+def disposition_donut_chart(pass_count: int, quarantine_count: int, reject_count: int,
+                             width: int = 150, height: int = 150) -> str:
+    """Donut chart of DMARC disposition mix -- what actually happened to mail
+    that was evaluated, not just the pass-rate percentage already shown
+    elsewhere. Same disp_none/disp_quarantine/disp_reject counts
+    analysis.provider_breakdown() already sums (callers should pass the
+    domain-window totals across all providers), just visualized."""
+    total = pass_count + quarantine_count + reject_count
+    cx, cy = width / 2, height / 2
+    # stroke_w is a fraction of r, so the ring's OUTER edge is r + stroke_w/2,
+    # not r itself -- sizing r off the half-viewport alone (ignoring that)
+    # let the ring's outside edge overflow past the svg's own edges, clipping
+    # it on all 4 sides. Solve for r so the outer edge fits within the
+    # viewport with a small margin instead.
+    margin = 6
+    stroke_fraction = 0.62
+    max_outer_r = min(width, height) / 2 - margin
+    r = max_outer_r / (1 + stroke_fraction / 2)
+    stroke_w = r * stroke_fraction
+    circumference = 2 * math.pi * r
+
+    if total <= 0:
+        return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">'
+                f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="currentColor" '
+                f'stroke-opacity="0.15" stroke-width="{stroke_w:.1f}"/>'
+                f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" class="donut-center-sublabel">no data</text></svg>')
+
+    segments = [
+        (pass_count, "var(--ok)", "delivered"),
+        (quarantine_count, "var(--warn)", "quarantined"),
+        (reject_count, "var(--bad)", "rejected"),
+    ]
+    arcs = []
+    cumulative = 0.0
+    for count, color, seg_label in segments:
+        if count <= 0:
+            continue
+        length = (count / total) * circumference
+        pct = count / total
+        arcs.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="{color}" stroke-width="{stroke_w:.1f}" '
+            f'stroke-dasharray="{length:.2f} {circumference - length:.2f}" '
+            f'stroke-dashoffset="{-cumulative:.2f}" transform="rotate(-90 {cx} {cy})" '
+            f'data-tooltip="{count} {seg_label} ({pct:.1%})"/>'
+        )
+        cumulative += length
+
+    pass_rate = pass_count / total
+    return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
+  {''.join(arcs)}
+  <text x="{cx}" y="{cy - 2}" text-anchor="middle" class="donut-center-label">{pass_rate:.0%}</text>
+  <text x="{cx}" y="{cy + 15}" text-anchor="middle" class="donut-center-sublabel">delivered</text>
+</svg>'''
+
+
+def provider_stacked_bar_chart(rows, width: int = 640, max_rows: int = 8) -> str:
+    """rows: analysis.provider_breakdown()'s return list (dicts with org_name/
+    total/disp_none/disp_quarantine/disp_reject) -- one stacked-by-disposition
+    horizontal bar per reporting provider, so "who sees this mail and what
+    happens to it" is visual, with the existing table underneath for exact
+    numbers."""
+    rows = [r for r in rows if r["total"]][:max_rows]
+    label_w = 140
+    pad_l, pad_r, pad_t, row_h, row_gap, legend_h = label_w, 55, 6, 18, 9, 22
+    if not rows:
+        return (f'<svg width="{width}" height="60"><text x="10" y="20" fill="currentColor" '
+                f'opacity="0.6">not enough data yet</text></svg>')
+
+    plot_h = len(rows) * row_h + (len(rows) - 1) * row_gap
+    height = pad_t + plot_h + legend_h
+    plot_w = width - pad_l - pad_r
+    max_total = max(r["total"] for r in rows)
+    scale = (plot_w / max_total) if max_total else 0
+
+    parts = []
+    for idx, r in enumerate(rows):
+        y = pad_t + idx * (row_h + row_gap)
+        total = r["total"]
+        label = r["org_name"]
+        label = label if len(label) <= 22 else label[:21] + "…"
+        x = float(pad_l)
+        parts.append(
+            f'<text x="{pad_l - 8}" y="{y + row_h * 0.72:.1f}" font-size="11" fill="currentColor" '
+            f'opacity="0.85" text-anchor="end">{label}</text>'
+        )
+        for count, color, seg_label in (
+            (r["disp_none"], "var(--ok)", "delivered"),
+            (r["disp_quarantine"], "var(--warn)", "quarantined"),
+            (r["disp_reject"], "var(--bad)", "rejected"),
+        ):
+            if count <= 0:
+                continue
+            seg_w = max(count * scale, 1.0)
+            pct = count / total if total else 0
+            parts.append(
+                f'<rect x="{x:.1f}" y="{y:.1f}" width="{seg_w:.1f}" height="{row_h}" fill="{color}" '
+                f'data-tooltip="{r["org_name"]}: {count} {seg_label} ({pct:.1%})"/>'
+            )
+            x += seg_w
+        parts.append(
+            f'<text x="{x + 6:.1f}" y="{y + row_h * 0.72:.1f}" font-size="10" fill="currentColor" '
+            f'opacity="0.6">{total}</text>'
+        )
+
+    legend_y = height - 6
+    legend = (
+        f'<circle cx="{pad_l}" cy="{legend_y - 3:.1f}" r="3" fill="var(--ok)"/>'
+        f'<text x="{pad_l + 8}" y="{legend_y:.1f}" font-size="10" fill="currentColor" opacity="0.75">delivered</text>'
+        f'<circle cx="{pad_l + 78}" cy="{legend_y - 3:.1f}" r="3" fill="var(--warn)"/>'
+        f'<text x="{pad_l + 86}" y="{legend_y:.1f}" font-size="10" fill="currentColor" opacity="0.75">quarantined</text>'
+        f'<circle cx="{pad_l + 172}" cy="{legend_y - 3:.1f}" r="3" fill="var(--bad)"/>'
+        f'<text x="{pad_l + 180}" y="{legend_y:.1f}" font-size="10" fill="currentColor" opacity="0.75">rejected</text>'
+    )
+
+    return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
+  {''.join(parts)}
+  {legend}
 </svg>'''

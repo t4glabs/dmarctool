@@ -19,7 +19,29 @@
   </ul>
 </details>
 
-{% if overview.no_dmarc or overview.weakened or overview.suspicious_by_ip or overview.mta_sts_broken or overview.stale %}
+<div class="health-strip">
+  <div class="pill">
+    <div class="pill-top">🌐</div>
+    <div class="pill-value">{{ kpis.total_domains }}</div>
+    <div class="pill-label">Domains tracked</div>
+  </div>
+  <div class="pill {{ 'ok' if kpis.domains_with_issues == 0 else 'warn' }}">
+    <div class="pill-top">{{ '✅' if kpis.domains_with_issues == 0 else '⚠️' }}</div>
+    <div class="pill-value">{{ kpis.domains_with_issues }}</div>
+    <div class="pill-label">Domains with open items</div>
+  </div>
+  <div class="pill {{ 'bad' if kpis.expiring_soon else 'ok' }}">
+    <div class="pill-top">{{ '📅' if kpis.expiring_soon else '✅' }}</div>
+    <div class="pill-value">{{ kpis.expiring_soon }}</div>
+    <div class="pill-label">Expiring soon</div>
+  </div>
+  <div class="pill pill-wide">
+    <div class="pill-label" style="margin-bottom:0.3rem">📈 Portfolio-wide pass rate (60d, all domains combined)</div>
+    <div class="sparkline">{{ portfolio_sparkline_svg | safe }}</div>
+  </div>
+</div>
+
+{% if overview.no_dmarc or overview.weakened or overview.expiring_soon or overview.suspicious_by_ip or overview.mta_sts_broken or overview.stale %}
 <div class="section" style="margin-bottom:1.2rem;">
   <h2 class="first" style="margin-top:0">🛡️ Portfolio security overview</h2>
   <p class="muted" style="margin-top:0">The handful of things worth checking across every domain at once, instead of clicking into each one.</p>
@@ -35,6 +57,13 @@
   <div class="row">
     <span class="label" title="Live DNS now enforces less than the last known-good baseline -- possibly an unintentional or unauthorized change">Protection weakened</span>
     <span>{% for name in overview.weakened %}<a href="/domain/{{ name }}" class="badge bad" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
+  </div>
+  {% endif %}
+
+  {% if overview.expiring_soon %}
+  <div class="row">
+    <span class="label" title="These domains' own registration (not any DNS record) is close to expiring -- if it lapses, the website and all mail, including DMARC reports, stop working immediately">Domain registration expiring soon</span>
+    <span>{% for d in overview.expiring_soon %}<a href="/domain/{{ d.name }}" class="badge bad" style="margin-right:0.3rem;">{{ d.name }} ({{ d.days_left }}d)</a>{% endfor %}</span>
   </div>
   {% endif %}
 
@@ -153,6 +182,10 @@
         {% endif %}
       </span>
     </div>
+
+    {% if d.card_sparkline_svg %}
+    <div class="sparkline" style="margin:0.4rem 0 0.6rem 0" title="Pass rate trend, last 30 days">{{ d.card_sparkline_svg | safe }}</div>
+    {% endif %}
 
     <div class="row">
       <span class="label" title="The most recent report data we have on file for this domain">Last ingested</span>

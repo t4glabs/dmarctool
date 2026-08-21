@@ -7,18 +7,60 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<nav>
-  <a class="brand" href="/">DMARCTool</a>
-  <a href="/">Overview</a>
-  <a href="/other-domains">Other domains</a>
-  <a href="/settings">Settings</a>
-</nav>
-<main>
-{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
-{% block content %}{% endblock %}
-</main>
+<script>
+// Anti-flash: apply the collapsed state before the sidebar is even painted,
+// synchronously, ahead of any other markup -- toggling the class after
+// paint would show a visible snap on every page load.
+try {
+  if (localStorage.getItem("sidebarCollapsed") === "1") {
+    document.documentElement.classList.add("sidebar-collapsed");
+  }
+} catch (e) {}
+</script>
+{% set current_path = request.url.path %}
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="mark">&#9993;&#65039;</span>
+      <span class="wordmark">DMARCTool</span>
+      <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="Collapse sidebar" title="Collapse sidebar">&#8249;</button>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="sidebar-link {{ 'active' if current_path == '/' or current_path.startswith('/domain/') else '' }}" href="/">
+        <span class="icon">&#127760;</span><span class="label">Overview</span>
+      </a>
+      <a class="sidebar-link {{ 'active' if current_path == '/other-domains' else '' }}" href="/other-domains">
+        <span class="icon">&#128269;</span><span class="label">Other domains</span>
+      </a>
+      <a class="sidebar-link {{ 'active' if current_path == '/settings' else '' }}" href="/settings">
+        <span class="icon">&#9881;&#65039;</span><span class="label">Settings</span>
+      </a>
+    </nav>
+  </aside>
+  <div class="content-area">
+    <main>
+    {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+    {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+  var sidebarToggle = document.getElementById("sidebar-toggle");
+  if (sidebarToggle) {
+    var setGlyph = function (collapsed) {
+      sidebarToggle.textContent = collapsed ? "›" : "‹"; // › when collapsed (expand), ‹ when open (collapse)
+      sidebarToggle.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+    };
+    setGlyph(document.documentElement.classList.contains("sidebar-collapsed"));
+    sidebarToggle.addEventListener("click", function () {
+      var collapsed = !document.documentElement.classList.contains("sidebar-collapsed");
+      document.documentElement.classList.toggle("sidebar-collapsed", collapsed);
+      setGlyph(collapsed);
+      try { localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0"); } catch (e) {}
+    });
+  }
+
   document.querySelectorAll(".tabs").forEach(function (tabs) {
     var buttons = Array.prototype.slice.call(tabs.querySelectorAll(".tab-btn"));
     var panels = Array.prototype.slice.call(tabs.querySelectorAll(".tab-panel"));
@@ -65,5 +107,6 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 });
 </script>
+<script src="/static/chart-tooltip.js"></script>
 </body>
 </html>

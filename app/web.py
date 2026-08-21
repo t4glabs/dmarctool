@@ -28,19 +28,25 @@ from fastapi.templating import Jinja2Templates
 from app.analysis import (
     all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
     domain_window_stats, day_to_date, epoch_day, ensure_default_settings, guess_sender_identity,
-    likely_causal_senders, mailgun_daily_series, postmaster_daily_series, provider_breakdown, recent_campaigns,
-    run_analysis, sending_cadence, ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
+    likely_causal_senders, mailgun_daily_series, portfolio_daily_pass_series, postmaster_daily_series,
+    provider_breakdown, recent_campaigns, run_analysis, sending_cadence, ses_daily_series,
+    sending_stream_breakdown, subscriber_engagement_summary,
 )
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
-from app.charts import dual_rate_sparkline, pass_rate_sparkline, spam_rate_sparkline, volume_bar_chart
+from app.charts import (
+    disposition_donut_chart, dual_rate_sparkline, pass_rate_sparkline, provider_stacked_bar_chart,
+    spam_rate_sparkline, volume_bar_chart,
+)
 from app.compliance import run_compliance_checks
 from app.config import get_secret
 from app.db import get_connection, init_db
 from app.dns_check import discover_untracked_subdomains, run_dns_checks
+from app.domain_expiry import days_until, run_domain_expiry_checks
 from app.domain_report import (
-    get_report_settings, preview_domain_report, run_report_emails, save_report_settings, send_report_now,
+    get_report_settings, preview_domain_report, report_period_for_domain, run_report_emails,
+    save_report_settings, send_report_now,
 )
 from app.listmonk import run_listmonk_content_sync
 from app.mailgun import run_mailgun_checks
@@ -104,6 +110,7 @@ def _startup():
         run_listmonk_content_sync(c, verbose=False)
         run_safe_browsing_checks(c, verbose=False)
         run_mta_sts_checks(c, verbose=False)
+        run_domain_expiry_checks(c, verbose=False)
         run_report_emails(c, verbose=False)
 
     _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
@@ -125,6 +132,10 @@ def build_domain_summary(conn, domain_row, settings):
     latest_dns = conn.execute(
         "SELECT * FROM dns_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
     ).fetchone()
+    latest_expiry = conn.execute(
+        "SELECT * FROM domain_expiry_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
+    ).fetchone()
+    expiry_days_left = days_until(latest_expiry["expires_at"]) if latest_expiry and latest_expiry["expires_at"] else None
     report_run = current_policy_run(conn, domain_id)
     latest_report = conn.execute(
         "SELECT MAX(date_end) as latest FROM reports WHERE domain_id=?", (domain_id,)
@@ -153,8 +164,16 @@ def build_domain_summary(conn, domain_row, settings):
     ):
         open_counts[row["category"]] = row["n"]
 
+    card_sparkline_svg = None
+    if latest_report["latest"]:
+        card_series = daily_pass_series(conn, domain_id, days=30)
+        card_sparkline_svg = pass_rate_sparkline(
+            card_series, threshold=float(settings["min_pass_rate"]), width=280, height=48
+        )
+
     return {
         "name": name,
+        "card_sparkline_svg": card_sparkline_svg,
         "dns_status": latest_dns["status"] if latest_dns else "unknown",
         "dns_match": bool(latest_dns["matches_expected"]) if latest_dns and latest_dns["matches_expected"] is not None else None,
         "dns_p": latest_dns["parsed_p"] if latest_dns else None,
@@ -168,6 +187,9 @@ def build_domain_summary(conn, domain_row, settings):
         "last_ingested": last_ingested,
         "open_counts": open_counts,
         "rec_title": rec_row["title"] if rec_row else None,
+        "expiry_date": latest_expiry["expires_at"] if latest_expiry else None,
+        "expiry_days_left": expiry_days_left,
+        "expiry_warn_days": int(settings["domain_expiry_warn_days"]),
     }
 
 
@@ -188,6 +210,10 @@ def build_portfolio_overview(conn, domains: list) -> dict:
     stale = [d["name"] for d in domains if "data_stale" in d["open_counts"]]
     weakened = [d["name"] for d in domains if "dns_policy_weakened" in d["open_counts"]]
     mta_sts_broken = [d["name"] for d in domains if "mta_sts_broken" in d["open_counts"]]
+    expiring_soon = sorted(
+        (d for d in domains if d["expiry_days_left"] is not None and d["expiry_days_left"] <= d["expiry_warn_days"]),
+        key=lambda d: d["expiry_days_left"],
+    )
 
     suspicious = conn.execute(
         """SELECT DISTINCT d.name as domain_name, ks.source_ip FROM known_senders ks
@@ -204,6 +230,7 @@ def build_portfolio_overview(conn, domains: list) -> dict:
         "stale": stale,
         "weakened": weakened,
         "mta_sts_broken": mta_sts_broken,
+        "expiring_soon": [{"name": d["name"], "days_left": d["expiry_days_left"]} for d in expiring_soon],
         "suspicious_by_ip": suspicious_by_ip,
     }
 
@@ -214,7 +241,18 @@ def index(request: Request, flash: str = None):
     settings = ensure_default_settings(conn)
     domains = [build_domain_summary(conn, d, settings) for d in all_domains(conn)]
     overview = build_portfolio_overview(conn, domains)
-    return templates.TemplateResponse(request, "index.html", {"domains": domains, "overview": overview, "flash": flash})
+    domains_with_issues = sum(1 for d in domains if d["open_counts"])
+    portfolio_series = portfolio_daily_pass_series(conn, days=60)
+    portfolio_sparkline_svg = pass_rate_sparkline(portfolio_series, threshold=float(settings["min_pass_rate"]))
+    kpis = {
+        "total_domains": len(domains),
+        "domains_with_issues": domains_with_issues,
+        "expiring_soon": len(overview["expiring_soon"]),
+    }
+    return templates.TemplateResponse(request, "index.html", {
+        "domains": domains, "overview": overview, "flash": flash,
+        "kpis": kpis, "portfolio_sparkline_svg": portfolio_sparkline_svg,
+    })
 
 
 # For these IP-bearing action-item categories, once guess_sender_identity()
@@ -265,6 +303,12 @@ def domain_detail(request: Request, name: str, flash: str = None):
     mta_sts = conn.execute(
         "SELECT * FROM mta_sts_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
     ).fetchone()
+    domain_expiry = conn.execute(
+        "SELECT * FROM domain_expiry_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
+    ).fetchone()
+    domain_expiry_days_left = (
+        days_until(domain_expiry["expires_at"]) if domain_expiry and domain_expiry["expires_at"] else None
+    )
 
     report_run = current_policy_run(conn, domain_id)
     manual_run = conn.execute(
@@ -287,6 +331,12 @@ def domain_detail(request: Request, name: str, flash: str = None):
         providers = provider_breakdown(conn, domain_id, window_start, latest_report["latest"])
         streams = sending_stream_breakdown(conn, domain_id, window_start, latest_report["latest"])
     google_volume = next((p["total"] for p in providers if p["org_name"] == "google.com"), None)
+    disposition_donut_svg = disposition_donut_chart(
+        sum(p["disp_none"] for p in providers),
+        sum(p["disp_quarantine"] for p in providers),
+        sum(p["disp_reject"] for p in providers),
+    )
+    provider_chart_svg = provider_stacked_bar_chart(providers)
 
     series = daily_pass_series(conn, domain_id, days=60)
     sparkline_svg = pass_rate_sparkline(series, threshold=float(settings["min_pass_rate"]))
@@ -503,6 +553,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "recommendation": {"title": rec_row["title"], "detail": rec_row["detail"]} if rec_row else None,
         "window_days": window_days, "window_total": window_total, "window_rate": window_rate,
         "sparkline_svg": sparkline_svg,
+        "disposition_donut_svg": disposition_donut_svg,
+        "provider_chart_svg": provider_chart_svg,
         "providers": providers,
         "streams": streams,
         "google_volume": google_volume,
@@ -541,6 +593,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "dns_history": dns_history,
         "safe_browsing": safe_browsing,
         "mta_sts": mta_sts,
+        "domain_expiry": domain_expiry,
+        "domain_expiry_days_left": domain_expiry_days_left,
+        "domain_expiry_warn_days": int(settings["domain_expiry_warn_days"]),
         "verdicts": verdicts,
     })
 
@@ -762,6 +817,41 @@ def preview_domain_report_html(request: Request, name: str):
     return templates.TemplateResponse(request, "email_report.html", context)
 
 
+@app.get("/domain/{name}/client_view", response_class=HTMLResponse)
+def client_report_view(request: Request, name: str):
+    """Read-only, interactive version of the same plain-language owner report
+    (same content, computed the same way as a real/preview send -- see
+    preview_domain_report()/report_period_for_domain()) but as a browsable
+    page with real charts instead of only prose percentages. Not yet exposed
+    beyond this locally-bound app -- same access level as /report_preview,
+    no auth of any kind."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        return HTMLResponse(f"Unknown domain: {name}", status_code=404)
+    domain_id = domain["id"]
+
+    _subject, _text, context = preview_domain_report(conn, domain_id, name)
+
+    period_start, period_end = report_period_for_domain(conn, domain_id)
+    start_epoch, end_epoch = int(period_start.timestamp()), int(period_end.timestamp())
+    providers = provider_breakdown(conn, domain_id, start_epoch, end_epoch)
+    disposition_donut_svg = disposition_donut_chart(
+        sum(p["disp_none"] for p in providers),
+        sum(p["disp_quarantine"] for p in providers),
+        sum(p["disp_reject"] for p in providers),
+    )
+    period_days = max(1, (period_end - period_start).days)
+    series = daily_pass_series(conn, domain_id, days=period_days)
+    sparkline_svg = pass_rate_sparkline(series)
+
+    return templates.TemplateResponse(request, "client_report.html", {
+        **context,
+        "disposition_donut_svg": disposition_donut_svg,
+        "sparkline_svg": sparkline_svg,
+    })
+
+
 @app.post("/action_items/{item_id}/resolve")
 def resolve_item(item_id: int, status: str = Form("done"), redirect_to: str = Form("/")):
     conn = get_connection()
@@ -806,8 +896,9 @@ def run_checks():
     run_listmonk_content_sync(conn, verbose=False)
     run_safe_browsing_checks(conn, verbose=False)
     run_mta_sts_checks(conn, verbose=False)
+    run_domain_expiry_checks(conn, verbose=False)
     return RedirectResponse(
-        "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, Safe Browsing, and MTA-STS checks refreshed.",
+        "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, Safe Browsing, MTA-STS, and domain expiry checks refreshed.",
         status_code=303,
     )
 

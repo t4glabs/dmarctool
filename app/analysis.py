@@ -72,6 +72,8 @@ DEFAULT_SETTINGS = {
     "volume_spike_min_baseline_avg": "10", # baseline must average at least this many msgs/day to count
     "volume_spike_multiplier": "2.0",      # recent avg must be at least this many times the baseline to flag
     "safe_browsing_recheck_hours": "24",   # Safe Browsing status doesn't change fast; daily is plenty
+    "domain_expiry_recheck_hours": "24",   # registration expiry dates change at most once a year; daily is plenty
+    "domain_expiry_warn_days": "30",       # flag + include in the email report once expiry is this close
     "report_sender_name": "Domain Health",           # display name for the domain-health email's From header
     "report_subject_template": "Your {domain} domain health update from aikyam",  # {domain} substituted at send time
     "report_signoff_name": "The aikyam Team",         # sign-off name at the bottom of the domain-health email
@@ -811,6 +813,41 @@ def daily_pass_series(conn, domain_id: int, days: int = 60):
            FROM report_records rr JOIN reports r ON r.id = rr.report_id
            WHERE r.domain_id = ? AND r.date_begin >= ?""",
         (domain_id, start_day * 86400),
+    ).fetchall()
+
+    per_day = {d: [0, 0] for d in range(start_day, latest_day + 1)}
+    for r in rows:
+        day = epoch_day(r["date_begin"])
+        if day not in per_day:
+            continue
+        per_day[day][0] += r["count"]
+        if r["dkim_result"] == "pass" or r["spf_result"] == "pass":
+            per_day[day][1] += r["count"]
+
+    series = []
+    for day in sorted(per_day):
+        total, passed = per_day[day]
+        rate = passed / total if total else None
+        series.append((day_to_date(day), total, passed, rate))
+    return series
+
+
+def portfolio_daily_pass_series(conn, days: int = 60):
+    """Same shape as daily_pass_series, but summed across every tracked
+    domain -- for the overview page's single portfolio-wide trend chart.
+    Anchored to the latest ingested report across ALL domains, same
+    "data quality, not wall-clock" rationale as the per-domain version."""
+    latest_row = conn.execute("SELECT MAX(date_end) as latest FROM reports").fetchone()
+    if not latest_row or latest_row["latest"] is None:
+        return []
+    latest_day = epoch_day(latest_row["latest"])
+    start_day = latest_day - days + 1
+
+    rows = conn.execute(
+        """SELECT r.date_begin, rr.count, rr.dkim_result, rr.spf_result
+           FROM report_records rr JOIN reports r ON r.id = rr.report_id
+           WHERE r.date_begin >= ?""",
+        (start_day * 86400,),
     ).fetchall()
 
     per_day = {d: [0, 0] for d in range(start_day, latest_day + 1)}

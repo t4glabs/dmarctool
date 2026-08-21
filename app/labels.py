@@ -35,6 +35,7 @@ CATEGORY_LABELS = {
     "safe_browsing_flagged": "Domain flagged unsafe",
     "mta_sts_broken": "MTA-STS misconfigured",
     "untracked_sending_subdomain": "Untracked sending subdomain found",
+    "domain_expiring_soon": "Domain registration expiring soon",
 }
 
 CATEGORY_HELP = {
@@ -68,6 +69,7 @@ CATEGORY_HELP = {
     "safe_browsing_flagged": "Google Safe Browsing has flagged this domain (or a URL on it) as unsafe -- e.g. malware or phishing. This can independently hurt email deliverability and trust, separate from your DMARC/authentication setup.",
     "mta_sts_broken": "MTA-STS (which protects inbound mail to you against TLS downgrade/interception) has a DNS record advertising it, but the actual policy file is missing or invalid -- worse than never setting it up, since it invites mail servers that check for it to find a dangling policy.",
     "untracked_sending_subdomain": "A common sending subdomain (e.g. mail.<domain>) publishes its own DMARC record, separate from this domain's, but isn't tracked here as its own domain. A subdomain's DMARC record and reports are completely independent of its parent's -- if someone set this up for sending, DMARCTool has had zero visibility into it until now.",
+    "domain_expiring_soon": "This domain's registration itself (not any DNS record on it) is close to its expiry date. Unlike every other check here, this isn't about DMARC/authentication -- once a domain lapses, its website and all mail (including DMARC reports) stop working immediately, and it can become available for anyone else to register.",
 }
 
 # Concrete "what to actually do about it" guidance per action-item category --
@@ -107,6 +109,7 @@ CATEGORY_REMEDIATION = {
     "spf_missing": "Publish an SPF TXT record at your domain's apex (not a subdomain) listing everything that sends mail as you -- e.g. \"v=spf1 include:_spf.google.com include:mailgun.org ~all\" adjusted for whichever of Google Workspace/SES/Mailgun/etc. you actually use. Each provider's own setup docs give you the exact include: value to add. See the Gmail sender requirements table above once it's published to confirm it's being read correctly.",
     "dkim_missing": "Turn on DKIM signing in whichever service sends as this domain (Google Workspace: Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email; SES: Identities -> this domain -> DKIM; Mailgun: Domain settings -> DNS records), then publish the CNAME/TXT record it gives you. This is usually a one-time setup per sending service, not something that needs redoing per campaign.",
     "untracked_sending_subdomain": "Check with whoever manages sending for this domain to confirm whether this subdomain is actually in use. If it is: make sure its DMARC record has a rua= reporting address (see the detail above for whether it's missing), then just let DMARCTool ingest reports for it -- adding a subdomain works exactly like any other domain, no special setup needed. If it's not in use / was a leftover from something abandoned, no action needed beyond knowing it's there.",
+    "domain_expiring_soon": "Renew the domain now, at whichever registrar it's registered with (see the detail above for which one) -- most registrars let you renew any time before expiry, even years in advance. If auto-renew is available and the card on file is current, turning it on avoids this happening again.",
 }
 
 # postmaster_compliance items all share one category, but the fix depends on
@@ -439,6 +442,16 @@ SETTINGS_META = {
         "help": "How often we re-check each domain against Google Safe Browsing. This status doesn't change quickly, so daily is plenty.",
         "example": "24 means each domain gets checked at most once a day.",
     },
+    "domain_expiry_recheck_hours": {
+        "label": "Minimum gap between domain expiry re-checks",
+        "help": "How often we re-check each domain's registration expiry date via RDAP. This changes at most once a year (at renewal), so daily is plenty.",
+        "example": "24 means each domain's expiry date gets checked at most once a day.",
+    },
+    "domain_expiry_warn_days": {
+        "label": "Days before expiry to start warning",
+        "help": "Once a domain's registration is this many days (or fewer) from expiring, it gets flagged as an action item here and mentioned in that domain's email report.",
+        "example": "30 means you (and the domain's report recipient) get warned once expiry is a month away.",
+    },
     "report_sender_name": {
         "label": "Domain health email -- sender display name",
         "help": "The name recipients see next to your sending address, e.g. in their inbox list. Applies to every domain's health update email -- one name for all of them, not set per domain.",
@@ -495,6 +508,9 @@ SETTINGS_GROUPS = [
     ]),
     ("🛡️ Google Safe Browsing", [
         "safe_browsing_recheck_hours",
+    ]),
+    ("📅 Domain registration expiry", [
+        "domain_expiry_recheck_hours", "domain_expiry_warn_days",
     ]),
     ("📧 Domain health email reports", [
         "report_sender_name", "report_subject_template", "report_signoff_name",

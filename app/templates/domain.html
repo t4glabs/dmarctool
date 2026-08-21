@@ -128,10 +128,18 @@
     </div>
 
     <div class="section">
-      <h2 class="first">📈 Pass rate trend ({{ window_days }}d window, {{ window_total }} msgs
+      <h2 class="first">📈 How this domain is doing ({{ window_days }}d window, {{ window_total }} msgs
         {% if window_rate is not none %}, {{ "%.1f"|format(window_rate*100) }}% pass{% endif %})</h2>
-      <p class="muted" style="margin-top:0">Percentage of your mail passing authentication, day by day. The dashed line marks the pass rate needed to safely move forward (set in Settings).</p>
-      <div class="sparkline">{{ sparkline_svg | safe }}</div>
+      <div class="chart-row">
+        <div class="chart-donut">
+          <div class="sparkline">{{ disposition_donut_svg | safe }}</div>
+          <p class="muted" style="font-size:0.78rem; text-align:center; margin:0.3rem 0 0 0; max-width:180px;">Disposition mix -- what your DMARC policy actually did with evaluated mail (not the same as pass rate)</p>
+        </div>
+        <div class="chart-flex">
+          <div class="sparkline">{{ sparkline_svg | safe }}</div>
+          <p class="muted" style="font-size:0.78rem; margin:0.3rem 0 0 0;">Pass-rate trend, day by day. The dashed line marks the pass rate needed to safely move forward (set in Settings).</p>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -216,6 +224,20 @@
             <span class="badge bad" title="{{ mta_sts.tlsrpt_note }}">Broken</span>
           {% else %}
             <span class="badge ok" title="{{ mta_sts.tlsrpt_note }}">Configured</span>
+          {% endif %}
+        </span>
+      </div>
+      <div class="row">
+        <span class="label" title="When this domain's registration itself expires, via RDAP. Not a DMARC/authentication check -- if this lapses, the website and all mail (including DMARC reports) stop working immediately.">Domain registration expires</span>
+        <span>
+          {% if not domain_expiry %}
+            <span class="badge muted">Not checked yet</span>
+          {% elif domain_expiry.status != 'ok' %}
+            <span class="badge muted" title="{{ domain_expiry.note }}">Couldn't check</span>
+          {% elif domain_expiry_days_left <= domain_expiry_warn_days %}
+            <span class="badge bad" title="{{ domain_expiry.note }}">{{ domain_expiry.expires_at }} -- {{ domain_expiry_days_left }} day{{ 's' if domain_expiry_days_left != 1 else '' }} left</span>{{ fix_note(category_remediation('domain_expiring_soon')) }}
+          {% else %}
+            <span class="badge ok" title="{{ domain_expiry.note }}">{{ domain_expiry.expires_at }} ({{ domain_expiry_days_left }} days){% if domain_expiry.registrar %}, via {{ domain_expiry.registrar }}{% endif %}</span>
           {% endif %}
         </span>
       </div>
@@ -311,6 +333,7 @@
       </p>
       <div class="verdict {{ verdicts.providers[0] }}">{{ verdicts.providers[1] }}</div>
       {% if providers %}
+      <div class="sparkline" style="margin-bottom:0.8rem">{{ provider_chart_svg | safe }}</div>
       <div class="table-wrap">
       <table>
         <tr><th>Provider</th><th>Msgs</th><th>Pass rate</th><th>None</th><th>Quarantine</th><th>Reject</th></tr>
@@ -858,6 +881,11 @@
       </div>
       <p class="muted" style="font-size:0.85rem; margin-top:0.6rem">
         <a href="/domain/{{ domain.name }}/report_preview" target="_blank" rel="noopener">View as the styled HTML email &rarr;</a>
+        &nbsp;&middot;&nbsp;
+        <a href="/domain/{{ domain.name }}/client_view" target="_blank" rel="noopener">View as an interactive page &rarr;</a>
+      </p>
+      <p class="muted" style="font-size:0.78rem; margin-top:0.3rem">
+        Same access level as the preview above -- not yet a public/shareable link (no login on this app at all yet).
       </p>
     </div>
 

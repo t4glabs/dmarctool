@@ -519,6 +519,23 @@ CREATE TABLE IF NOT EXISTS mta_sts_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_mta_sts_checks_domain ON mta_sts_checks(domain_id, checked_at);
 
+-- Domain registration expiry, via RDAP (no whois binary, no API key) --
+-- warns before the underlying domain name itself lapses, which would take
+-- the domain's mail (and website) down entirely, a failure mode DMARC/DKIM/
+-- SPF checks can't see.
+-- History kept (like mta_sts_checks/safe_browsing_checks) so "last checked"
+-- and "did the date just get renewed further out" are both visible.
+CREATE TABLE IF NOT EXISTS domain_expiry_checks (
+    id           INTEGER PRIMARY KEY,
+    domain_id    INTEGER NOT NULL REFERENCES domains(id),
+    checked_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    status       TEXT NOT NULL,  -- 'ok'|'error'
+    expires_at   TEXT,           -- ISO date (YYYY-MM-DD), NULL if the lookup failed
+    registrar    TEXT,
+    note         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_domain_expiry_checks_domain ON domain_expiry_checks(domain_id, checked_at);
+
 -- Tunable thresholds for the recommendation engine
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,

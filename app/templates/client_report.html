@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ domain_name }} -- email health update</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  /* This page's own shell -- deliberately not base.html's Ghost-admin-style
+     operator dashboard (no sidebar, no tabs). Its audience is a non-technical
+     domain owner, so it borrows the actual aikyam brand sites' aesthetic
+     (aikyamhq.com/aikyamfellows.org/aikyamjobs.org: warm cream background,
+     bold-word + light-word wordmark split, generous whitespace, rounded
+     cards) instead. Deliberately a fixed light/warm look, not theme-aware --
+     a brand page should read the same for every recipient, unlike the
+     internal dashboard's automatic dark mode. Overrides the shared
+     style.css tokens (loaded above) to a fixed palette so the charts, which
+     use those same tokens, render correctly here too regardless of the
+     viewer's OS theme. */
+  :root {
+    --bg: #faf6f0; --fg: #202226; --muted: #6b7280; --border: #e7e0d5;
+    --card: #ffffff; --card-raised: #f4efe7;
+    --ok: #1a9e3f; --ok-bg: rgba(48,207,67,0.14);
+    --warn: #9a6400; --warn-bg: rgba(245,192,0,0.18);
+    --bad: #d10a0a; --bad-bg: rgba(243,11,11,0.10);
+    --accent: #2f8fe0; --accent-bg: rgba(66,164,245,0.12);
+  }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--fg); }
+  .client-header { text-align: center; padding: 2.5rem 1.5rem 1rem; }
+  .client-header .wordmark { font-size: 1.2rem; letter-spacing: -0.01em; }
+  .client-header .wordmark b { font-weight: 700; }
+  .client-header .wordmark span { font-weight: 400; color: var(--muted); }
+  .client-shell { max-width: 640px; margin: 0 auto; padding: 0 1.5rem 3rem; }
+  .client-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+    padding: 2rem 2.2rem; margin-bottom: 1.2rem;
+  }
+  .client-card h1 { font-size: 1.5rem; margin: 0 0 0.3rem 0; }
+  .client-card .period {
+    color: var(--muted); font-size: 0.72rem; margin: 0 0 1.2rem 0;
+    text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+  }
+  .client-card > p.lede { font-size: 1rem; line-height: 1.65; }
+  .client-section { margin: 1.6rem 0; }
+  .client-section h2 { font-size: 1.05rem; margin: 0 0 0.6rem 0; }
+  .client-section p { font-size: 0.98rem; line-height: 1.6; margin: 0; }
+  .client-section ul { font-size: 0.98rem; line-height: 1.65; padding-left: 1.3rem; margin: 0; }
+  .client-section li { margin-bottom: 0.5rem; }
+  .callout { border-radius: 12px; padding: 1rem 1.2rem; }
+  .callout.good { background: var(--ok-bg); border: 1px solid var(--ok); }
+  .callout.bad { background: var(--bad-bg); border: 1px solid var(--bad); }
+  details.client-section summary { cursor: pointer; font-size: 1.05rem; font-weight: 600; margin-bottom: 0.6rem; }
+  details.client-section[open] summary { margin-bottom: 0.8rem; }
+  .client-footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+  <div class="client-header"><span class="wordmark"><b>aikyam</b> <span>reports</span></span></div>
+  <div class="client-shell">
+
+    <div class="client-card">
+      <p class="period">{{ period_start }} to {{ period_end }}</p>
+      <h1>Hi {{ recipient_label }},</h1>
+      <p class="lede">
+        Here's how <strong>{{ domain_name }}</strong>'s emails have been doing lately, in plain terms --
+        no technical jargon, just what happened and what we did about it.
+      </p>
+    </div>
+
+    {% if resolved %}
+    <div class="client-card">
+      <div class="client-section">
+        <h2 style="color:var(--ok)">🎉 What we fixed for you</h2>
+        <ul>
+          {% for item in resolved %}
+          <li>Earlier, {{ item.story }}. <strong>We've since taken care of this.</strong>{% if item.impact %} And here's the payoff: {{ item.impact }}.{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if still_open %}
+    <div class="client-card">
+      <div class="client-section">
+        <h2 style="color:var(--warn)">👀 What we're still working on</h2>
+        <ul>
+          {% for item in still_open %}
+          <li>{{ item.story[0]|upper }}{{ item.story[1:] }}.{% if item.detail %} {{ item.detail }}.{% endif %} We're on it.</li>
+          {% endfor %}
+        </ul>
+        {% if contact_cta %}<p style="margin-top:0.8rem">{{ contact_cta }}</p>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if not resolved and not still_open %}
+    <div class="client-card">
+      <div class="callout good">✅ Nothing needed fixing this time, everything's running smoothly.</div>
+    </div>
+    {% endif %}
+
+    {% if risk_warning %}
+    <div class="client-card">
+      <div class="callout bad">
+        <strong style="color:var(--bad)">🚨 Heads up:</strong> <span style="color:var(--bad)">{{ risk_warning }}</span>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="client-card">
+      <div class="client-section">
+        <h2>📫 How your emails are arriving</h2>
+        <p>{{ deliverability }}</p>
+        <div class="sparkline" style="margin-top:0.8rem">{{ sparkline_svg | safe }}</div>
+      </div>
+
+      <div class="client-section">
+        <h2>🔒 Protection from fake emails</h2>
+        {% if protection_tightened %}<p style="margin-bottom:0.6rem"><strong>{{ protection_tightened }}</strong></p>{% endif %}
+        <div class="chart-row">
+          <div class="chart-donut"><div class="sparkline">{{ disposition_donut_svg | safe }}</div></div>
+          <div class="chart-flex">
+            <p>{{ protection }}</p>
+          </div>
+        </div>
+      </div>
+
+      {% if spam_trend %}
+      <div class="client-section">
+        <h2>📊 Google's own view of your mail</h2>
+        <p>{{ spam_trend }}</p>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if blocklist_good_news %}
+    <div class="client-card">
+      <div class="callout good">🛡️ {{ blocklist_good_news }}</div>
+    </div>
+    {% endif %}
+
+    {% if newsletter %}
+    <details class="client-section" open style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:1.4rem 1.6rem;">
+      <summary>📰 Your newsletter's reach</summary>
+      <p>{{ newsletter }}</p>
+    </details>
+    {% endif %}
+
+    {% if comparison %}
+    <details class="client-section" style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:1.4rem 1.6rem;">
+      <summary>📈 How you compare</summary>
+      <p>{{ comparison }}</p>
+    </details>
+    {% endif %}
+
+    {% if tips %}
+    <details class="client-section" open style="background:var(--ok-bg); border:1px solid var(--ok); border-radius:var(--radius); padding:1.4rem 1.6rem;">
+      <summary style="color:var(--ok)">✅ Tips for the next few weeks</summary>
+      <ul>
+        {% for tip in tips %}<li>{{ tip }}</li>{% endfor %}
+      </ul>
+      <p style="margin-top:0.8rem">Whatever needs fixing here, aikyam will make sure it gets sorted properly. You don't have to solve this alone.</p>
+    </details>
+    {% endif %}
+
+    <div class="client-card">
+      <p style="margin:0 0 1rem 0">
+        This might look like a lot to take in, but it really matters. These are the things that decide
+        whether people actually see your emails, and whether someone could try to impersonate your
+        organization using your name. Reach out any time if anything's unclear -- we're always happy to
+        walk through it with you.
+      </p>
+      <p style="margin:0">With care,<br><strong>{{ signoff_name }}</strong></p>
+    </div>
+
+    <p class="client-footer">This page reflects the same update aikyam sends by email for {{ domain_name }}.</p>
+  </div>
+  <script src="/static/chart-tooltip.js"></script>
+</body>
+</html>
