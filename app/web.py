@@ -71,7 +71,27 @@ from app.verdicts import (
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+def static_version(filename: str) -> int:
+    """File mtime as a cache-busting query string value for /static/<filename>.
+    Without this, a CSS/JS change here can render correctly on localhost
+    (fresh from disk) while still showing stale/broken on the public
+    vigil.aikyamfellows.org hostname behind the Cloudflare Tunnel -- both
+    Cloudflare's own edge cache (which caches static file extensions like
+    .css/.js by default) and the browser's own HTTP cache key on the exact
+    URL, so a plain reload can keep reusing an old cached copy under the
+    old URL forever. Changing the file changes its mtime, which changes the
+    URL every template that references it renders, which busts both caches
+    at once -- no manual Cloudflare cache purge needed after a deploy."""
+    try:
+        return int((BASE_DIR / "static" / filename).stat().st_mtime)
+    except FileNotFoundError:
+        return 0
+
+
 templates.env.globals.update({
+    "static_version": static_version,
     "explain_policy": explain_policy,
     "category_label": category_label,
     "category_help": category_help,

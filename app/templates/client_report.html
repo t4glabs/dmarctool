@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ domain_name }} -- email health update</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{ static_version('style.css') }}">
 <style>
   /* This page's own shell -- deliberately not base.html's Ghost-admin-style
      operator dashboard (no sidebar, no tabs). Its audience is a non-technical
@@ -176,6 +176,6 @@
 
     <p class="client-footer">This page reflects the same update aikyam sends by email for {{ domain_name }}.</p>
   </div>
-  <script src="/static/chart-tooltip.js"></script>
+  <script src="/static/chart-tooltip.js?v={{ static_version('chart-tooltip.js') }}"></script>
 </body>
 </html>

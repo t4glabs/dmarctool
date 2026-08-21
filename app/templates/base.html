@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}DMARCTool{% endblock %}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{ static_version('style.css') }}">
 <meta name="csrf-token" content="{{ csrf_token(request) }}">
 </head>
 <body>
@@ -135,6 +135,6 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 });
 </script>
-<script src="/static/chart-tooltip.js"></script>
+<script src="/static/chart-tooltip.js?v={{ static_version('chart-tooltip.js') }}"></script>
 </body>
 </html>
