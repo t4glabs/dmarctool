@@ -125,7 +125,7 @@ def spam_rate_sparkline(series, width: int = 640, height: int = 140) -> str:
 
 
 def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 170, rolling_days: int = 7) -> str:
-    """series: list of (date_str, rate_or_none, volume_or_none) -- ONE metric
+    """series: list of (date_str, numerator, denominator) -- ONE metric
     (just bounce rate, or just complaint rate), never sharing an axis with
     another metric at a wildly different scale. A 5% bounce-rate warning
     threshold and a 0.1% complaint-rate warning threshold are 50x apart --
@@ -148,7 +148,10 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
 
-    points_with_data = [(i, r, v) for i, (_, r, v) in enumerate(series) if r is not None]
+    # Daily rate is only defined where the day had a denominator; days with a
+    # numerator but no denominator (a bounce landing the day after the send)
+    # still contribute to the rolling window below, they just have no dot.
+    points_with_data = [(i, num / den, num, den) for i, (_, num, den) in enumerate(series) if den]
     if len(series) < 2 or not points_with_data:
         return '<svg width="{}" height="{}"><text x="10" y="20" fill="currentColor" opacity="0.6">not enough history yet</text></svg>'.format(width, height)
 
@@ -157,11 +160,17 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
     def x_for(i):
         return pad_l + (i / (n - 1)) * plot_w if n > 1 else pad_l
 
+    # Rolling window sums numerators and denominators separately -- the correct
+    # way to average a rate, and it keeps events whose numerator and
+    # denominator land on different days (bounce attribution lag) in the same
+    # window instead of dropping them.
     rolling = []
-    for i, _rate, _vol in points_with_data:
-        window = [(r, v) for idx, r, v in points_with_data if i - rolling_days + 1 <= idx <= i]
-        den = sum((v or 0) for _, v in window)
-        rolling.append((i, (sum((r or 0) * (v or 0) for r, v in window) / den) if den else _rate))
+    for i, rate, _num, _den in points_with_data:
+        win_num = sum(num for idx, (_, num, den) in enumerate(series)
+                      if i - rolling_days + 1 <= idx <= i)
+        win_den = sum(den for idx, (_, num, den) in enumerate(series)
+                      if i - rolling_days + 1 <= idx <= i)
+        rolling.append((i, (win_num / win_den) if win_den else rate))
 
     # Scale to the smoothed trend's RECENT window + thresholds, not its
     # full history -- an old, isolated low-volume spike can still show up
@@ -198,8 +207,8 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
 
     raw_dots = "".join(
         f'<circle cx="{x_for(i):.1f}" cy="{y_for(r):.1f}" r="2" fill="currentColor" opacity="0.25" '
-        f'data-tooltip="{series[i][0]}: {r:.3%} ({v or 0} msgs)"/>'
-        for i, r, v in points_with_data
+        f'data-tooltip="{series[i][0]}: {r:.3%} ({num} of {den})"/>'
+        for i, r, num, den in points_with_data
     )
 
     latest_color = "var(--ok)"

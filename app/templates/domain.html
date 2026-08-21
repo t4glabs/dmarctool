@@ -6,6 +6,16 @@
 {% macro fix_note(text) %}{% if text %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="How to fix this">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover>💡 <strong>How to fix:</strong> {{ text | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
 {% macro guess_note(guess) %}{% if guess %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Best guess at what this is">?</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong>{{ guess.icon }} {{ guess.headline }}</strong>{{ "\n\n" }}{{ guess.summary | urlize(40, target="_blank", rel="noopener") }}{{ "\n\n→ " }}{{ guess.action | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
 {% macro download_menu(links) %}{% if links %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Download by reason">⬇</button><div class="fix-popover fix download-menu" id="fix-{{ fix_note_ns.id }}" popover><strong style="display:block; margin-bottom:0.4rem;">Download by reason</strong>{% for l in links %}<a href="{{ l.url }}" style="display:block; padding:0.2rem 0;">{{ l.label }}</a>{% endfor %}</div></span>{% endif %}{% endmacro %}
+{% macro pending_events_note(q, warn) %}
+{% if q and q.pending_messages and q.pending_messages >= warn %}
+<div class="verdict warn" style="margin-bottom:0.8rem">
+  &#9203; <strong>These numbers are still catching up.</strong>
+  {{ "{:,}".format(q.pending_messages) }} SES event(s) were still waiting to be processed as of {{ q.checked_at }} UTC,
+  so delivery, open, click and bounce counts below are a <em>partial</em> count &mdash; a campaign may have reached
+  many more people than it currently shows. This clears itself as the queue drains.
+</div>
+{% endif %}
+{% endmacro %}
 {% macro rate_trend_block(title, summary, chart_svg) %}
 <div class="rate-trend-block">
   <div class="rate-trend-head">
@@ -697,6 +707,7 @@
         bounce/complaint rate with permanent bounces pruned from Listmonk regularly; bad is a rising rate or a
         growing pile of unpruned suppressions.
       </p>
+      {{ pending_events_note(ses_queue, ses_queue_backlog_warn) }}
       <div class="verdict {{ verdicts.ses[0] }}">{{ verdicts.ses[1] }}</div>
       {% if verdicts.ses[0] == 'bad' %}{{ fix_note(category_remediation('ses_reputation')) }}{% endif %}
       <div class="table-wrap">
@@ -706,7 +717,11 @@
         <tr>
           <td>{{ s.configuration_set }}</td>
           <td>{{ s.delivered or 0 }}</td>
-          <td>{{ "%.2f"|format(100 * s.bounced / s.delivered) if s.delivered else "-" }}%</td>
+          {# bounce rate is over what was ATTEMPTED (delivered+bounced), matching
+             verdicts.ses_verdict and the trend chart below -- a bounced message
+             was never delivered, so delivered alone is the wrong denominator and
+             can exceed 100%. Complaints stay over delivered. #}
+          <td>{{ "%.2f"|format(100 * s.bounced / (s.delivered + s.bounced)) if (s.delivered + s.bounced) else "-" }}%</td>
           <td>{{ "%.2f"|format(100 * s.complained / s.delivered) if s.delivered else "-" }}%</td>
           <td>{{ ses_suppression_counts.get(s.configuration_set, {}).get('bounce', 0) }}</td>
           <td>{{ ses_bounce_type_counts.get(s.configuration_set, {}).get('Permanent', 0) }}</td>
@@ -742,6 +757,7 @@
         SES's own opens/clicks/bounces/complaints for that specific send -- not Listmonk's own analytics (which can
         disagree with SES, since Listmonk tracks opens/clicks itself via its own pixel/link rewriting).
       </p>
+      {{ pending_events_note(ses_queue, ses_queue_backlog_warn) }}
       <div class="table-wrap">
       <table>
         <tr><th>Sent</th><th>From name</th><th>Subject</th><th>Delivered</th><th>Opened</th><th>Clicked</th><th>Bounced</th><th>Rejected</th><th>Complained</th><th>Report card</th></tr>
@@ -750,7 +766,12 @@
           <td>{{ c.send_day or "-" }}</td>
           <td>{{ c.from_display_name or "-" }}</td>
           <td>{{ c.subject }}</td>
-          <td>{{ c.delivered }}</td>
+          <td>
+            {% if c.delivery_data_missing %}
+              <span class="badge muted" title="Amazon SES never sent us delivery events for this campaign -- it was sent before this domain's SES configuration set started publishing to the event pipeline. Opens kept arriving for days afterwards so those were captured, but SES offers no way to backfill the delivery events. At least {{ c.unique_openers }} people demonstrably received it (they opened it).">not captured</span>
+              <br><span class="muted" style="font-size:0.8em">&ge;{{ c.unique_openers }} received</span>
+            {% else %}{{ c.delivered }}{% endif %}
+          </td>
           <td title="{{ c.unique_openers }} unique opener(s) out of {{ c.delivered }} delivered. The raw event count ({{ c.opened }}) counts the same person multiple times, so the percentage here is deliberately based on people, which is how open rate is defined everywhere else.">
             {{ c.unique_openers }}{% if c.unique_open_rate is not none %} ({{ "%.1f"|format(100 * c.unique_open_rate) }}%){% endif %}
             {% if c.open_quality and c.open_quality.total_openers %}

@@ -168,6 +168,8 @@ def _startup():
         run_compliance_checks(c, verbose=False)
         run_mailgun_checks(c, verbose=False)
         run_postmaster_checks(c, verbose=False)
+        # Background job: generous drain budget (nobody is waiting on it), so a
+        # real backlog actually clears instead of creeping up run after run.
         run_ses_event_ingest(c, verbose=False)
         run_ses_account_checks(c, verbose=False)
         run_listmonk_content_sync(c, verbose=False)
@@ -511,8 +513,10 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ):
         mailgun_suppression_counts.setdefault(row["mailgun_domain"], {})[row["kind"]] = row["n"]
     mailgun_series = mailgun_daily_series(conn, domain_id, days=60)
-    mailgun_bounce_series = [(d, r_a, v) for d, v, r_a, r_b in mailgun_series]
-    mailgun_complaint_series = [(d, r_b, v) for d, v, r_a, r_b in mailgun_series]
+    # (day, numerator, denominator) per metric -- see analysis.mailgun_daily_series
+    # for why raw counts rather than pre-divided daily rates.
+    mailgun_bounce_series = [(r["day"], r["bounce_num"], r["bounce_den"]) for r in mailgun_series]
+    mailgun_complaint_series = [(r["day"], r["complaint_num"], r["complaint_den"]) for r in mailgun_series]
     mailgun_bounce_thresholds = [(float(settings["mailgun_bounce_rate_warn"]), "warn", "var(--bad)")]
     mailgun_complaint_thresholds = [(float(settings["mailgun_complaint_rate_warn"]), "warn", "var(--bad)")]
     mailgun_bounce_chart_svg = metric_trend_chart(mailgun_bounce_series, thresholds=mailgun_bounce_thresholds)
@@ -597,8 +601,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ):
         ses_bounce_type_counts.setdefault(row["configuration_set"], {})[row["bounce_type"] or "Undetermined"] = row["n"]
     ses_series = ses_daily_series(conn, domain_id, days=60)
-    ses_bounce_series = [(d, r_a, v) for d, v, r_a, r_b in ses_series]
-    ses_complaint_series = [(d, r_b, v) for d, v, r_a, r_b in ses_series]
+    ses_bounce_series = [(r["day"], r["bounce_num"], r["bounce_den"]) for r in ses_series]
+    ses_complaint_series = [(r["day"], r["complaint_num"], r["complaint_den"]) for r in ses_series]
     ses_bounce_thresholds = [
         (float(settings["ses_bounce_rate_watch"]), "watch", "var(--warn)"),
         (float(settings["ses_bounce_rate_warn"]), "warn", "var(--bad)"),
@@ -611,7 +615,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_complaint_chart_svg = metric_trend_chart(ses_complaint_series, thresholds=ses_complaint_thresholds)
     ses_bounce_summary = rate_trend_summary(ses_bounce_series)
     ses_complaint_summary = rate_trend_summary(ses_complaint_series)
-    ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
+    ses_volume_chart = volume_bar_chart([(r["day"], r["volume"]) for r in ses_series])
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10, settings=settings)
     engagement = subscriber_engagement_summary(conn, domain_id)
     bounce_categories = [
@@ -624,6 +628,11 @@ def domain_detail(request: Request, name: str, flash: str = None):
 
     ses_account_status = conn.execute(
         "SELECT * FROM ses_account_status ORDER BY checked_at DESC LIMIT 1"
+    ).fetchone()
+    # Surfaced so a partial count never reads as a final one -- see
+    # ses_queue_status in schema.sql.
+    ses_queue = conn.execute(
+        "SELECT * FROM ses_queue_status ORDER BY checked_at DESC LIMIT 1"
     ).fetchone()
     ses_identity = conn.execute(
         """SELECT * FROM ses_identity_checks WHERE domain_id=?
@@ -704,6 +713,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "display_names": display_names,
         "cadence": cadence,
         "ses_account_status": ses_account_status,
+        "ses_queue": ses_queue,
+        "ses_queue_backlog_warn": int(settings["ses_backlog_warn"]),
         "ses_identity": ses_identity,
         "open_items": open_items,
         "senders": senders,
@@ -1023,7 +1034,13 @@ def run_checks():
     run_compliance_checks(conn, verbose=False)
     run_mailgun_checks(conn, verbose=False)
     run_postmaster_checks(conn, verbose=False)
-    run_ses_event_ingest(conn, verbose=False)
+    # Short budget here: this runs inside the request the "Refresh now" button
+    # made, so it must stay responsive. A large backlog keeps draining on the
+    # 6-hourly background job, which gets the full budget.
+    run_ses_event_ingest(
+        conn, verbose=False,
+        max_seconds=float(ensure_default_settings(conn)["ses_drain_seconds_interactive"]),
+    )
     run_ses_account_checks(conn, verbose=False)
     run_listmonk_content_sync(conn, verbose=False)
     run_safe_browsing_checks(conn, verbose=False)

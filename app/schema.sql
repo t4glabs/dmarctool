@@ -612,6 +612,21 @@ CREATE TABLE IF NOT EXISTS ip_whois_cache (
 
 CREATE INDEX IF NOT EXISTS idx_health_snapshots_domain ON domain_health_snapshots(domain_id, snapshot_date);
 
+-- How far behind the SES event queue is, recorded after every drain (see
+-- app/ses_events.py). Matters because a backlog makes every delivery/open/
+-- click/bounce number in the dashboard a partial count -- one campaign sat
+-- displaying "1 delivered" for three days (only the operator's own test send
+-- had been drained) with nothing on screen indicating the number was
+-- provisional. History rather than a single row so "is it draining or
+-- growing?" is answerable.
+CREATE TABLE IF NOT EXISTS ses_queue_status (
+    id               INTEGER PRIMARY KEY,
+    checked_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    pending_messages INTEGER NOT NULL,
+    drained_last_run INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ses_queue_status_ts ON ses_queue_status(checked_at);
+
 -- Who hit this app and when -- see app/access_log.py. Matters because this
 -- app now sits behind a Cloudflare Tunnel + Access (email-OTP) instead of
 -- being purely local-only, and has no user concept of its own otherwise.

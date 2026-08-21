@@ -64,7 +64,10 @@ DEFAULT_SETTINGS = {
     "ses_bounce_rate_warn": "0.05",       # bounce rate (of delivered) that triggers a flag
     "ses_complaint_rate_watch": "0.0008", # complaint rate (of delivered) that triggers an early "watch" flag
     "ses_complaint_rate_warn": "0.001",   # complaint rate (of delivered) that triggers a flag
-    "ses_max_messages_per_run": "3000",   # cap SQS messages drained per check so a big backlog can't block a request; the rest drain on the next run
+    "ses_max_messages_per_run": "200000",  # absolute safety ceiling on one drain; the time budget below is what normally stops it
+    "ses_drain_seconds": "300",            # how long a background SES event drain may run (a pure message cap couldn't keep up with real campaign volume)
+    "ses_drain_seconds_interactive": "15", # much shorter budget for the "Refresh now" button, which a person is waiting on
+    "ses_backlog_warn": "2000",            # queued events above this raise an action item, since it makes displayed numbers partial
     "ses_account_recheck_hours": "24",    # don't re-poll SES account health/identity verification more often than this
     "newsletter_inactive_campaigns": "9",  # campaigns received with zero opens across all of them => flagged inactive
     "campaign_click_benchmark": "0.033",   # click rate a newsletter is graded against (nonprofit-sector median)
@@ -989,9 +992,23 @@ def sending_stream_breakdown(conn, domain_id: int, window_start: int, window_end
 
 
 def ses_daily_series(conn, domain_id: int, days: int = 60):
-    """List of (date_str, delivered, bounce_rate, complaint_rate) from our own
-    accumulated SES event counts -- there's no external API to backfill from,
-    so this only shows history from whenever the SNS/SQS pipeline went live."""
+    """Per-day SES counts for charting, as dicts:
+    {"day", "volume", "bounce_num", "bounce_den", "complaint_num", "complaint_den"}.
+
+    Returns raw numerators/denominators rather than pre-divided daily rates on
+    purpose. SES timestamps a bounce when the bounce *happens*, which is
+    routinely a day or more after the send -- one real campaign here put 143
+    of its 388 bounces on the send day and the other 245 on the next day,
+    which had zero deliveries. Pre-dividing gives that day an undefined rate,
+    so those 245 bounces vanished from the trend entirely and the chart
+    understated the real bounce rate by ~2.7x. Handing counts to the chart
+    lets a rolling window sum numerators and denominators separately, which
+    is both the correct way to average a rate and immune to that lag.
+
+    Bounce denominator is delivered+bounced ("attempted"), not delivered:
+    delivered and bounced are disjoint SES outcomes, so dividing by delivered
+    alone can exceed 100%. Complaints keep delivered as the denominator,
+    since a complaint requires the message to have arrived."""
     since = (datetime.datetime.utcnow().date() - datetime.timedelta(days=days)).isoformat()
     rows = conn.execute(
         """SELECT day, SUM(delivered) as delivered, SUM(bounced) as bounced, SUM(complained) as complained
@@ -1001,10 +1018,15 @@ def ses_daily_series(conn, domain_id: int, days: int = 60):
     ).fetchall()
     series = []
     for r in rows:
-        delivered = r["delivered"] or 0
-        bounce_rate = (r["bounced"] or 0) / delivered if delivered else None
-        complaint_rate = (r["complained"] or 0) / delivered if delivered else None
-        series.append((r["day"], delivered, bounce_rate, complaint_rate))
+        delivered, bounced = r["delivered"] or 0, r["bounced"] or 0
+        series.append({
+            "day": r["day"],
+            "volume": delivered,
+            "bounce_num": bounced,
+            "bounce_den": delivered + bounced,
+            "complaint_num": r["complained"] or 0,
+            "complaint_den": delivered,
+        })
     return series
 
 
@@ -1066,7 +1088,10 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10, settings: dict = Non
             # everywhere else.
             "open_rate": (r["opened"] or 0) / delivered if delivered else None,
             "click_rate": (r["clicked"] or 0) / delivered if delivered else None,
-            "bounce_rate": (r["bounced"] or 0) / delivered if delivered else None,
+            # delivered+bounced ("attempted"), not delivered -- a bounced
+            # message was never delivered, so delivered alone can exceed 100%.
+            "bounce_rate": ((r["bounced"] or 0) / (delivered + (r["bounced"] or 0))
+                            if (delivered + (r["bounced"] or 0)) else None),
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
             "unique_openers": open_quality["total_openers"],
             "unique_clickers": click_quality["total_clickers"],
@@ -1086,6 +1111,18 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10, settings: dict = Non
             "subject_score": score_text(r["subject"]),
             "body_score": score_text(r["body_text"]) if r["body_text"] else None,
             "has_plain_text": bool(r["body_text"]),
+            # Delivery events genuinely never reached us for this send, but
+            # opens/clicks did -- which happens for campaigns sent before this
+            # domain's SES configuration set started publishing to the event
+            # pipeline (opens keep arriving for days afterwards, so they got
+            # captured while the send-time Delivery events did not). SES has no
+            # backfill, so this is unrecoverable rather than a sync that will
+            # catch up. Flagged so the UI can say that instead of showing a
+            # bare "0 delivered" next to thousands of opens, which reads as a
+            # bug. unique_openers is a sound floor for how many really got it.
+            "delivery_data_missing": (
+                not delivered and (open_quality["total_openers"] or click_quality["total_clickers"])
+            ),
         })
         structure = analyze_html(r["body_html"]) if r["body_html"] else None
         out[-1]["structure"] = structure
@@ -1185,23 +1222,33 @@ def bounce_category_breakdown(conn, domain_id: int):
 
 
 def mailgun_daily_series(conn, domain_id: int, days: int = 60):
-    """List of (date_str, delivered, bounce_rate, complaint_rate) -- same shape
-    as ses_daily_series so both can share the same chart function. Built from
-    our own accumulated history; Mailgun's own API only ever returns a rolling
-    window per query."""
+    """Same dict shape as ses_daily_series (see its docstring for why counts
+    rather than pre-divided rates) so both share one chart function.
+
+    Mailgun's bounce denominator is `accepted` -- the messages Mailgun took
+    responsibility for -- which is what Mailgun's own dashboard and this
+    project's mailgun.py/verdicts.py/watchlist.py already use. The daily
+    series was the odd one out, dividing by `delivered` and so overstating
+    the rate (a permanently-failed message is never delivered)."""
     since = (datetime.datetime.utcnow().date() - datetime.timedelta(days=days)).isoformat()
     rows = conn.execute(
-        """SELECT day, SUM(delivered) as delivered, SUM(failed_perm) as failed_perm, SUM(complained) as complained
+        """SELECT day, SUM(accepted) as accepted, SUM(delivered) as delivered,
+                  SUM(failed_perm) as failed_perm, SUM(complained) as complained
            FROM mailgun_daily_stats WHERE domain_id=? AND day >= ?
            GROUP BY day ORDER BY day""",
         (domain_id, since),
     ).fetchall()
     series = []
     for r in rows:
-        delivered = r["delivered"] or 0
-        bounce_rate = (r["failed_perm"] or 0) / delivered if delivered else None
-        complaint_rate = (r["complained"] or 0) / delivered if delivered else None
-        series.append((r["day"], delivered, bounce_rate, complaint_rate))
+        delivered, accepted = r["delivered"] or 0, r["accepted"] or 0
+        series.append({
+            "day": r["day"],
+            "volume": delivered,
+            "bounce_num": r["failed_perm"] or 0,
+            "bounce_den": accepted,
+            "complaint_num": r["complained"] or 0,
+            "complaint_den": delivered,
+        })
     return series
 
 
@@ -1219,31 +1266,38 @@ def postmaster_daily_series(conn, domain_id: int, days: int = 60):
 
 
 def rate_trend_summary(series, window_days: int = 7) -> dict:
-    """Volume-weighted current-vs-prior-window comparison and a plain
-    "steady"/"volatile" read for a (date, rate_or_none, volume_or_none)
-    series -- the numbers a chart alone still leaves you doing mental math
-    for: is this actually getting better or worse, and is the latest daily
-    number even meaningful or just noise from a small day's volume."""
-    points = [(d, r, v) for d, r, v in series if r is not None]
-    if not points:
+    """Current-vs-prior-window comparison and a plain "steady"/"volatile"
+    read for a (date, numerator, denominator) series -- the numbers a chart
+    alone still leaves you doing mental math for: is this actually getting
+    better or worse, and is the latest daily number even meaningful or just
+    noise from a small day's volume.
+
+    Averages by summing numerators and denominators across the window (not
+    by averaging daily rates), so a big send day isn't given the same weight
+    as a 3-message day, and so events whose numerator and denominator land
+    on different days -- bounce attribution lag -- still pair up correctly."""
+    def window_rate(pts):
+        num = sum(n for _, n, _ in pts)
+        den = sum(d for _, _, d in pts)
+        return (num / den) if den else None
+
+    if not series:
         return {"latest": None, "latest_date": None, "avg_recent": None, "avg_prior": None,
                 "delta": None, "stability": None, "recent_volume": 0}
 
-    def weighted_avg(pts):
-        den = sum((v or 0) for _, _, v in pts)
-        return (sum((r or 0) * (v or 0) for _, r, v in pts) / den) if den else None
+    recent = series[-window_days:]
+    prior = series[-2 * window_days:-window_days]
+    avg_recent = window_rate(recent)
+    avg_prior = window_rate(prior) if prior else None
 
-    recent = points[-window_days:]
-    prior = points[-2 * window_days:-window_days]
-    avg_recent = weighted_avg(recent)
-    avg_prior = weighted_avg(prior) if prior else None
-    latest_date, latest_rate, _ = points[-1]
+    with_rate = [(d, n / den) for d, n, den in series if den]
+    latest_date, latest_rate = with_rate[-1] if with_rate else (None, None)
     delta = (avg_recent - avg_prior) if (avg_recent is not None and avg_prior is not None) else None
-    recent_volume = sum((v or 0) for _, _, v in recent)
+    recent_volume = sum(d for _, _, d in recent)
 
     stability = None
-    if avg_recent is not None and len(recent) >= 3:
-        rates = [r for _, r, _ in recent]
+    if avg_recent is not None and len([1 for _, _, d in recent if d]) >= 3:
+        rates = [n / d for _, n, d in recent if d]
         mean = sum(rates) / len(rates)
         stdev = (sum((r - mean) ** 2 for r in rates) / len(rates)) ** 0.5
         # "Volatile" if day-to-day swings are large relative to the average
@@ -1416,7 +1470,8 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
 
     since_day = (datetime.datetime.utcnow().date() - datetime.timedelta(days=30)).isoformat()
     mg_row = conn.execute(
-        """SELECT SUM(delivered) as delivered, SUM(failed_perm) as failed_perm, SUM(complained) as complained
+        """SELECT SUM(accepted) as accepted, SUM(delivered) as delivered,
+                  SUM(failed_perm) as failed_perm, SUM(complained) as complained
            FROM mailgun_daily_stats WHERE domain_id=? AND day >= ?""",
         (domain_id, since_day),
     ).fetchone()
@@ -1428,7 +1483,15 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     combined_delivered = (mg_row["delivered"] or 0) + (ses_row["delivered"] or 0)
     combined_bounced = (mg_row["failed_perm"] or 0) + (ses_row["bounced"] or 0)
     combined_complained = (mg_row["complained"] or 0) + (ses_row["complained"] or 0)
-    bounce_rate = combined_bounced / combined_delivered if combined_delivered else None
+    # Bounce denominator must be what was ATTEMPTED, not what was delivered --
+    # a bounced message was never delivered, so dividing by delivered alone
+    # can exceed 100% (a real row here recorded 6 bounces against 3 delivered
+    # and stored bounce_rate=2.0, i.e. 200%, which then fed the health score
+    # and the domain's Good/Bad/Ugly grade). Mailgun's own denominator is
+    # `accepted`; SES's is delivered+bounced. Complaints stay over delivered,
+    # since a complaint requires the message to have arrived.
+    combined_attempted = (mg_row["accepted"] or 0) + (ses_row["delivered"] or 0) + (ses_row["bounced"] or 0)
+    bounce_rate = min(combined_bounced / combined_attempted, 1.0) if combined_attempted else None
     complaint_rate = combined_complained / combined_delivered if combined_delivered else None
 
     policy_p = policy_pct = None

@@ -120,6 +120,19 @@ def _pct(value):
     return "-" if value is None else f"{value:.2%}"
 
 
+def _missing_delivery_note(c):
+    """Explanation text for a send whose Delivery events were never captured
+    at all (see analysis.recent_campaigns' delivery_data_missing). Distinct
+    from "too small to measure": nothing here will improve, because SES can't
+    backfill events it already discarded."""
+    if not c.get("delivery_data_missing"):
+        return None
+    return (f"Amazon SES never sent us delivery events for this campaign -- it went out before this domain's "
+            f"configuration set started publishing to the event pipeline, and SES has no way to backfill them. "
+            f"At least {c.get('unique_openers') or 0} people demonstrably received it (they opened it), so rates "
+            f"can't be calculated but the send itself was not a failure.")
+
+
 def _complaints_pillar(c):
     weight = WEIGHTS["complaints"]
     delivered, rate = c["delivered"], c["complaint_rate"]
@@ -127,8 +140,10 @@ def _complaints_pillar(c):
         return {
             "key": "complaints", "label": "Spam complaints", "weight": weight,
             "earned": None, "status": "no_data",
-            "headline": "Not enough delivered mail to measure",
-            "detail": (f"Only {delivered} message(s) delivered. A complaint rate needs at least "
+            "headline": ("Delivery data was never captured for this send"
+                          if c.get("delivery_data_missing") else "Not enough delivered mail to measure"),
+            "detail": (_missing_delivery_note(c) or
+                        f"Only {delivered} message(s) delivered. A complaint rate needs at least "
                         f"{MIN_VOLUME_FOR_RATES} to mean anything."),
             "fix": None,
         }
@@ -159,8 +174,10 @@ def _hygiene_pillar(c):
         return {
             "key": "hygiene", "label": "List hygiene (bounces)", "weight": weight,
             "earned": None, "status": "no_data",
-            "headline": "Not enough delivered mail to measure",
-            "detail": f"Only {delivered} message(s) delivered -- too few for a bounce rate to be meaningful.",
+            "headline": ("Delivery data was never captured for this send"
+                          if c.get("delivery_data_missing") else "Not enough delivered mail to measure"),
+            "detail": (_missing_delivery_note(c) or
+                        f"Only {delivered} message(s) delivered -- too few for a bounce rate to be meaningful."),
             "fix": None,
         }
 
@@ -202,10 +219,12 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
         return {
             "key": "engagement", "label": "Real engagement", "weight": weight,
             "earned": None, "status": "no_data",
-            "headline": "Not enough delivered mail to measure",
-            "detail": (f"Only {delivered} message(s) delivered. (This campaign recorded "
-                        f"{c['clicked']} click event(s) and {c['opened']} open event(s), but against so few "
-                        f"deliveries a percentage would be misleading rather than informative.)"),
+            "headline": ("Delivery data was never captured for this send"
+                          if c.get("delivery_data_missing") else "Not enough delivered mail to measure"),
+            "detail": (_missing_delivery_note(c) or
+                        (f"Only {delivered} message(s) delivered. (This campaign recorded "
+                         f"{c['clicked']} click event(s) and {c['opened']} open event(s), but against so few "
+                         f"deliveries a percentage would be misleading rather than informative.)")),
             "fix": None,
         }
 

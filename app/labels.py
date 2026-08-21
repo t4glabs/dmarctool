@@ -23,6 +23,7 @@ CATEGORY_LABELS = {
     "ses_reputation": "SES bounce/complaint rate",
     "ses_new_suppressions": "New SES suppressions",
     "ses_rejected": "SES refused to send",
+    "ses_event_backlog": "Delivery data still catching up",
     "ses_account_health": "SES account-wide issue",
     "ses_identity_unverified": "SES domain identity not verified",
     "display_name_issue": "Sender display name issue",
@@ -104,6 +105,7 @@ CATEGORY_HELP = {
     "ses_reputation_watch": "Amazon SES's own bounce or complaint rate for this domain has crossed the earlier \"watch\" threshold -- not yet at the danger line, but trending the wrong way.",
     "ses_reputation": "Amazon SES's own bounce or complaint rate for this domain crossed the warning threshold, based on real bounce/complaint events from its dedicated configuration set -- worth checking list quality before sending more.",
     "ses_new_suppressions": "SES recorded new bounces or complaints since the last check for this domain's configuration set -- these addresses are effectively dead ends; worth pruning from Listmonk too.",
+    "ses_event_backlog": "Amazon SES reports every delivery, open, click and bounce as a separate event, which DMARCTool drains from a queue. When that queue is backed up, the numbers shown here are only a partial count -- a campaign can look like it reached far fewer people than it really did. This clears itself as the queue drains.",
     "ses_rejected": "SES refused to even attempt sending one or more messages -- a pre-send filter (usually reputation or content-based), not a normal bounce from the recipient's own server. More serious than a bounce since the message never left SES at all.",
     "ses_account_health": "A problem with the SES account itself (not one specific domain) -- e.g. its enforcement status isn't Healthy, sending is disabled account-wide, or automatic bounce/complaint suppression is turned off. Affects every domain sending through this SES account.",
     "ses_identity_unverified": "This domain's SES sending identity isn't fully verified. Mail sent through an unverified identity can be rejected outright or sent without proper authentication.",
@@ -140,6 +142,7 @@ CATEGORY_REMEDIATION = {
     "ses_reputation_watch": "No urgent action yet -- but check the \"Download suppressions\" CSV for this configuration set to see if a pattern is forming, and consider slowing send frequency until the rate settles back down.",
     "ses_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
     "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list and remove them from Listmonk too.",
+    "ses_event_backlog": "Usually nothing to do -- it drains on its own within a few hours. If the number keeps growing between refreshes, the drain budget is too small for your sending volume: raise \"How long to spend collecting SES events\" in Settings. Until it clears, treat delivery/open/click counts as incomplete rather than wrong.",
     "ses_rejected": "Check the AWS SES Console -> Reputation dashboard and CloudWatch logs around the time of the rejection for the specific reason. Common causes: account-level sending pause, suspected malware/phishing content, or a sudden reputation drop. If this keeps happening, contact AWS Support before sending more.",
     "ses_account_health": "Check the AWS SES Console -> Account dashboard / Reputation for the specifics. If enforcement status isn't Healthy, AWS Support can usually clarify why. If auto-suppression is off, turn it back on under Account dashboard -> Suppression list settings.",
     "ses_identity_unverified": "Check AWS SES Console -> Identities for this domain. If verification is pending, confirm the required DNS records (TXT/CNAME/MX depending on method) are actually published. If sending is disabled, check for a policy violation notice from AWS.",
@@ -450,6 +453,21 @@ SETTINGS_META = {
         "help": "If the share of delivered mail marked as spam goes above this, you'll get an action item.",
         "example": "0.001 means a flag once 0.1% or more of your mail gets marked as spam.",
     },
+    "ses_drain_seconds": {
+        "label": "How long to spend collecting SES events (seconds)",
+        "help": "SES reports every delivery, open, click and bounce as a separate event, and DMARCTool drains them from a queue in the background. This is how long one background drain may run. If the queue keeps growing between refreshes, raise this -- too low and campaign numbers lag behind reality for days.",
+        "example": "300 means each background run spends up to 5 minutes collecting events (roughly 25,000 at typical speed).",
+    },
+    "ses_drain_seconds_interactive": {
+        "label": "How long the \"Refresh now\" button spends collecting SES events (seconds)",
+        "help": "Same as above, but for the manual \"Refresh now\" button, which you're waiting on. Kept short deliberately so the page comes back quickly -- any remaining backlog keeps draining in the background.",
+        "example": "15 means clicking Refresh now spends at most 15 seconds on SES events before moving on.",
+    },
+    "ses_backlog_warn": {
+        "label": "Queued SES events before warning you",
+        "help": "If more than this many events are still waiting to be processed, you'll get an action item -- because until they're processed, the delivery/open/click numbers shown are only a partial count.",
+        "example": "2000 means you'll be told when the backlog is big enough to make campaign numbers noticeably incomplete.",
+    },
     "ses_account_recheck_hours": {
         "label": "SES account health recheck frequency (hours)",
         "help": "How often to re-poll SES for account-wide health (enforcement status, sending quota, suppression settings) and per-domain identity verification. This is a small, cheap API call, but no need to hit it constantly.",
@@ -560,7 +578,8 @@ SETTINGS_GROUPS = [
     ("☁️ Amazon SES", [
         "ses_stats_window_days", "ses_bounce_rate_watch", "ses_bounce_rate_warn",
         "ses_complaint_rate_watch", "ses_complaint_rate_warn",
-        "ses_max_messages_per_run", "ses_account_recheck_hours",
+        "ses_max_messages_per_run", "ses_drain_seconds", "ses_drain_seconds_interactive",
+        "ses_backlog_warn", "ses_account_recheck_hours",
     ]),
     ("📰 Newsletters & content", [
         "newsletter_inactive_campaigns", "campaign_click_benchmark", "campaign_open_benchmark",

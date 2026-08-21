@@ -23,6 +23,7 @@ import argparse
 import datetime
 import email.utils
 import json
+import time
 
 import boto3
 import botocore.exceptions
@@ -266,7 +267,33 @@ def _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id,
         )
 
 
-def run_ses_event_ingest(conn, verbose: bool = True) -> None:
+def _queue_depth(sqs, queue_url):
+    """Approximate messages still waiting in the queue, or None if SQS
+    wouldn't say. Cheap single call -- worth knowing because a backlog here
+    means every campaign/delivery number in the dashboard is provisional."""
+    try:
+        attrs = sqs.get_queue_attributes(
+            QueueUrl=queue_url, AttributeNames=["ApproximateNumberOfMessages"]
+        )
+        return int(attrs["Attributes"]["ApproximateNumberOfMessages"])
+    except (botocore.exceptions.ClientError, KeyError, ValueError):
+        return None
+
+
+def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) -> None:
+    """Drains the SES event queue into local tables.
+
+    `max_seconds` time-boxes the drain. A pure per-message cap (the previous
+    approach) can't keep up with a real backlog: at ~90 messages/sec the old
+    3,000-message cap spent ~33s and then stopped, so four scheduled runs a
+    day cleared ~12,000 events while a couple of bulk campaigns can generate
+    more than that -- the queue grew instead of draining, and campaigns sat
+    showing a fraction of their real delivery count for days (one showed "1
+    delivered" for three days because only the operator's own test send had
+    been drained). Budgeting time instead lets the background job drain a
+    large backlog in one go while the interactive "Refresh now" button keeps
+    a short budget so it stays responsive.
+    """
     settings_now = ensure_default_settings(conn)
     sqs, queue_url = _client_and_queue()
     if not sqs:
@@ -274,7 +301,12 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
             print("[ses] missing AWS_SES_* credentials or SES_EVENTS_QUEUE_URL -- skipping")
         return
 
+    if max_seconds is None:
+        max_seconds = float(settings_now["ses_drain_seconds"])
+    # Still a hard ceiling, but now a safety valve rather than the thing that
+    # actually stops a normal drain.
     max_messages = int(settings_now["ses_max_messages_per_run"])
+    started_at = time.monotonic()
 
     domain_map = _config_set_domain_map(conn)
     today = datetime.date.today().isoformat()
@@ -290,7 +322,7 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
     # ~24,000-message backlog to hang a single check for many minutes. Batch deletes
     # (up to 10 per call, matching the receive batch) plus a per-run cap keep this
     # bounded -- a large backlog drains over several runs instead of blocking one.
-    while processed < max_messages:
+    while processed < max_messages and (time.monotonic() - started_at) < max_seconds:
         try:
             resp = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=10, WaitTimeSeconds=1)
         except botocore.exceptions.ClientError as e:
@@ -395,7 +427,12 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
             (config_set, cutoff),
         ).fetchone()
         delivered = row["delivered"] or 0
-        bounce_rate = (row["bounced"] or 0) / delivered if delivered else 0.0
+        bounced = row["bounced"] or 0
+        # Bounce rate is over what was ATTEMPTED (delivered+bounced), matching
+        # verdicts.ses_verdict -- delivered alone is the wrong denominator
+        # since a bounced message was never delivered, and it can exceed 100%.
+        attempted = delivered + bounced
+        bounce_rate = bounced / attempted if attempted else 0.0
         complaint_rate = (row["complained"] or 0) / delivered if delivered else 0.0
 
         if delivered and (bounce_rate >= bounce_warn or complaint_rate >= complaint_warn):
@@ -560,9 +597,42 @@ def run_ses_event_ingest(conn, verbose: bool = True) -> None:
                     (domain_id,),
                 )
 
+    # Record what's STILL queued after this drain. Without this the dashboard
+    # has no way to know its own numbers are incomplete: a backlog silently
+    # made every delivery/open/click figure a partial count, and a campaign
+    # showing "1 delivered" looked like a fact rather than "we've only drained
+    # your test send so far". Any consumer of these numbers should treat them
+    # as provisional while pending > 0.
+    pending = _queue_depth(sqs, queue_url)
+    if pending is not None:
+        conn.execute(
+            "INSERT INTO ses_queue_status (pending_messages, drained_last_run) VALUES (?, ?)",
+            (pending, processed),
+        )
+        backlog_warn = int(settings_now["ses_backlog_warn"])
+        if pending >= backlog_warn:
+            # Deliberately not domain-scoped: it's one shared queue, so a
+            # backlog makes EVERY domain's numbers provisional, not one's.
+            for domain_id in {did for did, _ in domain_map.values()}:
+                upsert_system_action(
+                    conn, domain_id, "ses_event_backlog", "queue",
+                    f"SES event backlog: {pending:,} event(s) still waiting to be processed",
+                    f"Delivery/open/click/bounce numbers shown here are incomplete until this clears -- a "
+                    f"campaign can look like it reached far fewer people than it actually did. "
+                    f"{processed:,} event(s) were processed this run. This normally clears itself within a few "
+                    f"hours; if it keeps growing, raise the drain budget (ses_drain_seconds in Settings).",
+                )
+        else:
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='ses_event_backlog' AND status='open'"""
+            )
+
     conn.commit()
     if verbose:
-        print(f"[ses] processed {processed} message(s) from the queue")
+        elapsed = time.monotonic() - started_at
+        pending_note = f", {pending:,} still queued" if pending is not None else ""
+        print(f"[ses] processed {processed} message(s) in {elapsed:.0f}s{pending_note}")
 
 
 def main() -> None:
