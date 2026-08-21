@@ -16,7 +16,7 @@
     <li><strong>pct=</strong> -- what percentage of your mail this rule applies to. You normally start low (e.g. 10%) and raise it gradually once you've confirmed your real mail keeps passing.</li>
     <li><strong>Pass rate</strong> -- the percentage of your mail that's passing authentication (DKIM/SPF). Higher is better; this is what "safe to move forward" is based on.</li>
     <li><strong>Live DNS vs. Reports</strong> -- "Live DNS" is what's actually published right now; "Reports" is what mail providers have told us they've seen. These can disagree for a few days after you make a change -- that's normal, not necessarily a problem.</li>
-    <li><strong>Overall vibe (Good/Bad/Ugly)</strong> -- one combined read per domain: your pass rate, Google's own reported spam rate, and your bounce/complaint rate, weighted into a single score out of 100 (80+ is Good, 50-79 is Bad, below 50 is Ugly). Meant to answer "how's this domain doing" at a glance without reading four separate numbers.</li>
+    <li><strong>Overall health</strong> -- one combined read per domain: your pass rate, Google's own reported spam rate, and your bounce/complaint rate, weighted into a single score out of 100. 80 or above is <em>Healthy</em>, 50-79 <em>Needs attention</em>, below 50 <em>At risk</em>. Meant to answer "how's this domain doing" at a glance without reading four separate numbers.</li>
   </ul>
 </details>
 
@@ -36,20 +36,53 @@
     <div class="pill-value">{{ kpis.expiring_soon }}</div>
     <div class="pill-label">Expiring soon</div>
   </div>
-  <div class="pill pill-wide">
-    <div class="pill-label" style="margin-bottom:0.5rem" title="One combined read per domain -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single Good/Bad/Ugly tier.">🩺 Portfolio vibe -- how domains are doing overall</div>
-    <div class="chart-row">
-      <div class="chart-donut"><div class="sparkline">{{ vibe_donut_svg | safe }}</div></div>
-      <div class="chart-flex" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-        <span class="badge ok">{{ kpis.good_count }} Good</span>
-        <span class="badge warn">{{ kpis.bad_count }} Bad</span>
-        <span class="badge bad">{{ kpis.ugly_count }} Ugly</span>
-      </div>
+</div>
+
+{# The health donut and the pass-rate trend used to be two full-width pills stacked
+   on their own rows -- a small circle floating in a wide empty box, then an
+   unrelated-looking graph underneath. They're the two halves of the same
+   question ("how are things, and which way are they moving"), so they share one
+   two-column panel: state on the left, direction on the right. #}
+<div class="health-panel">
+  <div class="hp-block">
+    <div class="hp-head">
+      <span class="hp-title" title="One combined read per domain -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single score out of 100."><span class="ico">🩺</span>Overall health right now</span>
+      <span class="hp-sub">{{ kpis.scored_domains }} of {{ kpis.total_domains }} domains scored</span>
+    </div>
+    <div class="hp-body hp-body-split">
+      <div class="sparkline hp-donut">{{ vibe_donut_svg | safe }}</div>
+      <ul class="tier-legend">
+        {% for cls, count, name, hint in [
+              ('ok', kpis.good_count, 'Healthy', 'Scoring 80 or above -- authentication, spam rate and bounce/complaint rate all look fine'),
+              ('warn', kpis.bad_count, 'Needs attention', 'Scoring 50-79 -- at least one signal is off'),
+              ('bad', kpis.ugly_count, 'At risk', 'Scoring below 50 -- several signals are struggling at once')] %}
+        <li class="{{ 'is-zero' if not count }}" title="{{ hint }}">
+          <span class="tier-dot {{ cls }}"></span>
+          <span class="tier-count">{{ count }}</span>
+          <span class="tier-name">{{ name }}</span>
+          <span class="tier-share">{% if kpis.scored_domains %}{{ (count / kpis.scored_domains * 100)|round|int }}%{% else %}--{% endif %}</span>
+        </li>
+        {% endfor %}
+        {% if kpis.unscored_domains %}
+        <li class="is-muted" title="No health snapshot recorded for these yet -- they need report or sending data before they can be scored">
+          <span class="tier-dot muted"></span>
+          <span class="tier-count">{{ kpis.unscored_domains }}</span>
+          <span class="tier-name">Not enough data yet</span>
+          <span class="tier-share"></span>
+        </li>
+        {% endif %}
+      </ul>
     </div>
   </div>
-  <div class="pill pill-wide">
-    <div class="pill-label" style="margin-bottom:0.3rem">📈 Portfolio-wide pass rate (60d, all domains combined)</div>
-    <div class="sparkline">{{ portfolio_sparkline_svg | safe }}</div>
+
+  <div class="hp-block">
+    <div class="hp-head">
+      <span class="hp-title" title="Every domain's mail added together, so one small domain having a bad day doesn't swing the line."><span class="ico">📈</span>Which way it's moving</span>
+      <span class="hp-sub">pass rate, all domains combined, last 60 days</span>
+    </div>
+    <div class="hp-body">
+      <div class="sparkline hp-trend">{{ portfolio_sparkline_svg | safe }}</div>
+    </div>
   </div>
 </div>
 
@@ -162,10 +195,10 @@
     </h3>
 
     <div class="row">
-      <span class="label" title="One combined read -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single tier">Overall vibe</span>
+      <span class="label" title="One combined read -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single tier">Overall health</span>
       <span>
         <span class="badge {{ d.vibe_status }}">
-          {{ {'ok': 'Good', 'warn': 'Bad', 'bad': 'Ugly'}.get(d.vibe_status, 'Not enough data') }}
+          {{ {'ok': 'Healthy', 'warn': 'Needs attention', 'bad': 'At risk'}.get(d.vibe_status, 'Not enough data') }}
         </span>
         {% if d.health_score is not none %}<span class="muted">({{ d.health_score|round|int }}/100)</span>{% endif %}
       </span>
@@ -214,7 +247,7 @@
     </div>
 
     {% if d.card_sparkline_svg %}
-    <div class="sparkline" style="margin:0.4rem 0 0.6rem 0" title="Overall vibe score trend, last 30 days">{{ d.card_sparkline_svg | safe }}</div>
+    <div class="sparkline" style="margin:0.4rem 0 0.6rem 0" title="Overall health score trend, last 30 days">{{ d.card_sparkline_svg | safe }}</div>
     {% endif %}
 
     <div class="row">
@@ -224,7 +257,7 @@
 
     {% if d.open_counts %}
     <div class="row">
-      <span class="label">Needs attention</span>
+      <span class="label" title="Open action items for this domain -- only the most important couple are shown here; the domain page lists them all">Open items</span>
       <span>
         {% for cat, n in d.top_issues %}
           <span class="badge muted" title="{{ category_help(cat) }}">{{ category_label(cat) }}: {{ n }}</span>

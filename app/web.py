@@ -344,7 +344,7 @@ def index(request: Request, flash: str = None):
     good_count = sum(1 for d in domains if d["vibe_status"] == "ok")
     bad_count = sum(1 for d in domains if d["vibe_status"] == "warn")
     ugly_count = sum(1 for d in domains if d["vibe_status"] == "bad")
-    vibe_donut_svg = vibe_distribution_donut(good_count, bad_count, ugly_count)
+    vibe_donut_svg = vibe_distribution_donut(good_count, bad_count, ugly_count, width=128, height=128)
     kpis = {
         "total_domains": len(domains),
         "domains_with_issues": domains_with_issues,
@@ -352,6 +352,12 @@ def index(request: Request, flash: str = None):
         "good_count": good_count,
         "bad_count": bad_count,
         "ugly_count": ugly_count,
+        # A domain with no health snapshot yet is 'muted' -- in none of the three
+        # tiers. Percentages have to divide by the scored count, not the total,
+        # or they quietly sum to less than 100%; and the unscored ones need
+        # saying out loud rather than vanishing between the two numbers.
+        "scored_domains": good_count + bad_count + ugly_count,
+        "unscored_domains": len(domains) - (good_count + bad_count + ugly_count),
     }
     return templates.TemplateResponse(request, "index.html", {
         "domains": domains, "overview": overview, "flash": flash,

@@ -206,9 +206,9 @@
   <div class="tab-panel active" data-tab="overview">
 
     <div class="section">
-      <h2 class="first" title="One combined read -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single Good/Bad/Ugly tier">🩺 Overall vibe</h2>
+      <h2 class="first" title="One combined read -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single score out of 100">🩺 Overall health</h2>
       <div class="verdict {{ verdicts.vibe[0] }}">
-        <strong>{{ {'ok': 'Good', 'warn': 'Bad', 'bad': 'Ugly'}.get(verdicts.vibe[0], 'Not enough data') }}</strong>{% if health_score is not none %} ({{ health_score|round|int }}/100){% endif %} -- {{ verdicts.vibe[1] }}
+        <strong>{{ {'ok': 'Healthy', 'warn': 'Needs attention', 'bad': 'At risk'}.get(verdicts.vibe[0], 'Not enough data') }}</strong>{% if health_score is not none %} ({{ health_score|round|int }}/100){% endif %} -- {{ verdicts.vibe[1] }}
       </div>
       {% if health_sparkline_svg %}
       <div class="sparkline" title="Overall vibe score trend">{{ health_sparkline_svg | safe }}</div>

@@ -424,10 +424,20 @@ def health_score_sparkline(series, width: int = 640, height: int = 140) -> str:
     analysis.health_score_series -- the single number that already combines
     pass rate, Gmail's own spam rate, and bounce/complaint rate (see
     snapshot_domain_health's weights), so one line stands in for four.
-    Colored by the same Good/Bad/Ugly tiers as verdicts.domain_vibe_verdict
+    Colored by the same health tiers as verdicts.domain_vibe_verdict
     (>=80 ok, >=50 warn, else bad) so the chart and the plain-language
-    verdict next to it never disagree."""
-    pad_l, pad_r, pad_t, pad_b = 28, 8, 10, 20
+    verdict next to it never disagree.
+
+    Below ~90px tall this switches to a compact mode with no axis or date
+    text. The dashboard cards render it at 48px, where the full-size padding
+    left an 18px-tall plot: the 50 and 80 axis labels are only 30% of that
+    apart, so they collided into an unreadable smudge that looked like a
+    missing-glyph box. Dropping the text also hands those 24 vertical pixels
+    back to the line itself, which is the only part that's legible at this
+    size. Nothing is lost -- each dot keeps its own date+score tooltip, and
+    the dashed 50/80 bands still show which tier the line is sitting in."""
+    compact = height < 90
+    pad_l, pad_r, pad_t, pad_b = (4, 4, 6, 6) if compact else (28, 8, 10, 20)
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
 
@@ -454,7 +464,8 @@ def health_score_sparkline(series, width: int = 640, height: int = 140) -> str:
             f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{width - pad_r}" y2="{gy:.1f}" '
             f'stroke="currentColor" stroke-opacity="0.15" stroke-width="1" stroke-dasharray="4 3"/>'
         )
-        gridlines.append(f'<text x="1" y="{gy + 4:.1f}" font-size="10" fill="currentColor" opacity="0.6">{val}</text>')
+        if not compact:
+            gridlines.append(f'<text x="1" y="{gy + 4:.1f}" font-size="10" fill="currentColor" opacity="0.6">{val}</text>')
 
     first_date, last_date = series[0][0], series[-1][0]
 
@@ -466,24 +477,30 @@ def health_score_sparkline(series, width: int = 640, height: int = 140) -> str:
             f'data-tooltip="{series[i][0]}: {s:.0f}/100"/>'
         )
 
+    axis_text = "" if compact else (
+        f'<text x="{pad_l}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6">{first_date}</text>'
+        f'<text x="{width - pad_r}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6" '
+        f'text-anchor="end">{last_date}</text>'
+    )
     return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
   {''.join(gridlines)}
   <polyline points="{polyline}" fill="none" stroke="currentColor" stroke-width="1.75" opacity="0.9"/>
   {''.join(dots)}
-  <text x="{pad_l}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6">{first_date}</text>
-  <text x="{width - pad_r}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6" text-anchor="end">{last_date}</text>
+  {axis_text}
 </svg>'''
 
 
 def vibe_distribution_donut(good_count: int, bad_count: int, ugly_count: int,
                              width: int = 150, height: int = 150) -> str:
-    """Donut of how many tracked domains currently fall into each Good/Bad/
-    Ugly health tier (verdicts.domain_vibe_verdict) -- one portfolio-wide
+    """Donut of how many tracked domains currently fall into each health
+    tier (verdicts.domain_vibe_verdict) -- one portfolio-wide
     glance instead of reading every card's own badge one at a time."""
     total = good_count + bad_count + ugly_count
     cx, cy = width / 2, height / 2
-    r = min(width, height) / 2 - 14
-    stroke_w = r * 0.62
+    # A stroked circle straddles its radius, so half the stroke sits OUTSIDE r --
+    # sizing r off the box first (the obvious way) clipped the ring on all four
+    # sides. Solve r from the outer edge instead, so the widest painted pixel
+    # lands exactly `margin` inside the viewBox.
     margin = 6
     stroke_fraction = 0.62
     max_outer_r = min(width, height) / 2 - margin
@@ -498,9 +515,9 @@ def vibe_distribution_donut(good_count: int, bad_count: int, ugly_count: int,
                 f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" class="donut-center-sublabel">no data</text></svg>')
 
     segments = [
-        (good_count, "var(--ok)", "Good"),
-        (bad_count, "var(--warn)", "Bad"),
-        (ugly_count, "var(--bad)", "Ugly"),
+        (good_count, "var(--ok)", "Healthy"),
+        (bad_count, "var(--warn)", "needing attention"),
+        (ugly_count, "var(--bad)", "at risk"),
     ]
     arcs = []
     cumulative = 0.0
