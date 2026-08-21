@@ -74,7 +74,12 @@ _PROBLEM_STORY = {
     "dns_missing": "your website didn't have the basic protection that stops people from faking your emails",
     "dkim_missing": "your website was missing a kind of digital signature that proves your emails really came from you",
     "safe_browsing_flagged": "Google flagged your website as possibly unsafe, which can scare visitors away",
-    "postmaster_compliance": "Google let us know something about how your emails are being handled needed attention",
+    # Deliberately generic ONLY as a last resort -- _postmaster_story() below
+    # names the actual requirement Google flagged. The old generic wording
+    # ("something ... needed attention") appeared in five of nine real reports
+    # and told the reader nothing about what, where, or how, which is exactly
+    # the anxious-and-useless combination this report exists to avoid.
+    "postmaster_compliance": "Google flagged one of its sender requirements for your domain",
     "display_name_issue": "the name your newsletters show as being \"from\" could look confusing or untrustworthy to your readers",
     "content_spam_risk": "the wording in one of your newsletters looked similar to what spam filters watch out for",
     "subject_spam_risk": "the subject line of one of your newsletters looked similar to what spam filters watch out for",
@@ -303,7 +308,8 @@ def save_report_settings(conn, domain_id: int, recipient_email: str, recipient_l
     conn.commit()
 
 
-def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklist_real_ips: set = frozenset()):
+def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklist_real_ips: set = frozenset(),
+                     exclude_categories: set = frozenset()):
     """Resolved action items in this window as {"story", "impact"} dicts,
     one per category (matching how they're deduplicated in the dashboard's
     own action-items list) -- excludes manual_log rows (status='logged', not
@@ -327,19 +333,26 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklis
         category = r["category"]
         if category in _OPERATOR_ONLY_CATEGORIES:
             continue
+        # Never claim we fixed something that is ALSO still open. Action items
+        # are per-(category, ref_key), so one IP's failure can be resolved
+        # while another's is live -- both then rendered the SAME sentence,
+        # producing "we fixed X" immediately followed by "we're still working
+        # on X" in three of nine real reports. Nothing erodes trust faster
+        # than a report contradicting itself, so still-open wins: the honest
+        # framing is that the problem isn't finished yet.
+        if category in exclude_categories:
+            continue
         if category == "blocklist" and r["ref_key"] not in blocklist_real_ips:
             continue
         resolved_at = datetime.datetime.strptime(r["resolved_at"], "%Y-%m-%d %H:%M:%S")
 
+        # Bounced/unsubscribed addresses are neither "we fixed it" nor "still
+        # pending" -- they're routine list hygiene, partly automatic and partly
+        # the org's own to action. Reported in their own section instead, since
+        # putting them under "what we fixed" produced the odd combination of
+        # asking the reader to prune their list and telling them we'd already
+        # handled it in the same sentence.
         if category in ("mailgun_new_suppressions", "ses_new_suppressions"):
-            table = "mailgun_suppressions" if category == "mailgun_new_suppressions" else "ses_suppressions"
-            emails = [x["email"] for x in conn.execute(
-                f"SELECT email FROM {table} WHERE domain_id=? AND first_seen_at BETWEEN ? AND ? ORDER BY first_seen_at",
-                (domain_id, start_str, end_str),
-            ).fetchall()]
-            if not emails:
-                continue
-            items.append({"story": _suppression_story(len(emails), emails), "impact": None})
             continue
 
         impact = None
@@ -349,7 +362,7 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklis
             impact = _mailgun_rate_impact(conn, r["ref_key"], resolved_at)
         elif category in _SES_RATE_IMPACT_CATEGORIES and r["ref_key"]:
             impact = _ses_rate_impact(conn, r["ref_key"], resolved_at)
-        items.append({"story": _plain_problem(category), "impact": impact})
+        items.append({"story": _plain_problem(category), "impact": impact, "why": _why_it_matters(category)})
     return items
 
 
@@ -449,7 +462,6 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
                 (domain_id, ref_key, start_str, end_str),
             ).fetchall()]
             if emails:
-                items.append({"story": _suppression_story(len(emails), emails), "detail": None})
                 continue
 
         detail = None
@@ -457,7 +469,10 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
             detail = _reputation_rate_detail(conn, category, ref_key, start_str, end_str)
         elif category == "domain_expiring_soon":
             detail = _domain_expiry_detail(conn, domain_id)
-        items.append({"story": _plain_problem(category), "detail": detail})
+        story = _plain_problem(category)
+        if category == "postmaster_compliance":
+            story = _postmaster_story(conn, domain_id) or story
+        items.append({"story": story, "detail": detail, "why": _why_it_matters(category)})
     return items
 
 
@@ -610,6 +625,59 @@ def _risk_warning(conn, domain_id: int, now: datetime.datetime):
             "important for your organization.")
 
 
+_POSTMASTER_REQUIREMENT_STORY = {
+    # Phrased as clauses that read naturally after "Google told us ..." --
+    # so none of them may start with "Google" or the sentence doubles it up.
+    "SPF_AND_DKIM": ("it couldn't always confirm your emails were signed by you -- the proof that a message really "
+                      "came from your domain"),
+    "DMARC_ALIGNMENT": ("the \"from\" address on some of your mail didn't line up with the domain that actually "
+                         "sent it, which makes it look less trustworthy"),
+    "ENCRYPTION": "some of your mail travelled without encryption, which it now expects for every message",
+    "DNS_RECORDS": ("one of the computers sending your mail isn't properly labelled on the internet, so it can't "
+                     "confirm the sender is legitimate"),
+    "ONE_CLICK_UNSUBSCRIBE": ("your newsletters were missing the one-click unsubscribe button it now requires of "
+                               "anyone sending in volume"),
+    "HONOR_UNSUBSCRIBE": "it wasn't satisfied that unsubscribe requests were being acted on quickly enough",
+    "SPAM_RATE": ("more of your recipients marked your mail as spam than its guidance allows -- the one number "
+                   "that most directly decides whether you reach the inbox"),
+    "DELIVERABILITY": ("it isn't yet confident about your mail overall, most often because it simply hasn't seen "
+                        "enough steady sending from your domain to judge it yet"),
+}
+
+
+def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
+    """Addresses that stopped accepting mail in this window, across both
+    Mailgun and SES, as one plain story. Its own section (see _resolved_items
+    for why) -- routine housekeeping, framed as such rather than as a
+    problem or a fix."""
+    emails = []
+    for table in ("mailgun_suppressions", "ses_suppressions"):
+        emails += [x["email"] for x in conn.execute(
+            f"""SELECT email FROM {table} WHERE domain_id=? AND first_seen_at BETWEEN ? AND ?
+                ORDER BY first_seen_at""",
+            (domain_id, start_str, end_str),
+        ).fetchall()]
+    if not emails:
+        return None
+    return _suppression_story(len(emails), emails)
+
+
+def _postmaster_story(conn, domain_id: int):
+    """Names the specific Google requirement rather than saying "something
+    needed attention". The requirement is in the action item's ref_key as
+    "<postmaster_domain>:<REQUIREMENT>"."""
+    row = conn.execute(
+        """SELECT ref_key FROM action_items WHERE domain_id=? AND category='postmaster_compliance'
+           AND status='open' ORDER BY updated_at DESC LIMIT 1""",
+        (domain_id,),
+    ).fetchone()
+    if not row or not row["ref_key"] or ":" not in row["ref_key"]:
+        return None
+    requirement = row["ref_key"].split(":", 1)[1]
+    story = _POSTMASTER_REQUIREMENT_STORY.get(requirement)
+    return f"Google told us {story}" if story else None
+
+
 def _health_comparison(conn, domain_id: int):
     """This domain's latest composite health_score vs. every other tracked
     domain's latest score. Only shown once a handful of other domains
@@ -756,9 +824,10 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     prev_start_epoch = start_epoch - (end_epoch - start_epoch)
 
     blocklist_good_news, blocklist_real_ips = _blocklist_split(conn, domain_id, domain_name, start_str, end_str)
-    resolved = _resolved_items(conn, domain_id, start_str, end_str, blocklist_real_ips)
     still_open_categories = _still_open_categories(conn, domain_id, blocklist_real_ips)
     still_open = _still_open_items(conn, domain_id, start_str, end_str, blocklist_real_ips)
+    resolved = _resolved_items(conn, domain_id, start_str, end_str, blocklist_real_ips,
+                                exclude_categories=still_open_categories)
 
     total, passed, rate = domain_window_stats(conn, domain_id, start_epoch, end_epoch)
     _, _, prev_rate = domain_window_stats(conn, domain_id, prev_start_epoch, start_epoch)
@@ -784,6 +853,9 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         (period_start - (period_end - period_start)).date().isoformat(),
     )
 
+    headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end))
+    health_trend = _health_trend(conn, domain_id, period_start)
+    list_hygiene = _list_hygiene(conn, domain_id, start_str, end_str)
     protection_tightened = _protection_tightened(conn, domain_id, period_start)
     spam_trend = _spam_rate_trend(conn, domain_id, period_end)
     risk_warning = _risk_warning(conn, domain_id, period_end)
@@ -793,6 +865,9 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     tips = _tips_for_domain(still_open_categories, cadence["irregular"])
 
     return {
+        "headline": headline,
+        "health_trend": health_trend,
+        "list_hygiene": list_hygiene,
         "resolved": resolved,
         "still_open": still_open,
         "deliverability": deliverability,
@@ -817,6 +892,112 @@ def report_period_for_domain(conn, domain_id: int):
     return _report_period(row, datetime.datetime.utcnow())
 
 
+# What each kind of problem actually threatens, in the terms this audience
+# cares about: their donors, their funders, and whether their impact stories
+# get read. The whole reason a grassroots org needs to care about domain
+# health is that a custom email address is what makes a funder trust them --
+# and an unmaintained one is what lets someone scam a donor in their name, or
+# quietly drops their newsletter into a funder's spam folder. Stating the
+# stake in those words is what turns a technical finding into something worth
+# reading. Kept short: one clause, appended to the story, never a lecture.
+_WHY_IT_MATTERS = {
+    "dns_drift": "Left alone, this is what lets someone send a donation appeal that looks exactly like it came from you.",
+    "dns_policy_weakened": "This is the protection that stops a stranger emailing your donors in your name, so we don't let it slip.",
+    "dns_missing": "Without it, anyone can put your organization's name on an email asking your supporters for money.",
+    "spf_missing": "This is part of what proves an email really came from you and not from someone imitating you.",
+    "dkim_missing": "This is the signature that lets a funder's mail system confirm your message is genuinely yours.",
+    "blocklist": "While that lasts, your updates can go straight to a supporter's spam folder instead of their inbox.",
+    "ptr_issue": "Some mail systems quietly distrust mail from an unlabelled computer, so messages can be filtered out.",
+    "mailgun_reputation": "If it keeps climbing, mailbox providers start sending your newsletter to spam instead of the inbox.",
+    "ses_reputation": "If it keeps climbing, mailbox providers start sending your newsletter to spam instead of the inbox.",
+    "ses_reputation_watch": "Worth catching early, because once providers lose confidence it takes a while to earn back.",
+    "ses_rejected": "A blocked message never reaches anyone at all, so it's worth understanding why.",
+    "new_sender": "We check these so nobody can quietly use your organization's name to email your supporters.",
+    "failure_investigation": "We check these so nobody can quietly use your organization's name to email your supporters.",
+    "borrowed_sending_identity": "Worth sorting out so your mail is clearly recognisable as yours.",
+    "safe_browsing_flagged": "Visitors get a red warning screen before they reach your site, which costs you trust and donations.",
+    "postmaster_compliance": "This comes straight from Google, so it is worth settling before it affects the inbox.",
+    "display_name_issue": "The \"from\" name is the first thing a reader sees, and it decides whether they trust the email.",
+    "content_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
+    "subject_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
+    "sending_cadence_irregular": "A steady rhythm is part of how mailbox providers decide to trust your mail.",
+    "domain_expiring_soon": "If a domain lapses, your website and every email address on it stop working the same day.",
+}
+
+
+def _why_it_matters(category):
+    return _WHY_IT_MATTERS.get(category)
+
+
+def _health_trend(conn, domain_id: int, period_start):
+    """This domain's OWN health score now vs. around the last report -- the
+    single most reassuring number available, and the thing a "did it get
+    better?" question actually needs. Distinct from _health_comparison(),
+    which ranks against other orgs; a peer ranking can't tell you whether
+    YOUR month went well. Returns None rather than inventing a trend when
+    there isn't enough history yet."""
+    latest = conn.execute(
+        """SELECT snapshot_date, health_score FROM domain_health_snapshots
+           WHERE domain_id=? AND health_score IS NOT NULL
+           ORDER BY snapshot_date DESC LIMIT 1""",
+        (domain_id,),
+    ).fetchone()
+    if not latest:
+        return None
+    prior = conn.execute(
+        """SELECT health_score FROM domain_health_snapshots
+           WHERE domain_id=? AND health_score IS NOT NULL AND snapshot_date <= ?
+           ORDER BY snapshot_date DESC LIMIT 1""",
+        (domain_id, period_start.date().isoformat()),
+    ).fetchone()
+
+    score = round(latest["health_score"])
+    band = ("in good shape" if score >= 80 else
+            "holding steady, with room to improve" if score >= 50 else
+            "needs some work, and we're on it")
+    if not prior or prior["health_score"] is None:
+        return (f"Overall, your email health is {band} -- we score it {score} out of 100. "
+                f"We'll show you how this moves each time, so you can see progress rather than take our word for it.")
+
+    before = round(prior["health_score"])
+    delta = score - before
+    if delta >= 3:
+        return (f"Your overall email health has improved since the last update -- from {before} to {score} out of "
+                f"100. That's real progress, and it's the direct result of the fixes below.")
+    if delta <= -3:
+        return (f"Your overall email health has slipped a little since the last update -- from {before} to {score} "
+                f"out of 100. Nothing here is alarming, and the items below are what we're working through.")
+    return (f"Your overall email health is steady at {score} out of 100, about the same as last time -- which is "
+            f"exactly what you want between updates.")
+
+
+def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_warning):
+    """The first thing the reader sees: are they safe right now, and why.
+
+    The old report opened straight into a bullet list of problems, which for
+    an audience that already finds technology intimidating reads as "here is
+    everything wrong with you". The brief for this feature is the opposite --
+    they should come away feeling their domain is looked after. So lead with
+    a plain verdict, grounded in what's actually in place, and only then get
+    into detail."""
+    urgent = still_open_categories & _URGENT_STILL_OPEN_CATEGORIES
+    policy_run = current_policy_run(conn, domain_id)
+    protected = bool(policy_run and policy_run["p"] and policy_run["p"] != "none")
+
+    if urgent or risk_warning:
+        return ("Your domain is being looked after, and there's one thing we want you to know about. "
+                "We've set out below what happened, what it means and what we're doing -- you don't need to "
+                "take any action yourself unless we say so.")
+    if still_open_categories:
+        return ("Your domain is in good hands and nothing here is urgent. "
+                + ("The protection that stops people faking emails in your name is active, " if protected else "")
+                + "and the few things still on our list are routine housekeeping we're handling for you.")
+    return ("Everything is in good order on your domain this month. "
+            + ("The protection that stops people faking emails in your name is active and working, " if protected
+               else "")
+            + "your mail is reaching people, and there's nothing you need to do.")
+
+
 def _report_period(row, now: datetime.datetime):
     """The period a report for this domain_report_settings row would cover
     right now -- shared by the real scheduler, the test-send route, and the
@@ -838,6 +1019,13 @@ def run_report_emails(conn, verbose: bool = True) -> None:
     of action than every other check there, which only reads/updates
     internal state), that decides per-domain whether it's due rather than
     needing its own scheduler job."""
+    settings = ensure_default_settings(conn)
+    if settings.get("report_emails_enabled", "0") != "1":
+        if verbose:
+            print("[domain_report] report_emails_enabled is off in Settings -- not sending "
+                  "(the 'send test now' button still works)")
+        return
+
     sender_email = get_secret("REPORT_SENDER_EMAIL")
     sender_domain = get_secret("REPORT_SENDER_MAILGUN_DOMAIN")
     api_key = get_secret("MAILGUN_SEND_API_KEY")

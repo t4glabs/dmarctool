@@ -543,6 +543,11 @@ SETTINGS_META = {
         "help": "Every request this app serves (who, when, what page/action) is recorded in the Access log. Entries older than this are deleted automatically.",
         "example": "90 means you can look back 3 months to see who accessed or changed something, then it's cleared out.",
     },
+    "report_emails_enabled": {
+        "label": "Actually send the domain health emails",
+        "help": "Master switch. While this is off, no report email is ever sent automatically to anyone -- the \"Send a test now\" button on each domain still works, so you can review exactly what a recipient would get first. Turn it on only when you're happy with the wording and the recipient list, because these go to people outside your team.",
+        "example": "0 = nothing sends automatically (safe default). 1 = each opted-in domain is emailed on its own schedule.",
+    },
     "report_sender_name": {
         "label": "Domain health email -- sender display name",
         "help": "The name recipients see next to your sending address, e.g. in their inbox list. Applies to every domain's health update email -- one name for all of them, not set per domain.",
@@ -609,7 +614,7 @@ SETTINGS_GROUPS = [
         "access_log_retention_days",
     ]),
     ("📧 Domain health email reports", [
-        "report_sender_name", "report_subject_template", "report_signoff_name",
+        "report_emails_enabled", "report_sender_name", "report_subject_template", "report_signoff_name",
     ]),
 ]
 

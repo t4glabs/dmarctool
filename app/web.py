@@ -182,7 +182,16 @@ def _startup():
         run_report_emails(c, verbose=False)
         prune_old_access_log(c, retention_days=int(ensure_default_settings(c)["access_log_retention_days"]))
 
-    _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
+    # next_run_time matters: APScheduler's interval trigger otherwise waits a
+    # full interval before its FIRST run, so every service restart pushed the
+    # periodic job 6 hours further out. On a laptop that restarts often (and
+    # sleeps), it may have almost never fired -- which is why the SES event
+    # queue was able to build a 25k backlog and why no scheduled report email
+    # had ever gone out. Start it a minute after boot instead, then every 6h.
+    _scheduler.add_job(
+        _job, "interval", hours=6, id="periodic_refresh", replace_existing=True,
+        next_run_time=_datetime.now() + _timedelta(minutes=1),
+    )
     _scheduler.start()
 
 
@@ -726,6 +735,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "classifications": CLASSIFICATIONS,
         "manual_log_items": manual_log_items,
         "report_settings": report_settings,
+        "report_emails_enabled": settings.get("report_emails_enabled", "0") == "1",
         "report_preview_subject": report_preview_subject,
         "report_preview_text": report_preview_text,
         "dns_history": dns_history,

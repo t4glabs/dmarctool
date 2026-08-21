@@ -1,18 +1,27 @@
 Hi {{ recipient_label }},
 
 Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }} to {{ period_end }}), in plain terms. No technical jargon, just what happened and what we did about it.
-{% if resolved %}
-WHAT WE FIXED FOR YOU
+{% if headline %}
+{{ headline }}
+{% endif %}{% if health_trend %}
+{{ health_trend }}
+{% endif %}{% if resolved %}
+WHAT WE SORTED OUT FOR YOU
 {% for item in resolved %}
-- Earlier, {{ item.story }}. We've since taken care of this.{% if item.impact %} And here's the payoff: {{ item.impact }}.{% endif %}
+- {{ item.story[0]|upper }}{{ item.story[1:] }}. We've taken care of it.{% if item.why %} {{ item.why }}{% endif %}{% if item.impact %} The payoff: {{ item.impact }}.{% endif %}
 {% endfor %}{% endif %}
 {%- if still_open %}
 WHAT WE'RE STILL WORKING ON
 {% for item in still_open %}
-- {{ item.story[0]|upper }}{{ item.story[1:] }}.{% if item.detail %} {{ item.detail }}.{% endif %} We're on it.
+- {{ item.story[0]|upper }}{{ item.story[1:] }}.{% if item.detail %} {{ item.detail }}.{% endif %}{% if item.why %} {{ item.why }}{% endif %} We're on it, and we'll tell you when it's done.
 {% endfor %}{% if contact_cta %}
 {{ contact_cta }}
 {% endif %}{% endif %}
+{%- if list_hygiene %}
+KEEPING YOUR LIST CLEAN
+
+{{ list_hygiene }}.
+{% endif %}
 {%- if not resolved and not still_open %}
 Nothing needed fixing this time, everything's running smoothly.
 {% endif %}

@@ -1030,6 +1030,14 @@
         </div>
       </form>
       <form action="/domain/{{ domain.name }}/report_settings/test" method="post" style="margin-top:0.6rem">
+        {% if not report_emails_enabled %}
+        <div class="verdict warn" style="margin-bottom:0.6rem">
+          &#9208; <strong>Automatic sending is switched off tool-wide.</strong> This domain is opted in, but no
+          report will actually be emailed until <em>&ldquo;Actually send the domain health emails&rdquo;</em> is turned on in
+          <a href="/settings#report-emails-enabled">Settings</a>. The test button below still works, so you can review
+          exactly what the recipient would receive first.
+        </div>
+        {% endif %}
         <button type="submit" {{ 'disabled' if not report_settings or not report_settings.recipient_email else '' }}>✉️ Send a test now</button>
         <span class="muted" style="font-size:0.85rem">
           Sends immediately to the address above using this domain's real current data, without affecting the

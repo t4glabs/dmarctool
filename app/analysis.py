@@ -81,6 +81,14 @@ DEFAULT_SETTINGS = {
     "safe_browsing_recheck_hours": "24",   # Safe Browsing status doesn't change fast; daily is plenty
     "domain_expiry_recheck_hours": "24",   # registration expiry dates change at most once a year; daily is plenty
     "domain_expiry_warn_days": "30",       # flag + include in the email report once expiry is this close
+    # Master switch for actually SENDING the plain-language owner reports.
+    # Off by default and deliberately separate from each domain's own
+    # `enabled` flag: those say "this org has opted in", this says "we're
+    # ready for real mail to leave the building". Sending to a third party is
+    # a different class of action from every other check here, so it needs an
+    # explicit, deliberate yes rather than defaulting on the moment the
+    # scheduler is fixed.
+    "report_emails_enabled": "0",
     "access_log_retention_days": "90",     # how long to keep who-accessed-what history before pruning it
     "report_sender_name": "Domain Health",           # display name for the domain-health email's From header
     "report_subject_template": "Your {domain} domain health update from aikyam",  # {domain} substituted at send time
