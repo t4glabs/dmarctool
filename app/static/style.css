@@ -166,7 +166,13 @@ a { color: var(--accent); }
 .card.pinned { border-color: var(--grey-500); box-shadow: 0 0 0 1px var(--grey-500); }
 .pin-form { flex: none; }
 .pin-btn {
-  background: none; border: none; padding: 0.1rem 0.2rem; font-size: 0.85rem; line-height: 1;
+  /* Inline SVG, not an emoji glyph -- a pushpin emoji rendered wildly
+     differently in size/color across OSes without a matching color-emoji
+     font (Windows/Linux especially), showing up huge and monochrome on
+     some machines. An SVG with fill="currentColor" renders identically
+     everywhere and follows this button's own color exactly. */
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; background: none; border: none; padding: 0; line-height: 1;
   color: var(--grey-400); opacity: 0.5; cursor: pointer; border-radius: var(--radius-sm);
 }
 .pin-btn:hover { opacity: 1; background: var(--grey-100); }

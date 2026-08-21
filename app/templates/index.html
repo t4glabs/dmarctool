@@ -143,7 +143,9 @@
       <span><span class="status-dot {{ dot }}"></span><a href="/domain/{{ d.name }}">{{ d.name }}</a></span>
       <form class="inline pin-form" action="/domain/{{ d.name }}/pin" method="post">
         <input type="hidden" name="redirect_to" value="/">
-        <button type="submit" class="pin-btn{{ ' active' if d.pinned else '' }}" title="{{ 'Unpin' if d.pinned else 'Pin to top' }}" aria-label="{{ 'Unpin' if d.pinned else 'Pin to top' }}">&#128204;</button>
+        <button type="submit" class="pin-btn{{ ' active' if d.pinned else '' }}" title="{{ 'Unpin' if d.pinned else 'Pin to top' }}" aria-label="{{ 'Unpin' if d.pinned else 'Pin to top' }}">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><circle cx="8" cy="5" r="4"/><polygon points="8,8 5,15 11,15"/></svg>
+        </button>
       </form>
     </h3>
 
