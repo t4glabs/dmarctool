@@ -74,6 +74,7 @@ DEFAULT_SETTINGS = {
     "safe_browsing_recheck_hours": "24",   # Safe Browsing status doesn't change fast; daily is plenty
     "domain_expiry_recheck_hours": "24",   # registration expiry dates change at most once a year; daily is plenty
     "domain_expiry_warn_days": "30",       # flag + include in the email report once expiry is this close
+    "access_log_retention_days": "90",     # how long to keep who-accessed-what history before pruning it
     "report_sender_name": "Domain Health",           # display name for the domain-health email's From header
     "report_subject_template": "Your {domain} domain health update from aikyam",  # {domain} substituted at send time
     "report_signoff_name": "The aikyam Team",         # sign-off name at the bottom of the domain-health email
@@ -99,7 +100,10 @@ def day_to_date(day: int) -> datetime.date:
 
 
 def all_domains(conn):
-    return conn.execute("SELECT id, name FROM domains ORDER BY name").fetchall()
+    # Pinned domains first (for the Overview grid), alphabetical within each
+    # group -- harmless for every other caller here, which just iterates
+    # every domain regardless of order (background checks, etc).
+    return conn.execute("SELECT id, name, pinned FROM domains ORDER BY pinned DESC, name").fetchall()
 
 
 # ---------------------------------------------------------------------------

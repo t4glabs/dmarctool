@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS domains (
     id          INTEGER PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
     notes       TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    pinned      INTEGER NOT NULL DEFAULT 0  -- kept to the top of the Overview grid, ahead of scrolling
 );
 
 CREATE TABLE IF NOT EXISTS reports (
@@ -610,3 +611,17 @@ CREATE TABLE IF NOT EXISTS ip_whois_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_health_snapshots_domain ON domain_health_snapshots(domain_id, snapshot_date);
+
+-- Who hit this app and when -- see app/access_log.py. Matters because this
+-- app now sits behind a Cloudflare Tunnel + Access (email-OTP) instead of
+-- being purely local-only, and has no user concept of its own otherwise.
+CREATE TABLE IF NOT EXISTS access_log (
+    id          INTEGER PRIMARY KEY,
+    ts          TEXT NOT NULL DEFAULT (datetime('now')),
+    method      TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    status_code INTEGER,
+    actor_email TEXT,
+    ip          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_access_log_ts ON access_log(ts);

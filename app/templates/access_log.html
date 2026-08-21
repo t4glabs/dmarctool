@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Access log - DMARCTool{% endblock %}
+{% block content %}
+
+<h1>&#128274; Access log</h1>
+<p class="muted" style="margin-top:0">
+  Every request this app has served -- who (from Cloudflare Access' verified login, when this app is reached
+  through the Cloudflare Tunnel; "local" means it was hit directly on this Mac, bypassing Access entirely),
+  when, and what page or action. Kept for {{ retention_days }} days (see Settings), then pruned automatically.
+  This is a record of what happened inside the app -- Cloudflare's own Zero Trust dashboard (Logs &rarr; Access)
+  separately shows login attempts, including ones that never made it this far (wrong email domain, no OTP, etc).
+</p>
+
+<div class="section">
+  {% if entries %}
+  <div class="table-wrap">
+    <table>
+      <tr><th>Time (UTC)</th><th>Who</th><th>Method</th><th>Path</th><th>Status</th><th>IP</th></tr>
+      {% for e in entries %}
+      <tr>
+        <td class="muted">{{ e.ts }}</td>
+        <td>{{ e.actor_email }}</td>
+        <td>{{ e.method }}</td>
+        <td><code>{{ e.path }}</code></td>
+        <td>
+          <span class="badge {{ 'ok' if e.status_code and e.status_code < 400 else 'bad' }}">{{ e.status_code }}</span>
+        </td>
+        <td class="muted">{{ e.ip }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Nothing logged yet.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -429,7 +429,7 @@
           </td>
           <td>
             <form class="inline" action="/domain/{{ domain.name }}/senders/{{ s.source_ip }}/classify" method="post">
-              <select name="classification" onchange="this.form.submit()" title="{{ classification_help(s.classification) }}">
+              <select name="classification" onchange="this.form.requestSubmit()" title="{{ classification_help(s.classification) }}">
                 {% for c in classifications %}
                 <option value="{{ c }}" {{ 'selected' if c == s.classification else '' }}>{{ classification_label(c) }}</option>
                 {% endfor %}

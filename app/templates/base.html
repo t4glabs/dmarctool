@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}DMARCTool{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
+<meta name="csrf-token" content="{{ csrf_token(request) }}">
 </head>
 <body>
 <script>
@@ -35,6 +36,9 @@ try {
       <a class="sidebar-link {{ 'active' if current_path == '/settings' else '' }}" href="/settings">
         <span class="icon">&#9881;&#65039;</span><span class="label">Settings</span>
       </a>
+      <a class="sidebar-link {{ 'active' if current_path == '/access_log' else '' }}" href="/access_log">
+        <span class="icon">&#128274;</span><span class="label">Access log</span>
+      </a>
     </nav>
   </aside>
   <div class="content-area">
@@ -45,6 +49,30 @@ try {
   </div>
 </div>
 <script>
+// CSRF: every POST form on the page gets the current csrf_token (from the
+// <meta> tag above, itself sourced from this browser's csrf_token cookie --
+// see the security_and_audit_middleware in app/web.py) injected as a hidden
+// field right before it submits. Centralized here instead of hand-editing
+// every <form method="post"> across every template. Delegated on "submit"
+// so it covers forms added later too, but NOT programmatic form.submit()
+// calls (that DOM method bypasses the submit event by spec) -- use
+// form.requestSubmit() instead wherever a form submits itself via JS.
+(function () {
+  var meta = document.querySelector('meta[name="csrf-token"]');
+  var token = meta ? meta.getAttribute("content") : null;
+  if (!token) return;
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== "post") return;
+    if (form.querySelector('input[name="csrf_token"]')) return;
+    var input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "csrf_token";
+    input.value = token;
+    form.appendChild(input);
+  });
+})();
+
 document.addEventListener("DOMContentLoaded", function () {
   var sidebarToggle = document.getElementById("sidebar-toggle");
   if (sidebarToggle) {

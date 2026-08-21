@@ -38,6 +38,54 @@ CATEGORY_LABELS = {
     "domain_expiring_soon": "Domain registration expiring soon",
 }
 
+# Most-severe-first ordering for the Overview grid's "Needs attention" badges
+# -- a domain with 5+ open categories used to show all of them on its card,
+# crowding out the card's own trend chart. Now only the top few (by this
+# order) are shown, with the rest folded into a "+N more" note -- see
+# top_categories() below. Any category not listed here (e.g. a new one added
+# without updating this) still shows, just after everything ranked.
+CATEGORY_PRIORITY_ORDER = [
+    "domain_expiring_soon",
+    "dns_policy_weakened",
+    "blocklist",
+    "safe_browsing_flagged",
+    "dns_drift",
+    "ses_rejected",
+    "mailgun_reputation",
+    "ses_reputation",
+    "ses_reputation_watch",
+    "mailgun_new_suppressions",
+    "ses_new_suppressions",
+    "ses_account_health",
+    "ses_identity_unverified",
+    "postmaster_compliance",
+    "borrowed_sending_identity",
+    "failure_investigation",
+    "new_sender",
+    "ptr_issue",
+    "spf_lookup_limit",
+    "dkim_weak_key",
+    "mta_sts_broken",
+    "volume_spike",
+    "sending_cadence_irregular",
+    "display_name_issue",
+    "display_name_inconsistent",
+    "campaign_compliance_issue",
+    "subject_spam_risk",
+    "content_spam_risk",
+    "untracked_sending_subdomain",
+    "data_stale",
+]
+_CATEGORY_RANK = {cat: i for i, cat in enumerate(CATEGORY_PRIORITY_ORDER)}
+
+
+def top_categories(open_counts: dict, limit: int = 3):
+    """(top, extra_count) -- the `limit` most severe open categories (by
+    CATEGORY_PRIORITY_ORDER) as [(category, count), ...], plus how many
+    additional categories didn't make the cut."""
+    ranked = sorted(open_counts.items(), key=lambda kv: _CATEGORY_RANK.get(kv[0], len(CATEGORY_PRIORITY_ORDER)))
+    return ranked[:limit], max(0, len(ranked) - limit)
+
 CATEGORY_HELP = {
     "ramp_recommendation": "Whether it looks safe to tighten enforcement further, and why.",
     "new_sender": "A source we haven't seen before started sending mail for this domain -- worth a quick look to confirm it's yours.",
@@ -452,6 +500,11 @@ SETTINGS_META = {
         "help": "Once a domain's registration is this many days (or fewer) from expiring, it gets flagged as an action item here and mentioned in that domain's email report.",
         "example": "30 means you (and the domain's report recipient) get warned once expiry is a month away.",
     },
+    "access_log_retention_days": {
+        "label": "How long to keep the access log",
+        "help": "Every request this app serves (who, when, what page/action) is recorded in the Access log. Entries older than this are deleted automatically.",
+        "example": "90 means you can look back 3 months to see who accessed or changed something, then it's cleared out.",
+    },
     "report_sender_name": {
         "label": "Domain health email -- sender display name",
         "help": "The name recipients see next to your sending address, e.g. in their inbox list. Applies to every domain's health update email -- one name for all of them, not set per domain.",
@@ -511,6 +564,9 @@ SETTINGS_GROUPS = [
     ]),
     ("📅 Domain registration expiry", [
         "domain_expiry_recheck_hours", "domain_expiry_warn_days",
+    ]),
+    ("🔒 Access log", [
+        "access_log_retention_days",
     ]),
     ("📧 Domain health email reports", [
         "report_sender_name", "report_subject_template", "report_signoff_name",

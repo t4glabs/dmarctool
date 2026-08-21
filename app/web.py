@@ -13,6 +13,7 @@ after each ingest.
 import csv
 import io
 import re
+import secrets
 import shutil
 import tempfile
 import urllib.parse
@@ -32,6 +33,7 @@ from app.analysis import (
     provider_breakdown, recent_campaigns, run_analysis, sending_cadence, ses_daily_series,
     sending_stream_breakdown, subscriber_engagement_summary,
 )
+from app.access_log import prune_old_access_log, record_access, recent_access_log
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
@@ -60,7 +62,7 @@ from app.ingest import ingest_source
 from app.labels import (
     SETTINGS_GROUPS, SETTINGS_META, category_help, category_label, category_remediation, classification_help,
     classification_label, dns_status_help, dns_status_label, explain_policy,
-    postmaster_remediation, postmaster_requirement_label,
+    postmaster_remediation, postmaster_requirement_label, top_categories,
 )
 from app.verdicts import (
     dns_history_verdict, mailgun_verdict, postmaster_verdict, provider_verdict,
@@ -80,6 +82,7 @@ templates.env.globals.update({
     "postmaster_requirement_label": postmaster_requirement_label,
     "category_remediation": category_remediation,
     "postmaster_remediation": postmaster_remediation,
+    "csrf_token": lambda request: request.state.csrf_token,
 })
 
 CLASSIFICATIONS = ["unclassified", "ses_newsletter", "ses_pool", "mailgun", "workspace", "primary_domain", "suspicious", "ignored"]
@@ -88,6 +91,46 @@ app = FastAPI(title="DMARCTool")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 _scheduler = BackgroundScheduler()
+
+CSRF_COOKIE_NAME = "csrf_token"
+
+
+@app.middleware("http")
+async def security_and_audit_middleware(request: Request, call_next):
+    """Two concerns in one pass, both prompted by this app now sitting behind
+    a Cloudflare Tunnel (with Cloudflare Access in front of it) instead of
+    being purely local-only:
+
+    1. CSRF (double-submit cookie): every POST must carry a csrf_token form
+       field matching this browser's csrf_token cookie. The cookie's value
+       never leaves this app's own pages (it's only ever embedded into forms
+       server-side, via base.html's <meta> tag + the shared submit-listener
+       JS -- see chart-tooltip.js's neighbor script in base.html), so a
+       third-party page can't know what value to forge into a hidden POST.
+    2. Access logging (app.access_log) -- who hit this app and did what.
+    """
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+    request.state.csrf_token = cookie_token or secrets.token_urlsafe(32)
+
+    if request.method == "POST":
+        form = await request.form()
+        submitted = form.get("csrf_token")
+        if not cookie_token or not submitted or not secrets.compare_digest(cookie_token, submitted):
+            response = Response(
+                "This form's security check failed (missing or expired) -- reload the page and try again.",
+                status_code=403, media_type="text/plain",
+            )
+            record_access(get_connection(), request, response.status_code)
+            return response
+
+    response = await call_next(request)
+
+    if not cookie_token:
+        response.set_cookie(CSRF_COOKIE_NAME, request.state.csrf_token, httponly=True, samesite="lax",
+                             max_age=60 * 60 * 24 * 365)
+    if not request.url.path.startswith("/static/"):
+        record_access(get_connection(), request, response.status_code)
+    return response
 
 
 @app.on_event("startup")
@@ -112,6 +155,7 @@ def _startup():
         run_mta_sts_checks(c, verbose=False)
         run_domain_expiry_checks(c, verbose=False)
         run_report_emails(c, verbose=False)
+        prune_old_access_log(c, retention_days=int(ensure_default_settings(c)["access_log_retention_days"]))
 
     _scheduler.add_job(_job, "interval", hours=6, id="periodic_refresh", replace_existing=True)
     _scheduler.start()
@@ -163,6 +207,7 @@ def build_domain_summary(conn, domain_row, settings):
         (domain_id,),
     ):
         open_counts[row["category"]] = row["n"]
+    top_issues, extra_issues_count = top_categories(open_counts, limit=3)
 
     card_sparkline_svg = None
     if latest_report["latest"]:
@@ -173,6 +218,7 @@ def build_domain_summary(conn, domain_row, settings):
 
     return {
         "name": name,
+        "pinned": bool(domain_row["pinned"]),
         "card_sparkline_svg": card_sparkline_svg,
         "dns_status": latest_dns["status"] if latest_dns else "unknown",
         "dns_match": bool(latest_dns["matches_expected"]) if latest_dns and latest_dns["matches_expected"] is not None else None,
@@ -186,6 +232,8 @@ def build_domain_summary(conn, domain_row, settings):
         "window_rate": window_rate,
         "last_ingested": last_ingested,
         "open_counts": open_counts,
+        "top_issues": top_issues,
+        "extra_issues_count": extra_issues_count,
         "rec_title": rec_row["title"] if rec_row else None,
         "expiry_date": latest_expiry["expires_at"] if latest_expiry else None,
         "expiry_days_left": expiry_days_left,
@@ -737,6 +785,16 @@ def download_inactive_subscribers(name: str):
     )
 
 
+@app.post("/domain/{name}/pin")
+def toggle_domain_pin(name: str, redirect_to: str = Form("/")):
+    conn = get_connection()
+    domain = conn.execute("SELECT id, pinned FROM domains WHERE name=?", (name,)).fetchone()
+    if domain:
+        conn.execute("UPDATE domains SET pinned=? WHERE id=?", (0 if domain["pinned"] else 1, domain["id"]))
+        conn.commit()
+    return RedirectResponse(redirect_to, status_code=303)
+
+
 @app.post("/domain/{name}/senders/{ip}/classify")
 def classify_sender(name: str, ip: str, classification: str = Form(...)):
     conn = get_connection()
@@ -917,6 +975,16 @@ def other_domains_content(request: Request):
     conn = get_connection()
     watchlist = build_watchlist(conn)
     return templates.TemplateResponse(request, "watchlist_content.html", {"watchlist": watchlist})
+
+
+@app.get("/access_log", response_class=HTMLResponse)
+def access_log_page(request: Request):
+    conn = get_connection()
+    settings = ensure_default_settings(conn)
+    entries = recent_access_log(conn, limit=300)
+    return templates.TemplateResponse(request, "access_log.html", {
+        "entries": entries, "retention_days": settings["access_log_retention_days"],
+    })
 
 
 @app.get("/settings", response_class=HTMLResponse)

@@ -138,8 +138,14 @@
   {% else %}
     {% set dot = 'ok' %}
   {% endif %}
-  <div class="card">
-    <h3><span class="status-dot {{ dot }}"></span><a href="/domain/{{ d.name }}">{{ d.name }}</a></h3>
+  <div class="card{{ ' pinned' if d.pinned else '' }}">
+    <h3>
+      <span><span class="status-dot {{ dot }}"></span><a href="/domain/{{ d.name }}">{{ d.name }}</a></span>
+      <form class="inline pin-form" action="/domain/{{ d.name }}/pin" method="post">
+        <input type="hidden" name="redirect_to" value="/">
+        <button type="submit" class="pin-btn{{ ' active' if d.pinned else '' }}" title="{{ 'Unpin' if d.pinned else 'Pin to top' }}" aria-label="{{ 'Unpin' if d.pinned else 'Pin to top' }}">&#128204;</button>
+      </form>
+    </h3>
 
     <div class="row">
       <span class="label" title="What's actually published in DNS right now">Live DNS</span>
@@ -196,9 +202,12 @@
     <div class="row">
       <span class="label">Needs attention</span>
       <span>
-        {% for cat, n in d.open_counts.items() %}
+        {% for cat, n in d.top_issues %}
           <span class="badge muted" title="{{ category_help(cat) }}">{{ category_label(cat) }}: {{ n }}</span>
         {% endfor %}
+        {% if d.extra_issues_count %}
+          <a href="/domain/{{ d.name }}" class="muted" style="font-size:0.78rem;" title="See the rest on this domain's own page">+{{ d.extra_issues_count }} more</a>
+        {% endif %}
       </span>
     </div>
     {% endif %}
