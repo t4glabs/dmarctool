@@ -170,7 +170,28 @@
   </div>
 </div>
 
-<div class="grid">
+{# Filters in the browser rather than round-tripping to the server: with a
+   couple of dozen domains the whole grid is already on the page, so a
+   keystroke-by-keystroke filter is instant and needs no route, no query
+   param and no re-render. Degrades to "no filter" with JS off, which is the
+   same as today. #}
+<div class="domain-toolbar">
+  <div class="domain-filter">
+    <span class="df-icon" aria-hidden="true">🔍</span>
+    <input type="search" id="domain-search" placeholder="Search domains by name..." autocomplete="off"
+           aria-label="Search domains by name" aria-describedby="domain-filter-count">
+    <span class="df-count muted" id="domain-filter-count" role="status" aria-live="polite"></span>
+  </div>
+  <form action="/domains/add" method="post" class="add-domain-form">
+    <input type="text" name="name" placeholder="example.org" required
+           aria-label="Domain to start tracking"
+           title="A domain only appears here on its own once one of its DMARC reports has been ingested -- so a domain with no DMARC record at all, exactly the kind worth checking, would never show up. Add it by hand instead."
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button type="submit" class="small">+ Track a domain</button>
+  </form>
+</div>
+
+<div class="grid" id="domain-grid">
   {% for d in domains %}
   {% set has_issues = d.open_counts and d.open_counts.values()|sum > 0 %}
   {% set dns_bad = d.dns_status in ('missing', 'multiple') or (d.dns_status == 'ok' and not d.dns_match) %}
@@ -183,7 +204,7 @@
   {% else %}
     {% set dot = 'ok' %}
   {% endif %}
-  <div class="card{{ ' pinned' if d.pinned else '' }}">
+  <div class="card{{ ' pinned' if d.pinned else '' }}" data-domain="{{ d.name }}">
     <h3>
       <span><span class="status-dot {{ dot }}"></span><a href="/domain/{{ d.name }}">{{ d.name }}</a></span>
       <form class="inline pin-form" action="/domain/{{ d.name }}/pin" method="post">
@@ -274,6 +295,38 @@
     {% endif %}
   </div>
   {% endfor %}
+  <p class="df-empty muted" id="domain-filter-empty" hidden>No domains match that search.</p>
 </div>
+
+<script>
+(function () {
+  var input = document.getElementById('domain-search');
+  var grid = document.getElementById('domain-grid');
+  if (!input || !grid) return;
+  var cards = Array.prototype.slice.call(grid.querySelectorAll('[data-domain]'));
+  var count = document.getElementById('domain-filter-count');
+  var empty = document.getElementById('domain-filter-empty');
+
+  function apply() {
+    var q = input.value.trim().toLowerCase();
+    var shown = 0;
+    cards.forEach(function (card) {
+      var match = !q || card.getAttribute('data-domain').indexOf(q) !== -1;
+      card.hidden = !match;
+      if (match) shown++;
+    });
+    // Only narrate the count while filtering -- "18 of 18" on an untouched
+    // page is noise, and this line is announced to screen readers.
+    count.textContent = q ? (shown + ' of ' + cards.length) : '';
+    empty.hidden = !(q && shown === 0);
+  }
+
+  input.addEventListener('input', apply);
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { input.value = ''; apply(); }
+  });
+  apply();
+})();
+</script>
 
 {% endblock %}

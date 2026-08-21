@@ -254,6 +254,10 @@ button.small {
   background: transparent; color: var(--fg); border: 1px solid var(--border);
 }
 button.small:hover { opacity: 1; border-color: var(--fg); }
+/* Ghost's rule is that primary actions are black, not brand-colored -- so a
+   destructive action reads as danger through an outline, not a red fill. */
+button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
+button.danger:hover { background: var(--bad-bg); opacity: 1; }
 .report-card-btn { font-size: 0.8rem; white-space: nowrap; }
 dialog.report-card-dialog {
   /* Wider + scrollable than a plain confirm dialog: the scorecard carries a
@@ -284,6 +288,43 @@ label { font-size: 0.82rem; color: var(--muted); display: block; margin-bottom: 
 .formrow { display: flex; gap: 0.8rem; flex-wrap: wrap; align-items: flex-end; }
 .muted { color: var(--muted); }
 .top-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 1rem; flex-wrap: wrap;}
+
+/* Search + "track a domain" share one row directly above the card grid: both
+   are about which domains you're looking at, rather than about ingesting
+   reports, and putting the add form up with Ingest/Refresh made that row wrap
+   onto two lines. */
+.domain-toolbar { display: flex; gap: 0.6rem; align-items: stretch; margin-bottom: 1rem; flex-wrap: wrap; }
+.domain-toolbar .domain-filter { flex: 1; min-width: 15rem; margin-bottom: 0; }
+.add-domain-form { display: flex; gap: 0.4rem; align-items: center; flex: none; }
+.add-domain-form input {
+  font: inherit; padding: 0.4rem 0.6rem; width: 11rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--card); color: var(--fg);
+}
+.add-domain-form button { white-space: nowrap; padding: 0.45rem 0.8rem; }
+@media (max-width: 620px) {
+  .add-domain-form { flex: 1; }
+  .add-domain-form input { flex: 1; width: auto; }
+}
+
+.domain-filter {
+  display: flex; align-items: center; gap: 0.5rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--card); padding: 0.45rem 0.7rem; margin-bottom: 1rem;
+}
+.domain-filter:focus-within { border-color: var(--grey-600); }
+.domain-filter .df-icon { font-size: 0.85rem; opacity: 0.6; flex: none; }
+.domain-filter input {
+  flex: 1; min-width: 0; border: none; background: transparent; color: var(--fg);
+  font: inherit; padding: 0; margin: 0;
+}
+.domain-filter input:focus { outline: none; }
+.domain-filter .df-count { font-size: 0.78rem; flex: none; font-variant-numeric: tabular-nums; }
+/* The "no matches" line lives inside the grid, so it has to span it rather
+   than sit in the first column as a stray one-card-wide item. */
+.df-empty { grid-column: 1 / -1; margin: 0.5rem 0; }
+/* A CSS `display` on a card would beat the hidden attribute's UA style. */
+[hidden] { display: none !important; }
 .sparkline { color: var(--accent); }
 .sparkline svg, .chart-wrap svg { max-width: 100%; height: auto; display: block; }
 .back { font-size: 0.83rem; margin-bottom: 0.6rem; }

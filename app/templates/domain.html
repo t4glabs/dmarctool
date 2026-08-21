@@ -1121,6 +1121,23 @@
       {% endif %}
     </div>
 
+    {% if not ingested_report_count %}
+    {# Only offered while there's no report data to lose -- the route refuses
+       outright otherwise. This exists so a mistyped "Add domain" isn't
+       permanent, not as a general delete feature. #}
+    <div class="section">
+      <h2>🗑️ Stop tracking this domain</h2>
+      <p class="muted" style="margin-top:0">
+        No DMARC reports have ever been ingested for {{ domain.name }}, so there's no report history to lose.
+        If you added it by mistake, you can remove it and its check history. This can't be undone, but you can
+        always add the domain again.
+      </p>
+      <form action="/domain/{{ domain.name }}/untrack" method="post">
+        <button type="submit" class="danger">Stop tracking {{ domain.name }}</button>
+      </form>
+    </div>
+    {% endif %}
+
   </div>
 
 </div>

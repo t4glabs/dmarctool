@@ -44,8 +44,8 @@ from app.charts import (
 )
 from app.compliance import run_compliance_checks
 from app.config import get_secret
-from app.db import get_connection, init_db
-from app.dns_check import discover_untracked_subdomains, run_dns_checks
+from app.db import get_connection, get_or_create_domain, init_db
+from app.dns_check import check_domain, discover_untracked_subdomains, run_dns_checks
 from app.domain_expiry import days_until, run_domain_expiry_checks
 from app.domain_report import (
     get_report_settings, preview_domain_report, report_period_for_domain, run_report_emails,
@@ -691,6 +691,10 @@ def domain_detail(request: Request, name: str, flash: str = None):
     return templates.TemplateResponse(request, "domain.html", {
         "flash": flash,
         "domain": domain,
+        # Gates the "stop tracking" control -- see untrack_domain(), which
+        # refuses on the same condition rather than trusting the template.
+        "ingested_report_count": conn.execute(
+            "SELECT COUNT(*) as n FROM reports WHERE domain_id=?", (domain_id,)).fetchone()["n"],
         "health_score": health_score,
         "health_sparkline_svg": health_sparkline_svg,
         "dns_status": latest_dns["status"] if latest_dns else "unknown",
@@ -906,6 +910,118 @@ def toggle_domain_pin(name: str, redirect_to: str = Form("/")):
         conn.execute("UPDATE domains SET pinned=? WHERE id=?", (0 if domain["pinned"] else 1, domain["id"]))
         conn.commit()
     return RedirectResponse(redirect_to, status_code=303)
+
+
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$")
+
+
+def normalize_domain_input(raw: str):
+    """Turn whatever someone typed or pasted into a bare, lowercase domain
+    name, or None if it can't be one. Accepts a URL, an email address, a
+    trailing dot, stray whitespace and mixed case, because those are what
+    people actually paste when asked for "a domain"."""
+    text = (raw or "").strip().lower()
+    if not text:
+        return None
+    if "://" in text:
+        text = text.split("://", 1)[1]
+    text = text.split("@")[-1]          # an email address -> its domain
+    text = text.split("/")[0].split("?")[0].split("#")[0]
+    text = text.split(":")[0]           # a host:port
+    text = text.strip().strip(".")
+    # "www." is a website prefix, never the mail domain -- someone pasting
+    # their site URL means the domain itself. Left in, it would sit on the
+    # dashboard raising "no DMARC record at all" forever, since _dmarc.www.x
+    # generally doesn't exist and isn't supposed to.
+    if text.startswith("www.") and text.count(".") >= 2:
+        text = text[4:]
+    return text if _DOMAIN_RE.match(text) else None
+
+
+@app.post("/domains/add")
+def add_domain(name: str = Form(...)):
+    """Track a domain by hand. Until now a domain could only enter DMARCTool
+    by having one of its own DMARC aggregate reports ingested -- which means
+    the domains most in need of attention, the ones with no DMARC record at
+    all, could never appear here: no record, no reports, no card. (The
+    watchlist page only catches the subset that Mailgun or Postmaster
+    already knows about.)
+
+    Runs that domain's DNS and expiry checks immediately rather than waiting
+    for the 6-hourly job, so a newly added domain lands on a card with real
+    findings on it -- usually the very "no DMARC record at all" verdict that
+    prompted adding it."""
+    conn = get_connection()
+    cleaned = normalize_domain_input(name)
+    if not cleaned:
+        return RedirectResponse(
+            "/?flash=" + urllib.parse.quote(f"\"{name.strip()[:60]}\" doesn't look like a domain name. "
+                                             f"Try something like example.org."),
+            status_code=303,
+        )
+
+    existing = conn.execute("SELECT id FROM domains WHERE name=?", (cleaned,)).fetchone()
+    if existing:
+        return RedirectResponse(
+            f"/domain/{cleaned}?flash=" + urllib.parse.quote(f"{cleaned} is already being tracked."),
+            status_code=303,
+        )
+
+    domain_id = get_or_create_domain(conn, cleaned)
+    check_domain(conn, domain_id, cleaned)
+    conn.commit()
+    # No new code path needed: this is gated per-domain on its own staleness,
+    # and the domain just created is the only one that can be stale.
+    run_domain_expiry_checks(conn, verbose=False)
+    return RedirectResponse(
+        f"/domain/{cleaned}?flash=" + urllib.parse.quote(
+            f"Now tracking {cleaned}. Its DNS and expiry have been checked already; "
+            f"report data will appear here if and when reports for it get ingested."),
+        status_code=303,
+    )
+
+
+@app.post("/domain/{name}/untrack")
+def untrack_domain(name: str):
+    """Undo for add_domain -- deliberately refused once a domain has any
+    ingested reports, so this can only ever remove a domain that was added
+    by hand and never used (the mistyped-name case). Without it a typo would
+    sit on the dashboard permanently, counting toward the portfolio KPIs and
+    the "no DMARC record at all" alert.
+
+    Child rows are found by looking for a domain_id column on every table
+    rather than from a hardcoded list, since this schema has ~30 of them and
+    a list would silently go stale the next time one is added -- leaving a
+    foreign-key error (or worse, an orphan) for someone else to find."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        return RedirectResponse("/", status_code=303)
+
+    report_count = conn.execute(
+        "SELECT COUNT(*) as n FROM reports WHERE domain_id=?", (domain["id"],)
+    ).fetchone()["n"]
+    if report_count:
+        return RedirectResponse(
+            f"/domain/{name}?flash=" + urllib.parse.quote(
+                f"{name} has {report_count} ingested report(s), so it wasn't removed -- untracking is only for "
+                f"a domain added by mistake that has no report data. Nothing was deleted."),
+            status_code=303,
+        )
+
+    tables = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )]
+    for table in tables:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if "domain_id" in cols:
+            conn.execute(f"DELETE FROM {table} WHERE domain_id=?", (domain["id"],))
+    conn.execute("DELETE FROM domains WHERE id=?", (domain["id"],))
+    conn.commit()
+    return RedirectResponse(
+        "/?flash=" + urllib.parse.quote(f"Stopped tracking {name} and removed its check history."),
+        status_code=303,
+    )
 
 
 @app.post("/domain/{name}/senders/{ip}/classify")
