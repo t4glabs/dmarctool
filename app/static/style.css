@@ -351,3 +351,10 @@ code { background: var(--card-raised); padding: 0.1rem 0.35rem; border-radius: 4
 .chart-row > .chart-flex { flex: 1; min-width: 260px; }
 .donut-center-label { font-size: 1.05rem; font-weight: 700; fill: currentColor; }
 .donut-center-sublabel { font-size: 0.62rem; fill: var(--muted); }
+
+/* --- bounce/complaint rate trend blocks (one metric per block, never two
+   different-scale rates sharing an axis) --- */
+.rate-trend-block { margin-bottom: 1.2rem; }
+.rate-trend-head { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
+.rate-trend-title { font-weight: 600; font-size: 0.86rem; }
+.rate-trend-value { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }

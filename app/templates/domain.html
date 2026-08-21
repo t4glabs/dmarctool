@@ -6,6 +6,29 @@
 {% macro fix_note(text) %}{% if text %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="How to fix this">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover>💡 <strong>How to fix:</strong> {{ text | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
 {% macro guess_note(guess) %}{% if guess %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Best guess at what this is">?</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong>{{ guess.icon }} {{ guess.headline }}</strong>{{ "\n\n" }}{{ guess.summary | urlize(40, target="_blank", rel="noopener") }}{{ "\n\n→ " }}{{ guess.action | urlize(40, target="_blank", rel="noopener") }}</div></span>{% endif %}{% endmacro %}
 {% macro download_menu(links) %}{% if links %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Download by reason">⬇</button><div class="fix-popover fix download-menu" id="fix-{{ fix_note_ns.id }}" popover><strong style="display:block; margin-bottom:0.4rem;">Download by reason</strong>{% for l in links %}<a href="{{ l.url }}" style="display:block; padding:0.2rem 0;">{{ l.label }}</a>{% endfor %}</div></span>{% endif %}{% endmacro %}
+{% macro rate_trend_block(title, summary, chart_svg) %}
+<div class="rate-trend-block">
+  <div class="rate-trend-head">
+    <span class="rate-trend-title">{{ title }}</span>
+    {% if summary.avg_recent is not none %}
+      <span class="rate-trend-value">{{ "%.3f"|format(100 * summary.avg_recent) }}%</span>
+      {% if summary.delta is not none and summary.delta > 0.0005 %}
+        <span class="badge bad" title="7-day average vs. the 7 days before that">&#9650; {{ "%.3f"|format(100 * summary.delta) }}pp worse</span>
+      {% elif summary.delta is not none and summary.delta < -0.0005 %}
+        <span class="badge ok" title="7-day average vs. the 7 days before that">&#9660; {{ "%.3f"|format(100 * -summary.delta) }}pp better</span>
+      {% elif summary.delta is not none %}
+        <span class="badge muted">flat vs. last week</span>
+      {% endif %}
+      {% if summary.stability %}
+        <span class="badge {{ 'muted' if summary.stability == 'steady' else 'warn' }}" title="Steady = day-to-day swings are small relative to the average; volatile = they're not, worth reading the trend over the raw daily number">{{ summary.stability }}</span>
+      {% endif %}
+    {% else %}
+      <span class="muted">no data yet</span>
+    {% endif %}
+  </div>
+  <div class="sparkline">{{ chart_svg | safe }}</div>
+</div>
+{% endmacro %}
 
 <div class="back"><a href="/">&larr; all domains</a></div>
 <h1>{{ domain.name }}</h1>
@@ -583,7 +606,13 @@
       </div>
 
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
-      <div class="sparkline">{{ mailgun_rate_sparkline | safe }}</div>
+      <p class="muted" style="font-size:0.78rem; margin:0 0 0.6rem 0">
+        Solid line = 7-day volume-weighted average (the real trend); faint dots = each day's raw rate, which can
+        swing wildly on a low-volume day and isn't the number to react to on its own. Dashed line(s) mark your
+        configured warning threshold(s) (Settings).
+      </p>
+      {{ rate_trend_block("Bounce rate", mailgun_bounce_summary, mailgun_bounce_chart_svg) }}
+      {{ rate_trend_block("Complaint rate", mailgun_complaint_summary, mailgun_complaint_chart_svg) }}
 
       {% if mailgun_identity_stats %}
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">By sender identity ({{ mailgun_identity_stats[0].window_days }}d)</h3>
@@ -688,7 +717,13 @@
       </div>
 
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
-      <div class="sparkline">{{ ses_rate_sparkline | safe }}</div>
+      <p class="muted" style="font-size:0.78rem; margin:0 0 0.6rem 0">
+        Solid line = 7-day volume-weighted average (the real trend); faint dots = each day's raw rate, which can
+        swing wildly on a low-volume day and isn't the number to react to on its own. Dashed lines mark your
+        configured watch/warning thresholds (Settings).
+      </p>
+      {{ rate_trend_block("Bounce rate", ses_bounce_summary, ses_bounce_chart_svg) }}
+      {{ rate_trend_block("Complaint rate", ses_complaint_summary, ses_complaint_chart_svg) }}
 
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Daily delivered volume</h3>
       <p class="muted" style="margin-top:0">

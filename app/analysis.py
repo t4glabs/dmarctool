@@ -1254,6 +1254,47 @@ def postmaster_daily_series(conn, domain_id: int, days: int = 60):
     return [(r["day"], r["spam_rate"]) for r in rows]
 
 
+def rate_trend_summary(series, window_days: int = 7) -> dict:
+    """Volume-weighted current-vs-prior-window comparison and a plain
+    "steady"/"volatile" read for a (date, rate_or_none, volume_or_none)
+    series -- the numbers a chart alone still leaves you doing mental math
+    for: is this actually getting better or worse, and is the latest daily
+    number even meaningful or just noise from a small day's volume."""
+    points = [(d, r, v) for d, r, v in series if r is not None]
+    if not points:
+        return {"latest": None, "latest_date": None, "avg_recent": None, "avg_prior": None,
+                "delta": None, "stability": None, "recent_volume": 0}
+
+    def weighted_avg(pts):
+        den = sum((v or 0) for _, _, v in pts)
+        return (sum((r or 0) * (v or 0) for _, r, v in pts) / den) if den else None
+
+    recent = points[-window_days:]
+    prior = points[-2 * window_days:-window_days]
+    avg_recent = weighted_avg(recent)
+    avg_prior = weighted_avg(prior) if prior else None
+    latest_date, latest_rate, _ = points[-1]
+    delta = (avg_recent - avg_prior) if (avg_recent is not None and avg_prior is not None) else None
+    recent_volume = sum((v or 0) for _, _, v in recent)
+
+    stability = None
+    if avg_recent is not None and len(recent) >= 3:
+        rates = [r for _, r, _ in recent]
+        mean = sum(rates) / len(rates)
+        stdev = (sum((r - mean) ** 2 for r in rates) / len(rates)) ** 0.5
+        # "Volatile" if day-to-day swings are large relative to the average
+        # itself, OR in absolute terms for a near-zero average -- a rate
+        # that's basically 0 most days with an occasional 1% spike is still
+        # volatile even though "60% of a tiny number" reads as small.
+        stability = "volatile" if (avg_recent > 0 and stdev > avg_recent * 0.6) or stdev > 0.01 else "steady"
+
+    return {
+        "latest": latest_rate, "latest_date": latest_date,
+        "avg_recent": avg_recent, "avg_prior": avg_prior,
+        "delta": delta, "stability": stability, "recent_volume": recent_volume,
+    }
+
+
 def health_score_series(conn, domain_id: int, days: int = 90):
     """List of (date_str, health_score_or_None) from domain_health_snapshots
     -- the one-number-combining-everything trend (pass rate + Gmail spam

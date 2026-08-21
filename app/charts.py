@@ -1,6 +1,7 @@
 """Server-rendered SVG sparkline for the pass-rate trend -- no JS charting
 library, no CDN, no build step; just a string of SVG markup dropped into the template."""
 
+import datetime
 import math
 
 
@@ -123,17 +124,32 @@ def spam_rate_sparkline(series, width: int = 640, height: int = 140) -> str:
 </svg>'''
 
 
-def dual_rate_sparkline(series, width: int = 640, height: int = 140,
-                         label_a: str = "bounce", label_b: str = "complaint") -> str:
-    """series: list of (date_str, delivered, rate_a_or_none, rate_b_or_none) as
-    from analysis.ses_daily_series. Two lines on a shared, auto-scaled axis."""
-    pad_l, pad_r, pad_t, pad_b = 42, 8, 10, 34
+def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 170, rolling_days: int = 7) -> str:
+    """series: list of (date_str, rate_or_none, volume_or_none) -- ONE metric
+    (just bounce rate, or just complaint rate), never sharing an axis with
+    another metric at a wildly different scale. A 5% bounce-rate warning
+    threshold and a 0.1% complaint-rate warning threshold are 50x apart --
+    squeezed onto one shared axis (the old dual_rate_sparkline), the smaller
+    one flatlines into invisibility. This is the direct replacement, called
+    once per metric.
+
+    Draws faint raw daily dots (mostly noise on a low-volume day -- a 100%
+    bounce rate off of 1 message means nothing) behind a bold
+    `rolling_days`-day *volume-weighted* rolling average -- sum of events
+    over sum of volume across the window, not a plain average of daily
+    rates, so a single big campaign day isn't drowned out by a week of tiny
+    ones or vice versa. `thresholds`: list of (value, label, color) in
+    ascending order -- drawn as dashed reference lines, and used to color
+    the latest point/line by the most severe one it's crossed. The latest
+    rolling value is called out directly on the chart (not just on hover),
+    and the x-axis gets real, spaced-out date labels instead of only the
+    two ends."""
+    pad_l, pad_r, pad_t, pad_b = 34, 50, 14, 22
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
 
-    a_points = [(i, r[2]) for i, r in enumerate(series) if r[2] is not None]
-    b_points = [(i, r[3]) for i, r in enumerate(series) if r[3] is not None]
-    if len(series) < 2 or (not a_points and not b_points):
+    points_with_data = [(i, r, v) for i, (_, r, v) in enumerate(series) if r is not None]
+    if len(series) < 2 or not points_with_data:
         return '<svg width="{}" height="{}"><text x="10" y="20" fill="currentColor" opacity="0.6">not enough history yet</text></svg>'.format(width, height)
 
     n = len(series)
@@ -141,43 +157,96 @@ def dual_rate_sparkline(series, width: int = 640, height: int = 140,
     def x_for(i):
         return pad_l + (i / (n - 1)) * plot_w if n > 1 else pad_l
 
-    observed_max = max([r for _, r in a_points] + [r for _, r in b_points] + [0.0])
-    y_max = max(observed_max * 1.3, 0.01)
+    rolling = []
+    for i, _rate, _vol in points_with_data:
+        window = [(r, v) for idx, r, v in points_with_data if i - rolling_days + 1 <= idx <= i]
+        den = sum((v or 0) for _, v in window)
+        rolling.append((i, (sum((r or 0) * (v or 0) for r, v in window) / den) if den else _rate))
+
+    # Scale to the smoothed trend's RECENT window + thresholds, not its
+    # full history -- an old, isolated low-volume spike can still show up
+    # close to full height in the rolling average itself (there's nothing
+    # nearby to dilute it against), which would otherwise stretch the whole
+    # y-axis and squash the actual current trend into an unreadable sliver
+    # near the bottom. Anything taller than this (old spike or a raw dot)
+    # still renders -- clamped to the top edge by y_for below -- it just
+    # doesn't dictate the scale the recent, relevant trend has to be read
+    # against.
+    recent_window = rolling[-(rolling_days * 3):]
+    rolling_max = max(r for _, r in recent_window)
+    threshold_max = max((t[0] for t in thresholds), default=0.0)
+    y_max = max(rolling_max, threshold_max) * 1.25 or 0.01
 
     def y_for(rate):
         r = max(0.0, min(y_max, rate))
         return pad_t + (1 - r / y_max) * plot_h
 
-    def line_and_dots(points, style_color):
-        if not points:
-            return "", ""
-        pts = " ".join(f"{x_for(i):.1f},{y_for(r):.1f}" for i, r in points)
-        line = f'<polyline points="{pts}" fill="none" style="stroke:{style_color}" stroke-width="1.75" opacity="0.9"/>'
-        dots = "".join(
-            f'<circle cx="{x_for(i):.1f}" cy="{y_for(r):.1f}" r="2.8" style="fill:{style_color}" opacity="0.9" '
-            f'data-tooltip="{series[i][0]}: {r:.2%}"/>'
-            for i, r in points
-        )
-        return line, dots
+    gridlines = [
+        f'<text x="1" y="{pad_t + 4}" font-size="10" fill="currentColor" opacity="0.5">{y_max:.2%}</text>',
+        f'<text x="1" y="{pad_t + plot_h:.1f}" font-size="10" fill="currentColor" opacity="0.5">0%</text>',
+    ]
+    for value, label, color in thresholds:
+        if value <= y_max:
+            gy = y_for(value)
+            gridlines.append(
+                f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{width - pad_r}" y2="{gy:.1f}" '
+                f'stroke="{color}" stroke-opacity="0.55" stroke-width="1" stroke-dasharray="4 3"/>'
+            )
+            gridlines.append(
+                f'<text x="{width - pad_r + 4:.1f}" y="{gy + 3:.1f}" font-size="9" fill="{color}" opacity="0.9">{label}</text>'
+            )
 
-    gridline = (
-        f'<line x1="{pad_l}" y1="{y_for(0):.1f}" x2="{width - pad_r}" y2="{y_for(0):.1f}" '
-        f'stroke="currentColor" stroke-opacity="0.15" stroke-width="1"/>'
+    raw_dots = "".join(
+        f'<circle cx="{x_for(i):.1f}" cy="{y_for(r):.1f}" r="2" fill="currentColor" opacity="0.25" '
+        f'data-tooltip="{series[i][0]}: {r:.3%} ({v or 0} msgs)"/>'
+        for i, r, v in points_with_data
     )
 
-    a_line, a_dots = line_and_dots(a_points, "var(--warn)")
-    b_line, b_dots = line_and_dots(b_points, "var(--bad)")
-    first_date, last_date = series[0][0], series[-1][0]
+    latest_color = "var(--ok)"
+    for value, _label, color in thresholds:
+        if rolling[-1][1] >= value:
+            latest_color = color
+
+    roll_pts = " ".join(f"{x_for(i):.1f},{y_for(r):.1f}" for i, r in rolling)
+    roll_line = f'<polyline points="{roll_pts}" fill="none" stroke="{latest_color}" stroke-width="2.25" opacity="0.95"/>'
+
+    latest_i, latest_roll = rolling[-1]
+    latest_x, latest_y = x_for(latest_i), y_for(latest_roll)
+    anchor = "end" if latest_x > width * 0.7 else "start"
+    label_x = latest_x - 8 if anchor == "end" else latest_x + 8
+    latest_dot = (f'<circle cx="{latest_x:.1f}" cy="{latest_y:.1f}" r="5" fill="{latest_color}" '
+                  f'data-tooltip="{rolling_days}-day average: {latest_roll:.3%}"/>')
+    latest_label = (f'<text x="{label_x:.1f}" y="{max(latest_y - 8, 12):.1f}" font-size="12" font-weight="700" '
+                     f'fill="{latest_color}" text-anchor="{anchor}">{latest_roll:.2%}</text>')
+
+    tick_every = max(1, n // 8)
+    x_ticks = []
+    for i in range(0, n, tick_every):
+        try:
+            label = datetime.date.fromisoformat(series[i][0]).strftime("%b %-d")
+        except ValueError:
+            label = series[i][0]
+        x_ticks.append(
+            f'<text x="{x_for(i):.1f}" y="{height - 4}" font-size="9" fill="currentColor" '
+            f'opacity="0.55" text-anchor="middle">{label}</text>'
+        )
+    if (n - 1) % tick_every != 0:
+        try:
+            last_label = datetime.date.fromisoformat(series[-1][0]).strftime("%b %-d")
+        except ValueError:
+            last_label = series[-1][0]
+        x_ticks.append(
+            f'<text x="{x_for(n - 1):.1f}" y="{height - 4}" font-size="9" fill="currentColor" '
+            f'opacity="0.55" text-anchor="end">{last_label}</text>'
+        )
 
     return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
-  {gridline}
-  {a_line}{b_line}{a_dots}{b_dots}
-  <text x="{pad_l}" y="{height - 20}" font-size="10" fill="currentColor" opacity="0.6">{first_date}</text>
-  <text x="{width - pad_r}" y="{height - 20}" font-size="10" fill="currentColor" opacity="0.6" text-anchor="end">{last_date}</text>
-  <circle cx="{pad_l + 4}" cy="{height - 8}" r="3" style="fill:var(--warn)"/>
-  <text x="{pad_l + 12}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.8">{label_a} rate</text>
-  <circle cx="{pad_l + 90}" cy="{height - 8}" r="3" style="fill:var(--bad)"/>
-  <text x="{pad_l + 98}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.8">{label_b} rate</text>
+  {''.join(gridlines)}
+  {raw_dots}
+  {roll_line}
+  {latest_dot}
+  {latest_label}
+  {''.join(x_ticks)}
 </svg>'''
 
 

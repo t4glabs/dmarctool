@@ -30,15 +30,15 @@ from app.analysis import (
     all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
     domain_window_stats, day_to_date, epoch_day, ensure_default_settings, guess_sender_identity,
     health_score_series, likely_causal_senders, mailgun_daily_series, portfolio_daily_pass_series,
-    postmaster_daily_series, provider_breakdown, recent_campaigns, run_analysis, sending_cadence,
-    ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
+    postmaster_daily_series, provider_breakdown, rate_trend_summary, recent_campaigns, run_analysis,
+    sending_cadence, ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
 )
 from app.access_log import prune_old_access_log, record_access, recent_access_log
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
 from app.charts import (
-    disposition_donut_chart, dual_rate_sparkline, health_score_sparkline, pass_rate_sparkline,
+    disposition_donut_chart, health_score_sparkline, metric_trend_chart, pass_rate_sparkline,
     provider_stacked_bar_chart, spam_rate_sparkline, vibe_distribution_donut, volume_bar_chart,
 )
 from app.compliance import run_compliance_checks
@@ -510,7 +510,15 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ):
         mailgun_suppression_counts.setdefault(row["mailgun_domain"], {})[row["kind"]] = row["n"]
-    mailgun_rate_sparkline = dual_rate_sparkline(mailgun_daily_series(conn, domain_id, days=60))
+    mailgun_series = mailgun_daily_series(conn, domain_id, days=60)
+    mailgun_bounce_series = [(d, r_a, v) for d, v, r_a, r_b in mailgun_series]
+    mailgun_complaint_series = [(d, r_b, v) for d, v, r_a, r_b in mailgun_series]
+    mailgun_bounce_thresholds = [(float(settings["mailgun_bounce_rate_warn"]), "warn", "var(--bad)")]
+    mailgun_complaint_thresholds = [(float(settings["mailgun_complaint_rate_warn"]), "warn", "var(--bad)")]
+    mailgun_bounce_chart_svg = metric_trend_chart(mailgun_bounce_series, thresholds=mailgun_bounce_thresholds)
+    mailgun_complaint_chart_svg = metric_trend_chart(mailgun_complaint_series, thresholds=mailgun_complaint_thresholds)
+    mailgun_bounce_summary = rate_trend_summary(mailgun_bounce_series)
+    mailgun_complaint_summary = rate_trend_summary(mailgun_complaint_series)
     mailgun_identity_stats = conn.execute(
         """SELECT * FROM mailgun_identity_stats WHERE domain_id=?
            ORDER BY mailgun_domain, failed DESC, delivered DESC""",
@@ -589,7 +597,20 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ):
         ses_bounce_type_counts.setdefault(row["configuration_set"], {})[row["bounce_type"] or "Undetermined"] = row["n"]
     ses_series = ses_daily_series(conn, domain_id, days=60)
-    ses_rate_sparkline = dual_rate_sparkline(ses_series)
+    ses_bounce_series = [(d, r_a, v) for d, v, r_a, r_b in ses_series]
+    ses_complaint_series = [(d, r_b, v) for d, v, r_a, r_b in ses_series]
+    ses_bounce_thresholds = [
+        (float(settings["ses_bounce_rate_watch"]), "watch", "var(--warn)"),
+        (float(settings["ses_bounce_rate_warn"]), "warn", "var(--bad)"),
+    ]
+    ses_complaint_thresholds = [
+        (float(settings["ses_complaint_rate_watch"]), "watch", "var(--warn)"),
+        (float(settings["ses_complaint_rate_warn"]), "warn", "var(--bad)"),
+    ]
+    ses_bounce_chart_svg = metric_trend_chart(ses_bounce_series, thresholds=ses_bounce_thresholds)
+    ses_complaint_chart_svg = metric_trend_chart(ses_complaint_series, thresholds=ses_complaint_thresholds)
+    ses_bounce_summary = rate_trend_summary(ses_bounce_series)
+    ses_complaint_summary = rate_trend_summary(ses_complaint_series)
     ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10)
     engagement = subscriber_engagement_summary(conn, domain_id)
@@ -657,7 +678,10 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "dkim_checks": dkim_checks,
         "mailgun_stats": mailgun_stats,
         "mailgun_suppression_counts": mailgun_suppression_counts,
-        "mailgun_rate_sparkline": mailgun_rate_sparkline,
+        "mailgun_bounce_chart_svg": mailgun_bounce_chart_svg,
+        "mailgun_complaint_chart_svg": mailgun_complaint_chart_svg,
+        "mailgun_bounce_summary": mailgun_bounce_summary,
+        "mailgun_complaint_summary": mailgun_complaint_summary,
         "mailgun_identity_stats": mailgun_identity_stats,
         "mailgun_identity_downloads": mailgun_identity_downloads,
         "postmaster_stats": postmaster_stats,
@@ -669,7 +693,10 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_window_days": ses_window_days,
         "ses_suppression_counts": ses_suppression_counts,
         "ses_bounce_type_counts": ses_bounce_type_counts,
-        "ses_rate_sparkline": ses_rate_sparkline,
+        "ses_bounce_chart_svg": ses_bounce_chart_svg,
+        "ses_complaint_chart_svg": ses_complaint_chart_svg,
+        "ses_bounce_summary": ses_bounce_summary,
+        "ses_complaint_summary": ses_complaint_summary,
         "ses_volume_chart": ses_volume_chart,
         "newsletter_campaigns": newsletter_campaigns,
         "engagement": engagement,
