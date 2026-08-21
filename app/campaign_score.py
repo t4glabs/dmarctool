@@ -235,14 +235,30 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
     # and if neither is tracked there's nothing to grade at all.
     open_tracked = c.get("open_tracking", True)
     click_tracked = c.get("click_tracking", True)
+    # If tracking is on for the sender NOW but this send recorded nothing, the
+    # send almost certainly predates it -- Mailgun/ESP tracking only applies to
+    # newly sent mail, never retroactively. Worth saying so explicitly, since
+    # otherwise "no data" right after enabling tracking looks like it didn't work.
+    now_on = []
+    if not open_tracked and c.get("tracking_open_setting"):
+        now_on.append("open")
+    if not click_tracked and c.get("tracking_click_setting"):
+        now_on.append("click")
+    since_note = ""
+    if now_on:
+        since_note = (f" {' and '.join(now_on).capitalize()} tracking is switched on for this sender now, so "
+                       f"newsletters sent from here on will have it -- tracking never applies retroactively to "
+                       f"mail already sent.")
+
     if not open_tracked and not click_tracked:
         return {
             "key": "engagement", "label": "Real engagement", "weight": weight,
             "earned": None, "status": "no_data",
-            "headline": "Open and click tracking are both off for this sender",
-            "detail": ("Without them there's no way to tell a newsletter nobody read from one the platform simply "
-                        "didn't measure, so this isn't scored. Turning on tracking in your sending platform would "
-                        "make the most important half of this scorecard visible."),
+            "headline": "No open or click data recorded for this send",
+            "detail": ("Without it there's no way to tell a newsletter nobody read from one the platform simply "
+                        "didn't measure, so this isn't scored rather than scored as zero." + (
+                            since_note or " Turning on open and click tracking in your sending platform would make "
+                                          "the most important half of this scorecard visible.")),
             "fix": None,
         }
 
@@ -260,8 +276,8 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
     status = "bad" if fraction < 0.3 else ("warn" if fraction < 0.6 else "ok")
 
     parts = []
-    parts.append(f"{click_rate:.1%} of people clicked" if click_tracked else "click tracking off")
-    parts.append(f"{open_rate:.1%} opened" if open_tracked else "open tracking off")
+    parts.append(f"{click_rate:.1%} of people clicked" if click_tracked else "no click data")
+    parts.append(f"{open_rate:.1%} opened" if open_tracked else "no open data")
     benchmark_bits = []
     if click_tracked:
         benchmark_bits.append(f"{click_benchmark:.1%} clicks")
@@ -273,7 +289,7 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
     if automated:
         automated_note = (f" Of {c['unique_openers']} opener(s), {automated} looked automated (image proxy or "
                            f"security scanner) rather than a person -- so the real figure is likely a little lower.")
-    detail = ("Counted as unique people, not raw events -- one person clicking five links is one engaged reader, "
+    detail = (since_note.strip() + " " if since_note else "") + ("Counted as unique people, not raw events -- one person clicking five links is one engaged reader, "
               "not five. Engagement is what decides inbox vs. Promotions vs. Spam once authentication passes. "
               "Clicks count for more here than opens, because Apple Mail privacy features auto-load tracking "
               "pixels and inflate open counts on every list." + automated_note)

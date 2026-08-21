@@ -68,6 +68,27 @@ BROADCAST_RATIO = 5
 MAX_PAGES = 20  # safety bound on Events API pagination per event type
 
 
+def fetch_tracking_settings(mailgun_domain, api_key):
+    """(open_enabled, click_enabled) straight from Mailgun's own domain
+    settings, or (None, None) if it couldn't be read.
+
+    This is authoritative, unlike inferring from whether events showed up --
+    but it describes the domain RIGHT NOW, and Mailgun tracking only applies
+    to newly sent mail. A campaign sent before tracking was switched on has
+    no open/click events and never will, so this setting must not be used to
+    decide whether a past send is scorable (that would grade a 0% click rate
+    against a send that was simply never instrumented). It's used only to
+    explain the gap and to tell the reader that future sends will be
+    measurable -- per-campaign event presence still decides scoring.
+    """
+    data, err = _get(f"{API_BASE}/domains/{mailgun_domain}/tracking", api_key)
+    if err or not data:
+        return None, None
+    tracking = data.get("tracking") or {}
+    return ((tracking.get("open") or {}).get("active"),
+            (tracking.get("click") or {}).get("active"))
+
+
 def _fetch_event_pages(mailgun_domain, api_key, event, begin, limit=300):
     """Yields raw event items for one event type, following Mailgun's paging."""
     url = (f"{API_BASE}/{mailgun_domain}/events?event={event}"
@@ -86,7 +107,8 @@ def _fetch_event_pages(mailgun_domain, api_key, event, begin, limit=300):
         pages += 1
 
 
-def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients):
+def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
+                     tracking_open=None, tracking_click=None):
     """Returns (campaigns, error). Each campaign is a dict of raw counts --
     see the module docstring for how sends are grouped and how newsletters
     are told apart from Ghost's transactional mail."""
@@ -212,6 +234,10 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients):
             # failing grade out of missing instrumentation.
             "open_tracking": domain_has_opens,
             "click_tracking": domain_has_clicks,
+            # Mailgun's current domain setting -- explanatory only, never used
+            # to decide scorability. See fetch_tracking_settings().
+            "tracking_open_setting": tracking_open,
+            "tracking_click_setting": tracking_click,
         })
     campaigns.sort(key=lambda c: (c["send_day"] or "", c["delivered"]), reverse=True)
     return campaigns, None
@@ -237,7 +263,9 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
 
     total = 0
     for mailgun_domain, (domain_id, domain_name) in matches.items():
-        campaigns, cerr = fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients)
+        t_open, t_click = fetch_tracking_settings(mailgun_domain, api_key)
+        campaigns, cerr = fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
+                                           tracking_open=t_open, tracking_click=t_click)
         if cerr:
             if verbose:
                 print(f"[mailgun-campaigns] {mailgun_domain}: {cerr}")
@@ -247,19 +275,25 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
                 """INSERT INTO mailgun_campaigns
                    (domain_id, mailgun_domain, from_address, from_display_name, subject, message_id, tags,
                     send_day, delivered, bounced, complained, unique_openers, unique_clickers,
-                    open_events, click_events, open_tracking, click_tracking)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    open_events, click_events, open_tracking, click_tracking,
+                    tracking_open_setting, tracking_click_setting)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(mailgun_domain, from_address, subject, send_day) DO UPDATE SET
                      from_display_name=excluded.from_display_name, message_id=excluded.message_id,
                      tags=excluded.tags, delivered=excluded.delivered, bounced=excluded.bounced,
                      complained=excluded.complained, unique_openers=excluded.unique_openers,
                      unique_clickers=excluded.unique_clickers, open_events=excluded.open_events,
                      click_events=excluded.click_events, open_tracking=excluded.open_tracking,
-                     click_tracking=excluded.click_tracking, updated_at=datetime('now')""",
+                     click_tracking=excluded.click_tracking,
+                     tracking_open_setting=excluded.tracking_open_setting,
+                     tracking_click_setting=excluded.tracking_click_setting,
+                     updated_at=datetime('now')""",
                 (domain_id, mailgun_domain, c["from_address"], c["from_display_name"], c["subject"],
                  c["message_id"], c["tags"], c["send_day"], c["delivered"], c["bounced"], c["complained"],
                  c["unique_openers"], c["unique_clickers"], c["open_events"], c["click_events"],
-                 int(c["open_tracking"]), int(c["click_tracking"])),
+                 int(c["open_tracking"]), int(c["click_tracking"]),
+                 None if c["tracking_open_setting"] is None else int(c["tracking_open_setting"]),
+                 None if c["tracking_click_setting"] is None else int(c["tracking_click_setting"])),
             )
             total += 1
         if verbose and campaigns:

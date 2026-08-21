@@ -1323,6 +1323,8 @@ def recent_mailgun_campaigns(conn, domain_id: int, limit: int = 10, settings: di
             "click_quality": None,
             "open_tracking": bool(r["open_tracking"]),
             "click_tracking": bool(r["click_tracking"]),
+            "tracking_open_setting": r["tracking_open_setting"],
+            "tracking_click_setting": r["tracking_click_setting"],
             "tags": r["tags"],
             "source": "mailgun",
         })

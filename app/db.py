@@ -55,6 +55,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "mailgun_campaigns", {
         "open_tracking": "INTEGER NOT NULL DEFAULT 1",
         "click_tracking": "INTEGER NOT NULL DEFAULT 1",
+        "tracking_open_setting": "INTEGER",
+        "tracking_click_setting": "INTEGER",
     })
     _ensure_columns(conn, "domains", {
         "pinned": "INTEGER NOT NULL DEFAULT 0",

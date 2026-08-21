@@ -643,6 +643,8 @@ CREATE TABLE IF NOT EXISTS mailgun_campaigns (
     click_events      INTEGER NOT NULL DEFAULT 0,
     open_tracking     INTEGER NOT NULL DEFAULT 1,  -- does this Mailgun domain have open tracking on at all?
     click_tracking    INTEGER NOT NULL DEFAULT 1,  -- ditto clicks; 0 means "can't tell", not "nobody clicked"
+    tracking_open_setting  INTEGER,  -- Mailgun's CURRENT domain setting; explanatory only (tracking isn't retroactive)
+    tracking_click_setting INTEGER,
     updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(mailgun_domain, from_address, subject, send_day)
 );
