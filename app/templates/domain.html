@@ -751,19 +751,23 @@
           <td>{{ c.from_display_name or "-" }}</td>
           <td>{{ c.subject }}</td>
           <td>{{ c.delivered }}</td>
-          <td>{{ c.opened }}{% if c.open_rate is not none %} ({{ "%.0f"|format(100 * c.open_rate) }}%){% endif %}
+          <td title="{{ c.unique_openers }} unique opener(s) out of {{ c.delivered }} delivered. The raw event count ({{ c.opened }}) counts the same person multiple times, so the percentage here is deliberately based on people, which is how open rate is defined everywhere else.">
+            {{ c.unique_openers }}{% if c.unique_open_rate is not none %} ({{ "%.1f"|format(100 * c.unique_open_rate) }}%){% endif %}
             {% if c.open_quality and c.open_quality.total_openers %}
             <br><span class="muted" style="font-size:0.8em" title="{{ c.open_quality.automated }} of {{ c.open_quality.total_openers }} recipient(s) who opened show signs of being an automated image-proxy fetch (e.g. Gmail's own image proxy, or an implausible number of opens) rather than a real person. This only catches automated fetches that identify themselves -- it can't detect Apple Mail Privacy Protection's pre-fetch, which is designed to look identical to a real open. So even the 'genuine' count here isn't a confirmed human read, just 'no known automated signal found'.">
               {{ c.open_quality.genuine }} not-flagged{% if c.open_quality.automated %}, {{ c.open_quality.automated }} likely automated{% endif %}
             </span>
             {% endif %}
+            {% if c.opened != c.unique_openers %}<br><span class="muted" style="font-size:0.8em">{{ c.opened }} total opens</span>{% endif %}
           </td>
-          <td>{{ c.clicked }}{% if c.click_rate is not none %} ({{ "%.0f"|format(100 * c.click_rate) }}%){% endif %}
+          <td title="{{ c.unique_clickers }} unique clicker(s) out of {{ c.delivered }} delivered. The raw event count ({{ c.clicked }}) counts every link click separately, so one reader opening five links shows as five -- the percentage here is based on people instead.">
+            {{ c.unique_clickers }}{% if c.unique_click_rate is not none %} ({{ "%.1f"|format(100 * c.unique_click_rate) }}%){% endif %}
             {% if c.click_quality and c.click_quality.total_clickers %}
             <br><span class="muted" style="font-size:0.8em" title="{{ c.click_quality.automated }} of {{ c.click_quality.total_clickers }} recipient(s) who clicked show signs of being a corporate security scanner or automated link-check (e.g. clicked without ever opening the message, clicked an implausible number of times, or a non-browser user-agent) rather than a real person reading the newsletter. This is a heuristic, not a certainty.">
               {{ c.click_quality.genuine }} genuine{% if c.click_quality.automated %}, {{ c.click_quality.automated }} likely automated{% endif %}
             </span>
             {% endif %}
+            {% if c.clicked != c.unique_clickers %}<br><span class="muted" style="font-size:0.8em">{{ c.clicked }} total clicks</span>{% endif %}
           </td>
           <td>{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}
             {% if c.bounce_breakdown %}<br><span class="muted" style="font-size:0.8em">{% for cat, n in c.bounce_breakdown %}{{ cat }}: {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
@@ -772,37 +776,89 @@
           <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.1f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
           <td>
             <button type="button" class="report-card-btn" onclick="document.getElementById('report-{{ loop.index }}-{{ c.campaign_id }}').showModal()">
-              {% if not c.report_card.issues %}✅ All clear{% else %}⚠ {{ c.report_card.issues|length }} issue(s){% endif %}
+              {% if c.report_card.score is none %}
+                <span class="badge muted">Not gradeable</span>
+              {% else %}
+                <span class="badge {{ c.report_card.grade_status }}">{{ c.report_card.grade }} &middot; {{ c.report_card.score }}/100</span>
+              {% endif %}
             </button>
             <dialog id="report-{{ loop.index }}-{{ c.campaign_id }}" class="report-card-dialog">
-              <h3 style="margin-top:0">Report card: {{ c.subject }}</h3>
-              <p class="muted" style="margin-top:-0.5rem">
-                "Issues" add points below -- 0 issues is the best possible result, not a bad score. Higher totals mean
-                more things worth fixing, not a rating out of some maximum.
+              <h3 style="margin-top:0">{{ c.subject }}</h3>
+              <p class="muted" style="margin:-0.4rem 0 1rem 0; font-size:0.82rem">
+                Sent {{ c.send_day or "-" }} &middot; {{ c.delivered }} delivered
               </p>
-              {% if c.report_card.good %}
-              <div style="margin-bottom:0.9rem;">
-                <strong>✅ What's good</strong>
-                <ul style="margin:0.3rem 0 0 1.1rem; padding:0;">
-                  {% for label, detail in c.report_card.good %}
-                  <li style="margin-bottom:0.3rem;"><span style="color:var(--ok); font-weight:600;">{{ label }}</span> -- {{ detail }}</li>
-                  {% endfor %}
-                </ul>
-              </div>
-              {% endif %}
-              {% if c.report_card.issues %}
-              <div>
-                <strong>⚠ What to improve (total: {{ c.report_card.overall_score }} point{{ 's' if c.report_card.overall_score != 1 else '' }})</strong>
-                <ul style="margin:0.3rem 0 0 1.1rem; padding:0;">
-                  {% for label, detail, score in c.report_card.issues %}
-                  <li style="margin-bottom:0.3rem;"><span style="color:var(--warn); font-weight:600;">{{ label }} (+{{ score }})</span> -- {{ detail }}</li>
-                  {% endfor %}
-                </ul>
+
+              {% if c.report_card.score is none %}
+              <div class="verdict muted">
+                <strong>Not enough data to grade this send.</strong> Most of the scorecard depends on what actually
+                happened after delivery (complaints, bounces, engagement), and this campaign doesn't have enough
+                delivery data recorded for those to mean anything. The checks that don't need delivery data are
+                still shown below.
               </div>
               {% else %}
-              <div class="muted">No issues found -- this newsletter follows every check DMARCTool currently runs.</div>
+              <div class="verdict {{ c.report_card.grade_status }}">
+                <strong style="font-size:1.15rem">Grade {{ c.report_card.grade }} &mdash; {{ c.report_card.score }}/100</strong>
+                {% if c.report_card.confidence == 'low' %}
+                <br><span style="font-weight:400">Based on a partial picture &mdash; some measurements needed more delivered mail than this send had.</span>
+                {% endif %}
+              </div>
               {% endif %}
-              <div style="margin-top:1.2rem; text-align:right;">
+
+              {% if c.report_card.improvements %}
+              <div style="margin-bottom:1.1rem;">
+                <strong>&#128296; What to improve{% if c.report_card.improvements|length > 1 %} (most important first){% endif %}</strong>
+                {% for p in c.report_card.improvements %}
+                <div style="margin-top:0.6rem; padding:0.6rem 0.8rem; border-radius:var(--radius-sm); background:{{ 'var(--bad-bg)' if p.status == 'bad' else 'var(--warn-bg)' }};">
+                  <div style="font-weight:600; color:{{ 'var(--bad)' if p.status == 'bad' else 'var(--warn)' }};">
+                    {{ p.label }}
+                    <span style="font-weight:400; opacity:0.8">&mdash; {{ "%.0f"|format(p.earned) }} of {{ p.weight }} points</span>
+                  </div>
+                  <div style="margin-top:0.2rem;">{{ p.headline }}</div>
+                  <div class="muted" style="font-size:0.83rem; margin-top:0.25rem;">{{ p.detail }}</div>
+                  {% if p.fix %}
+                  <div style="margin-top:0.45rem; font-size:0.86rem;">&#128161; <strong>How to improve it:</strong> {{ p.fix }}</div>
+                  {% endif %}
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
+
+              {% if c.report_card.strengths %}
+              <div style="margin-bottom:1.1rem;">
+                <strong>&#9989; What's going well</strong>
+                <ul style="margin:0.4rem 0 0 1.1rem; padding:0;">
+                  {% for p in c.report_card.strengths %}
+                  <li style="margin-bottom:0.45rem;">
+                    <span style="color:var(--ok); font-weight:600;">{{ p.label }}</span>
+                    <span class="muted" style="font-size:0.83rem">({{ "%.0f"|format(p.earned) }}/{{ p.weight }})</span>
+                    &mdash; {{ p.headline }}
+                    <div class="muted" style="font-size:0.83rem; margin-top:0.15rem;">{{ p.detail }}</div>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+
+              {% if c.report_card.unmeasured %}
+              <div style="margin-bottom:0.6rem;">
+                <strong class="muted">&#9711; Couldn't measure</strong>
+                <ul style="margin:0.3rem 0 0 1.1rem; padding:0;" class="muted">
+                  {% for p in c.report_card.unmeasured %}
+                  <li style="margin-bottom:0.3rem; font-size:0.86rem;"><strong>{{ p.label }}</strong> &mdash; {{ p.detail }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+
+              <p class="muted" style="font-size:0.78rem; border-top:1px solid var(--border); padding-top:0.6rem; margin-bottom:0">
+                Weighted by what mailbox providers actually enforce and reward: spam complaints (25) and list
+                hygiene (20) because those have published limits, real engagement (25) because it decides inbox
+                vs. spam once you're authenticated, required headers (15), layout (10), and spam-bait wording
+                (5 &mdash; deliberately small, since keyword lists no longer decide placement on their own).
+                Benchmarks are tunable in Settings.
+              </p>
+
+              <div style="margin-top:1rem; text-align:right;">
                 <button type="button" onclick="this.closest('dialog').close()">Close</button>
               </div>
             </dialog>

@@ -67,6 +67,8 @@ DEFAULT_SETTINGS = {
     "ses_max_messages_per_run": "3000",   # cap SQS messages drained per check so a big backlog can't block a request; the rest drain on the next run
     "ses_account_recheck_hours": "24",    # don't re-poll SES account health/identity verification more often than this
     "newsletter_inactive_campaigns": "9",  # campaigns received with zero opens across all of them => flagged inactive
+    "campaign_click_benchmark": "0.033",   # click rate a newsletter is graded against (nonprofit-sector median)
+    "campaign_open_benchmark": "0.286",    # open rate a newsletter is graded against (nonprofit-sector median)
     "volume_spike_recent_days": "3",       # "recent" window averaged for the spike comparison
     "volume_spike_baseline_days": "7",     # "before" window averaged as the baseline
     "volume_spike_min_baseline_avg": "10", # baseline must average at least this many msgs/day to count
@@ -1006,72 +1008,18 @@ def ses_daily_series(conn, domain_id: int, days: int = 60):
     return series
 
 
-def _campaign_report_card(c: dict, structure: dict) -> dict:
-    """Turns the various per-campaign checks already computed (subject/body
-    scoring, display name, unsubscribe/header compliance, this campaign's
-    own bounce/complaint rate, and now image/link structure) into a single
-    "here's what's good, here's what's not, here's the score" report --
-    always says *something*, even when everything is clean, rather than
-    only ever speaking up about problems."""
-    from app.content_scoring import score_html_structure
-
-    good, issues = [], []
-
-    if c["subject_score"]["score"] == 0:
-        good.append(("Subject line", "No spam-trigger words or formatting issues found"))
-    else:
-        issues.append(("Subject line", "; ".join(c["subject_score"]["flags"]), c["subject_score"]["score"]))
-
-    if c["body_score"] is None:
-        good.append(("Newsletter content", "Not yet fetched from Listmonk -- will be scored once content sync catches up"))
-    elif c["body_score"]["score"] == 0:
-        good.append(("Newsletter content", "No spam-trigger words or formatting issues found in the body text"))
-    else:
-        issues.append(("Newsletter content", "; ".join(c["body_score"]["flags"]), c["body_score"]["score"]))
-
-    structure_result = score_html_structure(structure["image_count"], structure["word_count"], structure["shortener_links"]) if structure else {"score": 0, "flags": []}
-    if structure and structure["word_count"]:
-        if structure_result["score"] == 0:
-            good.append(("Images & links", f"{structure['image_count']} image(s), {structure['link_count']} link(s) -- healthy balance, no shorteners used"))
-        else:
-            issues.append(("Images & links", "; ".join(structure_result["flags"]), structure_result["score"]))
-
-    if not c["display_name_issues"]:
-        good.append(("Sender display name", f'"{c["from_display_name"] or "-"}" follows Gmail\'s display-name guidelines'))
-    else:
-        issues.append(("Sender display name", "; ".join(c["display_name_issues"]), 2 * len(c["display_name_issues"])))
-
-    if not c["unsubscribe_issues"]:
-        good.append(("Unsubscribe compliance", "One-click unsubscribe headers present and correctly formatted"))
-    else:
-        issues.append(("Unsubscribe compliance", "; ".join(c["unsubscribe_issues"]), 3 * len(c["unsubscribe_issues"])))
-
-    if not c["header_issues"]:
-        good.append(("Message formatting", "Message-ID present, subject isn't a misleading \"Re:\"/\"Fwd:\""))
-    else:
-        issues.append(("Message formatting", "; ".join(c["header_issues"]), 2 * len(c["header_issues"])))
-
-    if c["delivered"]:
-        if c["complaint_rate"] and c["complaint_rate"] >= 0.001:
-            issues.append(("Spam complaints", f"{c['complaint_rate']:.2%} of recipients marked this as spam", 5))
-        else:
-            good.append(("Spam complaints", f"{(c['complaint_rate'] or 0):.2%} -- negligible"))
-        if c["bounce_rate"] and c["bounce_rate"] >= 0.05:
-            issues.append(("Bounce rate", f"{c['bounce_rate']:.2%} bounced -- check list hygiene", 3))
-        else:
-            good.append(("Bounce rate", f"{(c['bounce_rate'] or 0):.2%} bounced -- healthy"))
-
-    overall_score = sum(score for _, _, score in issues)
-    return {"good": good, "issues": issues, "overall_score": overall_score}
-
-
-def recent_campaigns(conn, domain_id: int, limit: int = 10):
+def recent_campaigns(conn, domain_id: int, limit: int = 10, settings: dict = None):
     """List of dicts, most recent newsletter first -- built entirely from SES's
     own Open/Click/Bounce/Complaint/Delivery events for messages that carry a
     Listmonk X-Listmonk-Campaign header. This is SES's own numbers, not
     Listmonk's -- the two can disagree since Listmonk tracks opens/clicks
-    itself via pixel/link rewriting, while this reads what SES actually saw."""
+    itself via pixel/link rewriting, while this reads what SES actually saw.
+
+    `settings` only feeds the per-campaign scorecard's benchmarks (see
+    app.campaign_score); callers that just want the raw per-campaign numbers
+    can leave it out and the scorecard falls back to its own defaults."""
     from app.bounce_reasons import categorize_bounce
+    from app.campaign_score import score_campaign
     from app.click_quality import classify_campaign_clicks
     from app.content_scoring import score_text
     from app.display_name_checks import check_display_name
@@ -1107,25 +1055,41 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10):
             "clicked": r["clicked"] or 0,
             "bounced": r["bounced"] or 0,
             "complained": r["complained"] or 0,
+            # NOTE the opened/clicked columns are raw EVENT counts, not people
+            # -- one recipient clicking five links counts five times. Dividing
+            # them by `delivered` (open_rate/click_rate below) therefore
+            # overstates engagement badly (one real send here: 1473 click
+            # events from 203 actual people) and can even exceed 100%. They're
+            # kept because they're what SES literally reported, but anything
+            # comparing against an industry benchmark must use the unique_*
+            # rates instead -- unique people is how open/click rate is defined
+            # everywhere else.
             "open_rate": (r["opened"] or 0) / delivered if delivered else None,
             "click_rate": (r["clicked"] or 0) / delivered if delivered else None,
             "bounce_rate": (r["bounced"] or 0) / delivered if delivered else None,
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
+            "unique_openers": open_quality["total_openers"],
+            "unique_clickers": click_quality["total_clickers"],
+            "unique_open_rate": (open_quality["total_openers"] / delivered) if delivered else None,
+            "unique_click_rate": (click_quality["total_clickers"] / delivered) if delivered else None,
             "click_quality": click_quality,
             "genuine_click_rate": (click_quality["genuine"] / delivered) if delivered else None,
             "open_quality": open_quality,
             "genuine_open_rate": (open_quality["genuine"] / delivered) if delivered else None,
             "bounce_breakdown": bounce_breakdown.most_common(),
-            "display_name_issues": check_display_name(r["from_display_name"]),
+            # from_address matters here: it's what makes the gmail.com-
+            # impersonation check in check_display_name reachable at all.
+            "display_name_issues": check_display_name(r["from_display_name"], r["from_address"]),
             "rejected": r["rejected"] or 0,
             "unsubscribe_issues": check_unsubscribe_compliance(r["list_unsubscribe"], r["list_unsubscribe_post"]),
             "header_issues": check_header_hygiene(r["message_id"], r["subject"]),
             "subject_score": score_text(r["subject"]),
             "body_score": score_text(r["body_text"]) if r["body_text"] else None,
+            "has_plain_text": bool(r["body_text"]),
         })
         structure = analyze_html(r["body_html"]) if r["body_html"] else None
         out[-1]["structure"] = structure
-        out[-1]["report_card"] = _campaign_report_card(out[-1], structure)
+        out[-1]["report_card"] = score_campaign(out[-1], structure, settings)
     return out
 
 

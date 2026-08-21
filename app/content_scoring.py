@@ -46,6 +46,15 @@ _URGENCY_WORDS = ("urgent", "last chance", "final notice", "act fast", "hurry", 
 _EXCLAMATION_RE = re.compile(r"!{2,}")
 _DOLLAR_RE = re.compile(r"\${2,}|\$\d")
 _ALL_CAPS_WORD_RE = re.compile(r"\b[A-Z]{4,}\b")
+# Three or more consecutive ALL-CAPS words separated by plain spaces --
+# "LIMITED TIME OFFER", "URGENT RESPONSE REQUIRED". Deliberately matches runs
+# rather than individual words (see the caps check in score_text()), and
+# deliberately strict on both counts: the separator excludes punctuation so
+# an acronym list like "FCRA & GST" or "FCRA, POSH" doesn't read as shouting,
+# and requiring three words avoids firing on an ordinary acronym pair. Short
+# two-word bait like "ACT NOW" is already covered by _HIGH_RISK_PHRASES at a
+# higher weight, so nothing real is lost by being conservative here.
+_ALL_CAPS_RUN_RE = re.compile(r"\b[A-Z]{3,}(?:[ \t]+[A-Z]{3,}){2,}\b")
 _EMOJI_RE = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]"
 )
@@ -83,13 +92,17 @@ def score_text(text: str) -> dict:
         score += 2 * len(urgency_hits)
         flags.append(f"Urgency wording: {', '.join(urgency_hits)}")
 
-    # >=2 all-caps words is common for legitimate acronym-heavy subjects
-    # (e.g. "FCRA Purposes, POSH Audits") -- only flag once it's clearly more
-    # than the occasional acronym.
-    caps_words = [w for w in _ALL_CAPS_WORD_RE.findall(text) if w not in ("I",)]
-    if len(caps_words) >= 3:
+    # Only *consecutive* runs of ALL-CAPS words count as shouting. A count-
+    # based rule can't tell "ACT NOW LIMITED TIME" from an acronym-heavy
+    # nonprofit newsletter -- the real sends here legitimately mention
+    # PATTIC, FCRA, POSH and RNPO in ordinary prose, and flagging an
+    # organization's own name as spam-bait is the kind of false positive that
+    # teaches a team to ignore the whole report. Shouting is a run of caps
+    # words together; scattered acronyms are just domain vocabulary.
+    caps_runs = [run for run in _ALL_CAPS_RUN_RE.findall(text) if len(run.split()) >= 2]
+    if caps_runs:
         score += 2
-        flags.append(f"Multiple ALL-CAPS words ({', '.join(caps_words[:5])})")
+        flags.append(f"ALL-CAPS phrase(s) -- reads as shouting: {'; '.join(caps_runs[:3])}")
 
     if _EXCLAMATION_RE.search(text):
         score += 2

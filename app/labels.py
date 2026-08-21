@@ -460,6 +460,16 @@ SETTINGS_META = {
         "help": "SES publishes an event for every single delivered/bounced/complained message, so a busy sender can build a large backlog. This caps how many get processed in one check so it can't block a request for a long time -- the rest just get picked up on the next run.",
         "example": "3000 means at most 3000 queued events get processed each time; a bigger backlog drains over several runs.",
     },
+    "campaign_click_benchmark": {
+        "label": "Newsletter click rate to aim for",
+        "help": "The click rate each newsletter is graded against on its report card, counted as unique people who clicked out of everyone who received it. Hitting this is full marks -- it's a healthy target, not a ceiling.",
+        "example": "0.033 means 3.3% (the typical nonprofit-sector median). Enter as a fraction, not a percentage.",
+    },
+    "campaign_open_benchmark": {
+        "label": "Newsletter open rate to aim for",
+        "help": "Same idea for opens, counted as unique people. Weighted less than clicks on the report card, because Apple Mail's privacy features auto-load tracking pixels and inflate open counts on every list -- clicks are the more trustworthy signal.",
+        "example": "0.286 means 28.6% (the typical nonprofit-sector median). Enter as a fraction, not a percentage.",
+    },
     "newsletter_inactive_campaigns": {
         "label": "Newsletters received before someone counts as inactive",
         "help": "A subscriber who has received at least this many newsletters, but never opened a single one of them, gets flagged as inactive -- worth re-engaging or removing from the list.",
@@ -553,7 +563,7 @@ SETTINGS_GROUPS = [
         "ses_max_messages_per_run", "ses_account_recheck_hours",
     ]),
     ("📰 Newsletters & content", [
-        "newsletter_inactive_campaigns",
+        "newsletter_inactive_campaigns", "campaign_click_benchmark", "campaign_open_benchmark",
     ]),
     ("📊 Volume-spike detection", [
         "volume_spike_recent_days", "volume_spike_baseline_days",

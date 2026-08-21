@@ -612,7 +612,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_bounce_summary = rate_trend_summary(ses_bounce_series)
     ses_complaint_summary = rate_trend_summary(ses_complaint_series)
     ses_volume_chart = volume_bar_chart([(row[0], row[1]) for row in ses_series])
-    newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10)
+    newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10, settings=settings)
     engagement = subscriber_engagement_summary(conn, domain_id)
     bounce_categories = [
         {"category": category, "count": n,
