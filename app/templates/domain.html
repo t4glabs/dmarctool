@@ -82,6 +82,18 @@
   <div class="tab-panel active" data-tab="overview">
 
     <div class="section">
+      <h2 class="first" title="One combined read -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single Good/Bad/Ugly tier">🩺 Overall vibe</h2>
+      <div class="verdict {{ verdicts.vibe[0] }}">
+        <strong>{{ {'ok': 'Good', 'warn': 'Bad', 'bad': 'Ugly'}.get(verdicts.vibe[0], 'Not enough data') }}</strong>{% if health_score is not none %} ({{ health_score|round|int }}/100){% endif %} -- {{ verdicts.vibe[1] }}
+      </div>
+      {% if health_sparkline_svg %}
+      <div class="sparkline" title="Overall vibe score trend">{{ health_sparkline_svg | safe }}</div>
+      {% else %}
+      <p class="muted" style="margin:0">Not enough history yet -- this fills in over the next few days as the background job keeps running.</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
       <h2 class="first">🚦 Open action items</h2>
       <p class="muted" style="margin-top:0">Things worth your attention for this domain. "Mark done" if you've handled it; "Dismiss" if it's not relevant -- either way it won't keep reappearing unless the underlying issue is still there next time we check.</p>
       {% if open_items %}

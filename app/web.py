@@ -29,17 +29,17 @@ from fastapi.templating import Jinja2Templates
 from app.analysis import (
     all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
     domain_window_stats, day_to_date, epoch_day, ensure_default_settings, guess_sender_identity,
-    likely_causal_senders, mailgun_daily_series, portfolio_daily_pass_series, postmaster_daily_series,
-    provider_breakdown, recent_campaigns, run_analysis, sending_cadence, ses_daily_series,
-    sending_stream_breakdown, subscriber_engagement_summary,
+    health_score_series, likely_causal_senders, mailgun_daily_series, portfolio_daily_pass_series,
+    postmaster_daily_series, provider_breakdown, recent_campaigns, run_analysis, sending_cadence,
+    ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
 )
 from app.access_log import prune_old_access_log, record_access, recent_access_log
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
 from app.charts import (
-    disposition_donut_chart, dual_rate_sparkline, pass_rate_sparkline, provider_stacked_bar_chart,
-    spam_rate_sparkline, volume_bar_chart,
+    disposition_donut_chart, dual_rate_sparkline, health_score_sparkline, pass_rate_sparkline,
+    provider_stacked_bar_chart, spam_rate_sparkline, vibe_distribution_donut, volume_bar_chart,
 )
 from app.compliance import run_compliance_checks
 from app.config import get_secret
@@ -65,7 +65,7 @@ from app.labels import (
     postmaster_remediation, postmaster_requirement_label, top_categories,
 )
 from app.verdicts import (
-    dns_history_verdict, mailgun_verdict, postmaster_verdict, provider_verdict,
+    dns_history_verdict, domain_vibe_verdict, mailgun_verdict, postmaster_verdict, provider_verdict,
     senders_verdict, ses_account_verdict, ses_identity_verdict, ses_verdict, spf_dkim_verdict, stream_verdict,
 )
 
@@ -229,16 +229,24 @@ def build_domain_summary(conn, domain_row, settings):
         open_counts[row["category"]] = row["n"]
     top_issues, extra_issues_count = top_categories(open_counts, limit=3)
 
+    latest_health = conn.execute(
+        "SELECT health_score FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
+        (domain_id,),
+    ).fetchone()
+    health_score = latest_health["health_score"] if latest_health else None
+    vibe_status, vibe_text = domain_vibe_verdict(health_score)
+
     card_sparkline_svg = None
-    if latest_report["latest"]:
-        card_series = daily_pass_series(conn, domain_id, days=30)
-        card_sparkline_svg = pass_rate_sparkline(
-            card_series, threshold=float(settings["min_pass_rate"]), width=280, height=48
-        )
+    health_series = health_score_series(conn, domain_id, days=30)
+    if len(health_series) >= 2:
+        card_sparkline_svg = health_score_sparkline(health_series, width=280, height=48)
 
     return {
         "name": name,
         "pinned": bool(domain_row["pinned"]),
+        "health_score": health_score,
+        "vibe_status": vibe_status,
+        "vibe_text": vibe_text,
         "card_sparkline_svg": card_sparkline_svg,
         "dns_status": latest_dns["status"] if latest_dns else "unknown",
         "dns_match": bool(latest_dns["matches_expected"]) if latest_dns and latest_dns["matches_expected"] is not None else None,
@@ -312,14 +320,21 @@ def index(request: Request, flash: str = None):
     domains_with_issues = sum(1 for d in domains if d["open_counts"])
     portfolio_series = portfolio_daily_pass_series(conn, days=60)
     portfolio_sparkline_svg = pass_rate_sparkline(portfolio_series, threshold=float(settings["min_pass_rate"]))
+    good_count = sum(1 for d in domains if d["vibe_status"] == "ok")
+    bad_count = sum(1 for d in domains if d["vibe_status"] == "warn")
+    ugly_count = sum(1 for d in domains if d["vibe_status"] == "bad")
+    vibe_donut_svg = vibe_distribution_donut(good_count, bad_count, ugly_count)
     kpis = {
         "total_domains": len(domains),
         "domains_with_issues": domains_with_issues,
         "expiring_soon": len(overview["expiring_soon"]),
+        "good_count": good_count,
+        "bad_count": bad_count,
+        "ugly_count": ugly_count,
     }
     return templates.TemplateResponse(request, "index.html", {
         "domains": domains, "overview": overview, "flash": flash,
-        "kpis": kpis, "portfolio_sparkline_svg": portfolio_sparkline_svg,
+        "kpis": kpis, "portfolio_sparkline_svg": portfolio_sparkline_svg, "vibe_donut_svg": vibe_donut_svg,
     })
 
 
@@ -408,6 +423,15 @@ def domain_detail(request: Request, name: str, flash: str = None):
 
     series = daily_pass_series(conn, domain_id, days=60)
     sparkline_svg = pass_rate_sparkline(series, threshold=float(settings["min_pass_rate"]))
+
+    latest_health = conn.execute(
+        "SELECT health_score FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
+        (domain_id,),
+    ).fetchone()
+    health_score = latest_health["health_score"] if latest_health else None
+    vibe_status, vibe_text = domain_vibe_verdict(health_score)
+    health_series = health_score_series(conn, domain_id, days=90)
+    health_sparkline_svg = health_score_sparkline(health_series) if len(health_series) >= 2 else None
 
     rec_row = conn.execute(
         "SELECT title, detail FROM action_items WHERE domain_id=? AND category='ramp_recommendation' AND status='open'",
@@ -605,11 +629,14 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "postmaster": postmaster_verdict(postmaster_compliance),
         "ses_account": ses_account_verdict(ses_account_status),
         "ses_identity": ses_identity_verdict(ses_identity),
+        "vibe": (vibe_status, vibe_text),
     }
 
     return templates.TemplateResponse(request, "domain.html", {
         "flash": flash,
         "domain": domain,
+        "health_score": health_score,
+        "health_sparkline_svg": health_sparkline_svg,
         "dns_status": latest_dns["status"] if latest_dns else "unknown",
         "dns_match": bool(latest_dns["matches_expected"]) if latest_dns and latest_dns["matches_expected"] is not None else None,
         "dns_p": latest_dns["parsed_p"] if latest_dns else None,

@@ -16,6 +16,7 @@
     <li><strong>pct=</strong> -- what percentage of your mail this rule applies to. You normally start low (e.g. 10%) and raise it gradually once you've confirmed your real mail keeps passing.</li>
     <li><strong>Pass rate</strong> -- the percentage of your mail that's passing authentication (DKIM/SPF). Higher is better; this is what "safe to move forward" is based on.</li>
     <li><strong>Live DNS vs. Reports</strong> -- "Live DNS" is what's actually published right now; "Reports" is what mail providers have told us they've seen. These can disagree for a few days after you make a change -- that's normal, not necessarily a problem.</li>
+    <li><strong>Overall vibe (Good/Bad/Ugly)</strong> -- one combined read per domain: your pass rate, Google's own reported spam rate, and your bounce/complaint rate, weighted into a single score out of 100 (80+ is Good, 50-79 is Bad, below 50 is Ugly). Meant to answer "how's this domain doing" at a glance without reading four separate numbers.</li>
   </ul>
 </details>
 
@@ -34,6 +35,17 @@
     <div class="pill-top">{{ '📅' if kpis.expiring_soon else '✅' }}</div>
     <div class="pill-value">{{ kpis.expiring_soon }}</div>
     <div class="pill-label">Expiring soon</div>
+  </div>
+  <div class="pill pill-wide">
+    <div class="pill-label" style="margin-bottom:0.5rem" title="One combined read per domain -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single Good/Bad/Ugly tier.">🩺 Portfolio vibe -- how domains are doing overall</div>
+    <div class="chart-row">
+      <div class="chart-donut"><div class="sparkline">{{ vibe_donut_svg | safe }}</div></div>
+      <div class="chart-flex" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <span class="badge ok">{{ kpis.good_count }} Good</span>
+        <span class="badge warn">{{ kpis.bad_count }} Bad</span>
+        <span class="badge bad">{{ kpis.ugly_count }} Ugly</span>
+      </div>
+    </div>
   </div>
   <div class="pill pill-wide">
     <div class="pill-label" style="margin-bottom:0.3rem">📈 Portfolio-wide pass rate (60d, all domains combined)</div>
@@ -150,6 +162,16 @@
     </h3>
 
     <div class="row">
+      <span class="label" title="One combined read -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single tier">Overall vibe</span>
+      <span>
+        <span class="badge {{ d.vibe_status }}">
+          {{ {'ok': 'Good', 'warn': 'Bad', 'bad': 'Ugly'}.get(d.vibe_status, 'Not enough data') }}
+        </span>
+        {% if d.health_score is not none %}<span class="muted">({{ d.health_score|round|int }}/100)</span>{% endif %}
+      </span>
+    </div>
+
+    <div class="row">
       <span class="label" title="What's actually published in DNS right now">Live DNS</span>
       <span>
         {% if d.dns_status == 'ok' %}
@@ -192,7 +214,7 @@
     </div>
 
     {% if d.card_sparkline_svg %}
-    <div class="sparkline" style="margin:0.4rem 0 0.6rem 0" title="Pass rate trend, last 30 days">{{ d.card_sparkline_svg | safe }}</div>
+    <div class="sparkline" style="margin:0.4rem 0 0.6rem 0" title="Overall vibe score trend, last 30 days">{{ d.card_sparkline_svg | safe }}</div>
     {% endif %}
 
     <div class="row">

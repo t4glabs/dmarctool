@@ -339,3 +339,107 @@ def provider_stacked_bar_chart(rows, width: int = 640, max_rows: int = 8) -> str
   {''.join(parts)}
   {legend}
 </svg>'''
+
+
+def health_score_sparkline(series, width: int = 640, height: int = 140) -> str:
+    """series: list of (date_str, score_or_none 0-100) as from
+    analysis.health_score_series -- the single number that already combines
+    pass rate, Gmail's own spam rate, and bounce/complaint rate (see
+    snapshot_domain_health's weights), so one line stands in for four.
+    Colored by the same Good/Bad/Ugly tiers as verdicts.domain_vibe_verdict
+    (>=80 ok, >=50 warn, else bad) so the chart and the plain-language
+    verdict next to it never disagree."""
+    pad_l, pad_r, pad_t, pad_b = 28, 8, 10, 20
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+
+    points_with_data = [(i, s) for i, (_, s) in enumerate(series) if s is not None]
+    if len(series) < 2 or not points_with_data:
+        return '<svg width="{}" height="{}"><text x="10" y="20" fill="currentColor" opacity="0.6">not enough history yet</text></svg>'.format(width, height)
+
+    n = len(series)
+
+    def x_for(i):
+        return pad_l + (i / (n - 1)) * plot_w if n > 1 else pad_l
+
+    def y_for(score):
+        s = max(0.0, min(100.0, score))
+        return pad_t + (1 - s / 100.0) * plot_h
+
+    path_pts = [f"{x_for(i):.1f},{y_for(s):.1f}" for i, s in points_with_data]
+    polyline = " ".join(path_pts)
+
+    gridlines = []
+    for val in (50, 80):
+        gy = y_for(val)
+        gridlines.append(
+            f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{width - pad_r}" y2="{gy:.1f}" '
+            f'stroke="currentColor" stroke-opacity="0.15" stroke-width="1" stroke-dasharray="4 3"/>'
+        )
+        gridlines.append(f'<text x="1" y="{gy + 4:.1f}" font-size="10" fill="currentColor" opacity="0.6">{val}</text>')
+
+    first_date, last_date = series[0][0], series[-1][0]
+
+    dots = []
+    for i, s in points_with_data:
+        style = "fill:var(--ok)" if s >= 80 else ("fill:var(--warn)" if s >= 50 else "fill:var(--bad)")
+        dots.append(
+            f'<circle cx="{x_for(i):.1f}" cy="{y_for(s):.1f}" r="3" style="{style}" '
+            f'data-tooltip="{series[i][0]}: {s:.0f}/100"/>'
+        )
+
+    return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
+  {''.join(gridlines)}
+  <polyline points="{polyline}" fill="none" stroke="currentColor" stroke-width="1.75" opacity="0.9"/>
+  {''.join(dots)}
+  <text x="{pad_l}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6">{first_date}</text>
+  <text x="{width - pad_r}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6" text-anchor="end">{last_date}</text>
+</svg>'''
+
+
+def vibe_distribution_donut(good_count: int, bad_count: int, ugly_count: int,
+                             width: int = 150, height: int = 150) -> str:
+    """Donut of how many tracked domains currently fall into each Good/Bad/
+    Ugly health tier (verdicts.domain_vibe_verdict) -- one portfolio-wide
+    glance instead of reading every card's own badge one at a time."""
+    total = good_count + bad_count + ugly_count
+    cx, cy = width / 2, height / 2
+    r = min(width, height) / 2 - 14
+    stroke_w = r * 0.62
+    margin = 6
+    stroke_fraction = 0.62
+    max_outer_r = min(width, height) / 2 - margin
+    r = max_outer_r / (1 + stroke_fraction / 2)
+    stroke_w = r * stroke_fraction
+    circumference = 2 * math.pi * r
+
+    if total <= 0:
+        return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">'
+                f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="currentColor" '
+                f'stroke-opacity="0.15" stroke-width="{stroke_w:.1f}"/>'
+                f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" class="donut-center-sublabel">no data</text></svg>')
+
+    segments = [
+        (good_count, "var(--ok)", "Good"),
+        (bad_count, "var(--warn)", "Bad"),
+        (ugly_count, "var(--bad)", "Ugly"),
+    ]
+    arcs = []
+    cumulative = 0.0
+    for count, color, seg_label in segments:
+        if count <= 0:
+            continue
+        length = (count / total) * circumference
+        arcs.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="{color}" stroke-width="{stroke_w:.1f}" '
+            f'stroke-dasharray="{length:.2f} {circumference - length:.2f}" '
+            f'stroke-dashoffset="{-cumulative:.2f}" transform="rotate(-90 {cx} {cy})" '
+            f'data-tooltip="{count} {seg_label} ({count / total:.0%})"/>'
+        )
+        cumulative += length
+
+    return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
+  {''.join(arcs)}
+  <text x="{cx}" y="{cy - 2}" text-anchor="middle" class="donut-center-label">{total}</text>
+  <text x="{cx}" y="{cy + 15}" text-anchor="middle" class="donut-center-sublabel">domains</text>
+</svg>'''

@@ -12,6 +12,24 @@ any kind of judgment beyond "count the things past a known threshold."
 """
 
 
+def domain_vibe_verdict(health_score):
+    """The one-glance "how's this domain doing overall" read, from its
+    latest composite health_score (app.analysis.snapshot_domain_health --
+    already a weighted combination of pass rate, Gmail's own spam rate, and
+    bounce/complaint rate into one 0-100 number, so this isn't inventing a
+    new formula, just naming its tiers). Deliberately blunt, plain-language
+    tiers ("Good"/"Bad"/"Ugly") rather than a raw score -- meant to work on
+    the main dashboard itself, not a separate simplified view, so it has to
+    read fine to a non-technical reader too."""
+    if health_score is None:
+        return "muted", "Not enough data yet to say."
+    if health_score >= 80:
+        return "ok", "Good -- authentication, spam rate, and bounce/complaint signals all look healthy."
+    if health_score >= 50:
+        return "warn", "Bad -- at least one signal (pass rate, spam rate, or bounce/complaint rate) needs attention."
+    return "bad", "Ugly -- multiple signals are struggling; worth digging into the open action items below."
+
+
 def senders_verdict(senders):
     if not senders:
         return "muted", "No known senders recorded yet."

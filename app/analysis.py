@@ -1254,6 +1254,22 @@ def postmaster_daily_series(conn, domain_id: int, days: int = 60):
     return [(r["day"], r["spam_rate"]) for r in rows]
 
 
+def health_score_series(conn, domain_id: int, days: int = 90):
+    """List of (date_str, health_score_or_None) from domain_health_snapshots
+    -- the one-number-combining-everything trend (pass rate + Gmail spam
+    rate + bounce/complaint rate, see snapshot_domain_health's weights),
+    for charting instead of four separate lines. Only as long as the
+    snapshot history itself (snapshot_domain_health runs once per domain
+    per run_analysis() call, so this lengthens naturally over time)."""
+    since = (datetime.datetime.utcnow().date() - datetime.timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        """SELECT snapshot_date, health_score FROM domain_health_snapshots
+           WHERE domain_id=? AND snapshot_date >= ? ORDER BY snapshot_date""",
+        (domain_id, since),
+    ).fetchall()
+    return [(r["snapshot_date"], r["health_score"]) for r in rows]
+
+
 def recommend(conn, domain_id: int, domain_name: str, settings: dict, latest_report_end: int):
     run = current_policy_run(conn, domain_id)
     if run is None:
