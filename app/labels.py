@@ -478,6 +478,16 @@ SETTINGS_META = {
         "help": "SES publishes an event for every single delivered/bounced/complained message, so a busy sender can build a large backlog. This caps how many get processed in one check so it can't block a request for a long time -- the rest just get picked up on the next run.",
         "example": "3000 means at most 3000 queued events get processed each time; a bigger backlog drains over several runs.",
     },
+    "mailgun_newsletter_window_days": {
+        "label": "How far back to look for Ghost/Mailgun newsletters",
+        "help": "Newsletters sent through Mailgun (a Ghost blog, typically) are reconstructed from Mailgun's event log, which only keeps recent history. This is how many days back to scan.",
+        "example": "30 means the last month of sends get picked up and scored.",
+    },
+    "mailgun_newsletter_min_recipients": {
+        "label": "Recipients before an untagged Mailgun send counts as a newsletter",
+        "help": "Ghost tags its real newsletters, and that tag is what's normally used. This is the backup test for bulk mail that isn't tagged: it must reach at least this many people AND be one message sent to all of them (not many individual messages), which is what keeps signup confirmations, invites and test sends out.",
+        "example": "20 means a one-off email to 19 people is never treated as a newsletter. Real transactional sends here topped out at 5 recipients.",
+    },
     "campaign_click_benchmark": {
         "label": "Newsletter click rate to aim for",
         "help": "The click rate each newsletter is graded against on its report card, counted as unique people who clicked out of everyone who received it. Hitting this is full marks -- it's a healthy target, not a ceiling.",
@@ -583,6 +593,7 @@ SETTINGS_GROUPS = [
     ]),
     ("📰 Newsletters & content", [
         "newsletter_inactive_campaigns", "campaign_click_benchmark", "campaign_open_benchmark",
+        "mailgun_newsletter_window_days", "mailgun_newsletter_min_recipients",
     ]),
     ("📊 Volume-spike detection", [
         "volume_spike_recent_days", "volume_spike_baseline_days",

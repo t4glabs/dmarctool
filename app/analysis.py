@@ -70,6 +70,8 @@ DEFAULT_SETTINGS = {
     "ses_backlog_warn": "2000",            # queued events above this raise an action item, since it makes displayed numbers partial
     "ses_account_recheck_hours": "24",    # don't re-poll SES account health/identity verification more often than this
     "newsletter_inactive_campaigns": "9",  # campaigns received with zero opens across all of them => flagged inactive
+    "mailgun_newsletter_window_days": "30",   # how far back to look for Mailgun/Ghost newsletter sends
+    "mailgun_newsletter_min_recipients": "20",  # fallback newsletter test for untagged bulk sends (Ghost's own tags are the primary signal)
     "campaign_click_benchmark": "0.033",   # click rate a newsletter is graded against (nonprofit-sector median)
     "campaign_open_benchmark": "0.286",    # open rate a newsletter is graded against (nonprofit-sector median)
     "volume_spike_recent_days": "3",       # "recent" window averaged for the spike comparison
@@ -1263,6 +1265,69 @@ def postmaster_daily_series(conn, domain_id: int, days: int = 60):
         (domain_id, since),
     ).fetchall()
     return [(r["day"], r["spam_rate"]) for r in rows]
+
+
+def recent_mailgun_campaigns(conn, domain_id: int, limit: int = 10, settings: dict = None):
+    """Newsletters this domain sent through Mailgun (Ghost blogs, typically),
+    scored with the same scorecard as the SES+Listmonk ones so the two read
+    identically -- see app.mailgun_campaigns for how sends are detected and
+    what Mailgun's API can and cannot tell us."""
+    from app.campaign_score import score_campaign
+    from app.content_scoring import score_text
+    from app.display_name_checks import check_display_name
+    from app.header_compliance import check_header_hygiene
+
+    rows = conn.execute(
+        """SELECT * FROM mailgun_campaigns WHERE domain_id=?
+           ORDER BY send_day DESC, delivered DESC LIMIT ?""",
+        (domain_id, limit),
+    ).fetchall()
+
+    out = []
+    for r in rows:
+        delivered, bounced = r["delivered"] or 0, r["bounced"] or 0
+        attempted = delivered + bounced
+        out.append({
+            "campaign_id": r["message_id"] or f"{r['mailgun_domain']}:{r['subject']}",
+            "mailgun_domain": r["mailgun_domain"],
+            "subject": r["subject"] or "(no subject captured)",
+            "from_display_name": r["from_display_name"],
+            "send_day": r["send_day"],
+            "delivered": delivered,
+            "opened": r["open_events"] or 0,
+            "clicked": r["click_events"] or 0,
+            "bounced": bounced,
+            "complained": r["complained"] or 0,
+            "unique_openers": r["unique_openers"] or 0,
+            "unique_clickers": r["unique_clickers"] or 0,
+            "unique_open_rate": ((r["unique_openers"] or 0) / delivered) if delivered else None,
+            "unique_click_rate": ((r["unique_clickers"] or 0) / delivered) if delivered else None,
+            "bounce_rate": (bounced / attempted) if attempted else None,
+            "complaint_rate": ((r["complained"] or 0) / delivered) if delivered else None,
+            "bounce_breakdown": [],
+            "display_name_issues": check_display_name(r["from_display_name"], r["from_address"]),
+            "header_issues": check_header_hygiene(r["message_id"], r["subject"]),
+            # Mailgun's Events API never exposes List-Unsubscribe/-Post, so this
+            # is unknowable here rather than failing -- declared so the
+            # scorecard shrinks that pillar instead of penalising the campaign.
+            "unsubscribe_issues": [],
+            "technical_checks_unavailable": [
+                "one-click unsubscribe headers (Mailgun's event data doesn't include them)"
+            ],
+            "subject_score": score_text(r["subject"]),
+            # No message body is available from Mailgun, so content/layout
+            # scoring genuinely can't run for these.
+            "body_score": None,
+            "has_plain_text": None,
+            "open_quality": None,
+            "click_quality": None,
+            "open_tracking": bool(r["open_tracking"]),
+            "click_tracking": bool(r["click_tracking"]),
+            "tags": r["tags"],
+            "source": "mailgun",
+        })
+        out[-1]["report_card"] = score_campaign(out[-1], None, settings)
+    return out
 
 
 def rate_trend_summary(series, window_days: int = 7) -> dict:

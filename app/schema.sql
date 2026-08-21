@@ -612,6 +612,42 @@ CREATE TABLE IF NOT EXISTS ip_whois_cache (
 
 CREATE INDEX IF NOT EXISTS idx_health_snapshots_domain ON domain_health_snapshots(domain_id, snapshot_date);
 
+-- Newsletters sent through Mailgun rather than SES+Listmonk -- in practice
+-- Ghost blogs with Mailgun integrated (see app/mailgun_campaigns.py). Kept in
+-- its own table rather than shoehorned into ses_campaigns because the
+-- available data is genuinely different: Mailgun's Events API exposes only
+-- from/subject/to/message-id headers (no List-Unsubscribe, so one-click
+-- unsubscribe compliance cannot be checked) and no message body, but it DOES
+-- carry Ghost's own tags and joinable message-ids for open/click events.
+--
+-- There's no campaign ID to group by the way Listmonk's X-Listmonk-Campaign
+-- header provides, so a "campaign" here is reconstructed by grouping delivery
+-- events on (from_address, subject) -- Ghost gives each newsletter issue its
+-- own subject, so within one fetch window that identifies a send.
+CREATE TABLE IF NOT EXISTS mailgun_campaigns (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    mailgun_domain    TEXT NOT NULL,
+    from_address      TEXT,
+    from_display_name TEXT,
+    subject           TEXT NOT NULL,
+    message_id        TEXT,          -- one representative Message-ID from the send
+    tags              TEXT,          -- comma-separated Mailgun tags seen (Ghost sets bulk-email,ghost-email)
+    send_day          TEXT,          -- earliest delivery event day for this send
+    delivered         INTEGER NOT NULL DEFAULT 0,  -- unique recipients delivered to
+    bounced           INTEGER NOT NULL DEFAULT 0,  -- unique recipients that permanently failed
+    complained        INTEGER NOT NULL DEFAULT 0,
+    unique_openers    INTEGER NOT NULL DEFAULT 0,
+    unique_clickers   INTEGER NOT NULL DEFAULT 0,
+    open_events       INTEGER NOT NULL DEFAULT 0,
+    click_events      INTEGER NOT NULL DEFAULT 0,
+    open_tracking     INTEGER NOT NULL DEFAULT 1,  -- does this Mailgun domain have open tracking on at all?
+    click_tracking    INTEGER NOT NULL DEFAULT 1,  -- ditto clicks; 0 means "can't tell", not "nobody clicked"
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(mailgun_domain, from_address, subject, send_day)
+);
+CREATE INDEX IF NOT EXISTS idx_mailgun_campaigns_domain ON mailgun_campaigns(domain_id, send_day);
+
 -- How far behind the SES event queue is, recorded after every drain (see
 -- app/ses_events.py). Matters because a backlog makes every delivery/open/
 -- click/bounce number in the dashboard a partial count -- one campaign sat

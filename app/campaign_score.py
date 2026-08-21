@@ -228,16 +228,46 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
             "fix": None,
         }
 
+    # A sending platform with click (or open) tracking switched off looks
+    # identical to one where nobody clicked. Scoring that zero against a
+    # benchmark would invent a failing grade out of missing instrumentation,
+    # so an untracked metric drops out and the other carries the pillar --
+    # and if neither is tracked there's nothing to grade at all.
+    open_tracked = c.get("open_tracking", True)
+    click_tracked = c.get("click_tracking", True)
+    if not open_tracked and not click_tracked:
+        return {
+            "key": "engagement", "label": "Real engagement", "weight": weight,
+            "earned": None, "status": "no_data",
+            "headline": "Open and click tracking are both off for this sender",
+            "detail": ("Without them there's no way to tell a newsletter nobody read from one the platform simply "
+                        "didn't measure, so this isn't scored. Turning on tracking in your sending platform would "
+                        "make the most important half of this scorecard visible."),
+            "fix": None,
+        }
+
     click_rate = min(c.get("unique_click_rate") or 0.0, 1.0)
     open_rate = min(c.get("unique_open_rate") or 0.0, 1.0)
 
     click_fraction, click_status = _target_band(click_rate, click_benchmark)
     open_fraction, open_status = _target_band(open_rate, open_benchmark)
-    fraction = 0.6 * click_fraction + 0.4 * open_fraction
+    if not click_tracked:
+        fraction, click_status = open_fraction, "ok"
+    elif not open_tracked:
+        fraction, open_status = click_fraction, "ok"
+    else:
+        fraction = 0.6 * click_fraction + 0.4 * open_fraction
     status = "bad" if fraction < 0.3 else ("warn" if fraction < 0.6 else "ok")
 
-    headline = (f"{click_rate:.1%} of people clicked, {open_rate:.1%} opened "
-                f"(benchmarks: {click_benchmark:.1%} / {open_benchmark:.1%})")
+    parts = []
+    parts.append(f"{click_rate:.1%} of people clicked" if click_tracked else "click tracking off")
+    parts.append(f"{open_rate:.1%} opened" if open_tracked else "open tracking off")
+    benchmark_bits = []
+    if click_tracked:
+        benchmark_bits.append(f"{click_benchmark:.1%} clicks")
+    if open_tracked:
+        benchmark_bits.append(f"{open_benchmark:.1%} opens")
+    headline = f"{', '.join(parts)} (benchmark: {' / '.join(benchmark_bits)})"
     automated = (c.get("open_quality") or {}).get("automated") or 0
     automated_note = ""
     if automated:
@@ -277,26 +307,37 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
 def _technical_pillar(c):
     """One-click unsubscribe, Message-ID, honest subject, sane display
     name -- all mandatory-for-bulk items, and all normally fixed once in
-    the ESP rather than per-campaign."""
+    the ESP rather than per-campaign.
+
+    `unavailable_checks` lets a data source declare what it simply cannot
+    see: Mailgun's Events API never exposes List-Unsubscribe headers, so for
+    Ghost/Mailgun newsletters that check is unknowable rather than failed.
+    Those checks shrink the pillar's denominator instead of counting against
+    it -- scoring a campaign down for something we couldn't look at would be
+    the same false-signal problem this whole scorecard exists to remove."""
     weight = WEIGHTS["technical"]
+    unavailable = list(c.get("technical_checks_unavailable") or [])
     problems = (list(c["unsubscribe_issues"]) + list(c["header_issues"]) + list(c["display_name_issues"]))
     # Four independent things are checked; each failure costs a quarter of
     # the pillar rather than an unbounded per-issue tally.
-    checks = 4
+    checks = max(1, 4 - len(unavailable))
     fraction = max(0.0, (checks - len(problems)) / checks)
     status = "ok" if not problems else ("bad" if len(problems) >= 2 else "warn")
+    unavailable_note = (f" Not checkable for this send: {'; '.join(unavailable)}." if unavailable else "")
 
     if not problems:
-        headline = "One-click unsubscribe, Message-ID, subject and sender name all correct"
+        headline = (f"{checks} of {checks} checkable header/sender requirements correct"
+                    if unavailable else
+                    "One-click unsubscribe, Message-ID, subject and sender name all correct")
         detail = ("These are Google's mandatory requirements for bulk senders (5,000+/day) -- getting all of them "
-                  "right is exactly what you want, and it's usually your Listmonk/SES configuration doing this "
-                  "for you automatically on every send.")
+                  "right is exactly what you want, and it's usually your sending platform's configuration doing "
+                  "this for you automatically on every send." + unavailable_note)
         fix = None
     else:
         headline = f"{len(problems)} of {checks} required header/sender checks failed"
         detail = ("Google requires one-click unsubscribe (both List-Unsubscribe and List-Unsubscribe-Post "
                   "headers), an RFC 5322 Message-ID, a subject that isn't a misleading \"Re:\", and a display "
-                  "name that identifies you plainly. These are pass/fail, not judgement calls.")
+                  "name that identifies you plainly. These are pass/fail, not judgement calls." + unavailable_note)
         fix = ("Specifically: " + "; ".join(problems) +
                ". These are almost always a one-time fix in Listmonk (Settings -> Mailserver) rather than "
                "something to redo per campaign -- fix it once and every future send inherits it.")

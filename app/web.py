@@ -30,7 +30,8 @@ from app.analysis import (
     all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
     domain_window_stats, day_to_date, epoch_day, ensure_default_settings, guess_sender_identity,
     health_score_series, likely_causal_senders, mailgun_daily_series, portfolio_daily_pass_series,
-    postmaster_daily_series, provider_breakdown, rate_trend_summary, recent_campaigns, run_analysis,
+    postmaster_daily_series, provider_breakdown, rate_trend_summary, recent_campaigns,
+    recent_mailgun_campaigns, run_analysis,
     sending_cadence, ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
 )
 from app.access_log import prune_old_access_log, record_access, recent_access_log
@@ -52,6 +53,7 @@ from app.domain_report import (
 )
 from app.listmonk import run_listmonk_content_sync
 from app.mailgun import run_mailgun_checks
+from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.postmaster import run_postmaster_checks
 from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest
@@ -167,6 +169,7 @@ def _startup():
         run_blocklist_checks(c, verbose=False)
         run_compliance_checks(c, verbose=False)
         run_mailgun_checks(c, verbose=False)
+        run_mailgun_campaign_sync(c, verbose=False)
         run_postmaster_checks(c, verbose=False)
         # Background job: generous drain budget (nobody is waiting on it), so a
         # real backlog actually clears instead of creeping up run after run.
@@ -617,6 +620,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_complaint_summary = rate_trend_summary(ses_complaint_series)
     ses_volume_chart = volume_bar_chart([(r["day"], r["volume"]) for r in ses_series])
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10, settings=settings)
+    mailgun_newsletter_campaigns = recent_mailgun_campaigns(conn, domain_id, limit=10, settings=settings)
     engagement = subscriber_engagement_summary(conn, domain_id)
     bounce_categories = [
         {"category": category, "count": n,
@@ -708,6 +712,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_complaint_summary": ses_complaint_summary,
         "ses_volume_chart": ses_volume_chart,
         "newsletter_campaigns": newsletter_campaigns,
+        "mailgun_newsletter_campaigns": mailgun_newsletter_campaigns,
         "engagement": engagement,
         "bounce_categories": bounce_categories,
         "display_names": display_names,
@@ -1033,6 +1038,7 @@ def run_checks():
     run_blocklist_checks(conn, verbose=False)
     run_compliance_checks(conn, verbose=False)
     run_mailgun_checks(conn, verbose=False)
+    run_mailgun_campaign_sync(conn, verbose=False)
     run_postmaster_checks(conn, verbose=False)
     # Short budget here: this runs inside the request the "Refresh now" button
     # made, so it must stay responsive. A large backlog keeps draining on the

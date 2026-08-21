@@ -16,6 +16,97 @@
 </div>
 {% endif %}
 {% endmacro %}
+{# Shared by both newsletter tables (SES+Listmonk and Mailgun/Ghost) so a
+   campaign's scorecard renders identically whichever platform sent it. #}
+{% macro report_card_cell(c, uid) %}
+            <button type="button" class="report-card-btn" onclick="document.getElementById('report-{{ uid }}').showModal()">
+              {% if c.report_card.score is none %}
+                <span class="badge muted">Not gradeable</span>
+              {% else %}
+                <span class="badge {{ c.report_card.grade_status }}">{{ c.report_card.grade }} &middot; {{ c.report_card.score }}/100</span>
+              {% endif %}
+            </button>
+            <dialog id="report-{{ uid }}" class="report-card-dialog">
+              <h3 style="margin-top:0">{{ c.subject }}</h3>
+              <p class="muted" style="margin:-0.4rem 0 1rem 0; font-size:0.82rem">
+                Sent {{ c.send_day or "-" }} &middot; {{ c.delivered }} delivered
+              </p>
+
+              {% if c.report_card.score is none %}
+              <div class="verdict muted">
+                <strong>Not enough data to grade this send.</strong> Most of the scorecard depends on what actually
+                happened after delivery (complaints, bounces, engagement), and this campaign doesn't have enough
+                delivery data recorded for those to mean anything. The checks that don't need delivery data are
+                still shown below.
+              </div>
+              {% else %}
+              <div class="verdict {{ c.report_card.grade_status }}">
+                <strong style="font-size:1.15rem">Grade {{ c.report_card.grade }} &mdash; {{ c.report_card.score }}/100</strong>
+                {% if c.report_card.confidence == 'low' %}
+                <br><span style="font-weight:400">Based on a partial picture &mdash; some measurements needed more delivered mail than this send had.</span>
+                {% endif %}
+              </div>
+              {% endif %}
+
+              {% if c.report_card.improvements %}
+              <div style="margin-bottom:1.1rem;">
+                <strong>&#128296; What to improve{% if c.report_card.improvements|length > 1 %} (most important first){% endif %}</strong>
+                {% for p in c.report_card.improvements %}
+                <div style="margin-top:0.6rem; padding:0.6rem 0.8rem; border-radius:var(--radius-sm); background:{{ 'var(--bad-bg)' if p.status == 'bad' else 'var(--warn-bg)' }};">
+                  <div style="font-weight:600; color:{{ 'var(--bad)' if p.status == 'bad' else 'var(--warn)' }};">
+                    {{ p.label }}
+                    <span style="font-weight:400; opacity:0.8">&mdash; {{ "%.0f"|format(p.earned) }} of {{ p.weight }} points</span>
+                  </div>
+                  <div style="margin-top:0.2rem;">{{ p.headline }}</div>
+                  <div class="muted" style="font-size:0.83rem; margin-top:0.25rem;">{{ p.detail }}</div>
+                  {% if p.fix %}
+                  <div style="margin-top:0.45rem; font-size:0.86rem;">&#128161; <strong>How to improve it:</strong> {{ p.fix }}</div>
+                  {% endif %}
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
+
+              {% if c.report_card.strengths %}
+              <div style="margin-bottom:1.1rem;">
+                <strong>&#9989; What's going well</strong>
+                <ul style="margin:0.4rem 0 0 1.1rem; padding:0;">
+                  {% for p in c.report_card.strengths %}
+                  <li style="margin-bottom:0.45rem;">
+                    <span style="color:var(--ok); font-weight:600;">{{ p.label }}</span>
+                    <span class="muted" style="font-size:0.83rem">({{ "%.0f"|format(p.earned) }}/{{ p.weight }})</span>
+                    &mdash; {{ p.headline }}
+                    <div class="muted" style="font-size:0.83rem; margin-top:0.15rem;">{{ p.detail }}</div>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+
+              {% if c.report_card.unmeasured %}
+              <div style="margin-bottom:0.6rem;">
+                <strong class="muted">&#9711; Couldn't measure</strong>
+                <ul style="margin:0.3rem 0 0 1.1rem; padding:0;" class="muted">
+                  {% for p in c.report_card.unmeasured %}
+                  <li style="margin-bottom:0.3rem; font-size:0.86rem;"><strong>{{ p.label }}</strong> &mdash; {{ p.detail }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+
+              <p class="muted" style="font-size:0.78rem; border-top:1px solid var(--border); padding-top:0.6rem; margin-bottom:0">
+                Weighted by what mailbox providers actually enforce and reward: spam complaints (25) and list
+                hygiene (20) because those have published limits, real engagement (25) because it decides inbox
+                vs. spam once you're authenticated, required headers (15), layout (10), and spam-bait wording
+                (5 &mdash; deliberately small, since keyword lists no longer decide placement on their own).
+                Benchmarks are tunable in Settings.
+              </p>
+
+              <div style="margin-top:1rem; text-align:right;">
+                <button type="button" onclick="this.closest('dialog').close()">Close</button>
+              </div>
+            </dialog>
+{% endmacro %}
 {% macro rate_trend_block(title, summary, chart_svg) %}
 <div class="rate-trend-block">
   <div class="rate-trend-head">
@@ -796,99 +887,14 @@
           <td>{{ c.rejected }}</td>
           <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.1f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
           <td>
-            <button type="button" class="report-card-btn" onclick="document.getElementById('report-{{ loop.index }}-{{ c.campaign_id }}').showModal()">
-              {% if c.report_card.score is none %}
-                <span class="badge muted">Not gradeable</span>
-              {% else %}
-                <span class="badge {{ c.report_card.grade_status }}">{{ c.report_card.grade }} &middot; {{ c.report_card.score }}/100</span>
-              {% endif %}
-            </button>
-            <dialog id="report-{{ loop.index }}-{{ c.campaign_id }}" class="report-card-dialog">
-              <h3 style="margin-top:0">{{ c.subject }}</h3>
-              <p class="muted" style="margin:-0.4rem 0 1rem 0; font-size:0.82rem">
-                Sent {{ c.send_day or "-" }} &middot; {{ c.delivered }} delivered
-              </p>
-
-              {% if c.report_card.score is none %}
-              <div class="verdict muted">
-                <strong>Not enough data to grade this send.</strong> Most of the scorecard depends on what actually
-                happened after delivery (complaints, bounces, engagement), and this campaign doesn't have enough
-                delivery data recorded for those to mean anything. The checks that don't need delivery data are
-                still shown below.
-              </div>
-              {% else %}
-              <div class="verdict {{ c.report_card.grade_status }}">
-                <strong style="font-size:1.15rem">Grade {{ c.report_card.grade }} &mdash; {{ c.report_card.score }}/100</strong>
-                {% if c.report_card.confidence == 'low' %}
-                <br><span style="font-weight:400">Based on a partial picture &mdash; some measurements needed more delivered mail than this send had.</span>
-                {% endif %}
-              </div>
-              {% endif %}
-
-              {% if c.report_card.improvements %}
-              <div style="margin-bottom:1.1rem;">
-                <strong>&#128296; What to improve{% if c.report_card.improvements|length > 1 %} (most important first){% endif %}</strong>
-                {% for p in c.report_card.improvements %}
-                <div style="margin-top:0.6rem; padding:0.6rem 0.8rem; border-radius:var(--radius-sm); background:{{ 'var(--bad-bg)' if p.status == 'bad' else 'var(--warn-bg)' }};">
-                  <div style="font-weight:600; color:{{ 'var(--bad)' if p.status == 'bad' else 'var(--warn)' }};">
-                    {{ p.label }}
-                    <span style="font-weight:400; opacity:0.8">&mdash; {{ "%.0f"|format(p.earned) }} of {{ p.weight }} points</span>
-                  </div>
-                  <div style="margin-top:0.2rem;">{{ p.headline }}</div>
-                  <div class="muted" style="font-size:0.83rem; margin-top:0.25rem;">{{ p.detail }}</div>
-                  {% if p.fix %}
-                  <div style="margin-top:0.45rem; font-size:0.86rem;">&#128161; <strong>How to improve it:</strong> {{ p.fix }}</div>
-                  {% endif %}
-                </div>
-                {% endfor %}
-              </div>
-              {% endif %}
-
-              {% if c.report_card.strengths %}
-              <div style="margin-bottom:1.1rem;">
-                <strong>&#9989; What's going well</strong>
-                <ul style="margin:0.4rem 0 0 1.1rem; padding:0;">
-                  {% for p in c.report_card.strengths %}
-                  <li style="margin-bottom:0.45rem;">
-                    <span style="color:var(--ok); font-weight:600;">{{ p.label }}</span>
-                    <span class="muted" style="font-size:0.83rem">({{ "%.0f"|format(p.earned) }}/{{ p.weight }})</span>
-                    &mdash; {{ p.headline }}
-                    <div class="muted" style="font-size:0.83rem; margin-top:0.15rem;">{{ p.detail }}</div>
-                  </li>
-                  {% endfor %}
-                </ul>
-              </div>
-              {% endif %}
-
-              {% if c.report_card.unmeasured %}
-              <div style="margin-bottom:0.6rem;">
-                <strong class="muted">&#9711; Couldn't measure</strong>
-                <ul style="margin:0.3rem 0 0 1.1rem; padding:0;" class="muted">
-                  {% for p in c.report_card.unmeasured %}
-                  <li style="margin-bottom:0.3rem; font-size:0.86rem;"><strong>{{ p.label }}</strong> &mdash; {{ p.detail }}</li>
-                  {% endfor %}
-                </ul>
-              </div>
-              {% endif %}
-
-              <p class="muted" style="font-size:0.78rem; border-top:1px solid var(--border); padding-top:0.6rem; margin-bottom:0">
-                Weighted by what mailbox providers actually enforce and reward: spam complaints (25) and list
-                hygiene (20) because those have published limits, real engagement (25) because it decides inbox
-                vs. spam once you're authenticated, required headers (15), layout (10), and spam-bait wording
-                (5 &mdash; deliberately small, since keyword lists no longer decide placement on their own).
-                Benchmarks are tunable in Settings.
-              </p>
-
-              <div style="margin-top:1rem; text-align:right;">
-                <button type="button" onclick="this.closest('dialog').close()">Close</button>
-              </div>
-            </dialog>
+            {{ report_card_cell(c, loop.index ~ '-' ~ c.campaign_id) }}
           </td>
         </tr>
         {% endfor %}
       </table>
       </div>
-      {% if display_names.names %}
+
+    {% if display_names.names %}
         {% if display_names.consistent %}
         <div class="verdict ok">✅ Consistent sender name across newsletters: "{{ display_names.names[0] }}"</div>
         {% else %}
@@ -902,6 +908,50 @@
         <div class="verdict ok">✅ Consistent sending cadence: ~{{ cadence.average_gap_days }} day(s) between newsletters</div>
         {% endif %}
       {% endif %}
+    </div>
+    {% endif %}
+
+      {% if mailgun_newsletter_campaigns %}
+    <div class="section">
+      <h2 class="first">📰 Recent newsletters (via Ghost + Mailgun)</h2>
+      <p class="muted" style="margin-top:0">
+        Newsletters this domain sent through Mailgun rather than SES/Listmonk -- in practice a Ghost blog with
+        Mailgun integrated. Mailgun has no campaign ID, so a send is identified by grouping its delivery events on
+        sender + subject; Ghost's own <code>ghost-email</code> tag (plus a broadcast shape -- many recipients
+        sharing one message) is what separates a real newsletter from Ghost's signup confirmations, member-import
+        receipts and test sends, which are deliberately excluded. Two things Mailgun's event data simply doesn't
+        expose, so they can't be graded here: the unsubscribe headers, and the message body.
+      </p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Sent</th><th>From name</th><th>Subject</th><th>Delivered</th><th>Opened</th><th>Clicked</th><th>Bounced</th><th>Complained</th><th>Report card</th></tr>
+        {% for c in mailgun_newsletter_campaigns %}
+        <tr>
+          <td>{{ c.send_day or "-" }}</td>
+          <td>{{ c.from_display_name or "-" }}</td>
+          <td>{{ c.subject }}{% if c.tags %}<br><span class="muted" style="font-size:0.8em">{{ c.tags }}</span>{% endif %}</td>
+          <td>{{ c.delivered }}</td>
+          <td title="Unique people, not raw events{% if not c.open_tracking %} -- open tracking appears to be off for this sender{% endif %}">
+            {% if not c.open_tracking %}<span class="badge muted">tracking off</span>
+            {% else %}{{ c.unique_openers }}{% if c.unique_open_rate is not none %} ({{ "%.1f"|format(100 * c.unique_open_rate) }}%){% endif %}
+              {% if c.opened != c.unique_openers %}<br><span class="muted" style="font-size:0.8em">{{ c.opened }} total opens</span>{% endif %}
+            {% endif %}
+          </td>
+          <td title="Unique people, not raw events{% if not c.click_tracking %} -- click tracking appears to be off for this sender{% endif %}">
+            {% if not c.click_tracking %}<span class="badge muted">tracking off</span>
+            {% else %}{{ c.unique_clickers }}{% if c.unique_click_rate is not none %} ({{ "%.1f"|format(100 * c.unique_click_rate) }}%){% endif %}
+              {% if c.clicked != c.unique_clickers %}<br><span class="muted" style="font-size:0.8em">{{ c.clicked }} total clicks</span>{% endif %}
+            {% endif %}
+          </td>
+          <td>{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.2f"|format(100 * c.bounce_rate) }}%){% endif %}</td>
+          <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.2f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
+          <td>
+            {{ report_card_cell(c, 'mg-' ~ loop.index ~ '-' ~ c.campaign_id) }}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
     </div>
     {% endif %}
 
