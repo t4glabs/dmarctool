@@ -133,7 +133,6 @@ _TIP_LIBRARY = {
     "display_name_issue": "Keep your newsletter's \"from\" name consistent and clearly recognizable as your organization across every email you send.",
     "content_spam_risk": "Before your next newsletter, read the subject line and body out loud. If it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
     "subject_spam_risk": "Before your next newsletter, read the subject line out loud. If it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
-    "postmaster_compliance": "aikyam can walk you through Google's checklist for bulk senders to make sure your setup still matches it.",
     "spf_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "dns_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "dkim_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
@@ -142,10 +141,6 @@ _TIP_LIBRARY = {
 _CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or month each time. A predictable "
                      "rhythm helps mailbox providers trust your mail more, and helps your readers know when to "
                      "expect you.")
-_GENERIC_TIP = ("Keep sending on a predictable schedule, keep your list clean by removing addresses that bounce, "
-                 "and reach out to aikyam any time something looks off. We'd rather help early than after it "
-                 "becomes a bigger problem.")
-
 # Categories where this domain's own overall pass rate (7 days before the fix
 # vs. 7 days after) is a fair, honest measure of whether the fix actually
 # helped -- reused across every authentication-adjacent category rather than
@@ -487,9 +482,17 @@ def _contact_aikyam_cta(still_open_categories: set):
 
 
 def _tips_for_domain(still_open_categories: set, consistency_irregular: bool) -> list:
-    """2-4 concrete, plain-language tips keyed to whatever's actually open or
+    """0-4 concrete, plain-language tips keyed to whatever's actually open or
     at-risk for THIS domain -- never a static list every domain gets
-    regardless of their real situation."""
+    regardless of their real situation.
+
+    Returns an empty list (and the templates then omit the whole section)
+    when there's nothing specific to say. There used to be a _GENERIC_TIP
+    fallback so the section always rendered, which contradicted the rule
+    above: across the 9 live domains it produced a "tips for the next few
+    weeks" heading over advice nobody had asked for and nothing had
+    prompted. An empty section is more honest than filler, and it makes the
+    times a tip DOES appear mean something."""
     tips = []
     for cat in still_open_categories:
         tip = _TIP_LIBRARY.get(cat)
@@ -497,8 +500,6 @@ def _tips_for_domain(still_open_categories: set, consistency_irregular: bool) ->
             tips.append(tip)
     if consistency_irregular and _CONSISTENCY_TIP not in tips:
         tips.append(_CONSISTENCY_TIP)
-    if not tips:
-        tips.append(_GENERIC_TIP)
     return tips[:4]
 
 
@@ -809,7 +810,8 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
 
 def build_domain_report(conn, domain_id: int, domain_name: str,
                          period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
-    """Returns {"resolved": [{"story","impact"}, ...], "still_open": [{"story","detail"}, ...],
+    """Returns {"whats_working": [str, ...], "resolved": [{"story","impact"}, ...],
+    "still_open": [{"story","detail"}, ...],
     "deliverability": str, "protection": str, "newsletter": str|None,
     "blocklist_good_news": str|None, "protection_tightened": str|None,
     "spam_trend": str|None, "risk_warning": str|None, "comparison": str|None,
@@ -854,6 +856,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     )
 
     headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end))
+    whats_working = _whats_working(conn, domain_id, still_open_categories, rate, total, period_end)
     health_trend = _health_trend(conn, domain_id, period_start)
     list_hygiene = _list_hygiene(conn, domain_id, start_str, end_str)
     protection_tightened = _protection_tightened(conn, domain_id, period_start)
@@ -866,6 +869,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
 
     return {
         "headline": headline,
+        "whats_working": whats_working,
         "health_trend": health_trend,
         "list_hygiene": list_hygiene,
         "resolved": resolved,
@@ -971,31 +975,106 @@ def _health_trend(conn, domain_id: int, period_start):
             f"exactly what you want between updates.")
 
 
-def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_warning):
-    """The first thing the reader sees: are they safe right now, and why.
+def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total, now: datetime.datetime) -> list:
+    """The report's opening section: the things that are demonstrably going
+    RIGHT for this domain, each stated as a fact plus what it buys them.
 
-    The old report opened straight into a bullet list of problems, which for
-    an audience that already finds technology intimidating reads as "here is
-    everything wrong with you". The brief for this feature is the opposite --
-    they should come away feeling their domain is looked after. So lead with
-    a plain verdict, grounded in what's actually in place, and only then get
-    into detail."""
-    urgent = still_open_categories & _URGENT_STILL_OPEN_CATEGORIES
+    This replaces an opening paragraph that told the reader their domain was
+    "being looked after" and "in good hands". That was reassurance asserted
+    rather than shown -- and, as the user put it, the rest of the email
+    already makes them feel it, so saying it outright read as padding. The
+    stakes this audience actually has (see the module docstring: a funder
+    trusting their address, a donor not being scammed in their name, an
+    impact story not landing in spam) are far better served by "here is
+    what's protecting you right now" than by "don't worry".
+
+    Every item is gated on real stored data AND on the matching problem not
+    being open, so this section can never congratulate the domain on
+    something a later section is simultaneously reporting as broken -- the
+    same self-contradiction trap that _resolved_items/exclude_categories
+    exists to prevent. Returns [] when nothing qualifies (a brand-new domain
+    with no data yet), and the templates then omit the heading entirely.
+    """
+    working = []
+
+    # 1. Impersonation protection. The single most valuable thing this tool
+    #    does for them, and the one with the most concrete stake.
     policy_run = current_policy_run(conn, domain_id)
-    protected = bool(policy_run and policy_run["p"] and policy_run["p"] != "none")
+    protection_broken = still_open_categories & {
+        "dns_policy_weakened", "dns_missing", "dns_drift", "spf_missing", "dkim_missing",
+    }
+    if policy_run and policy_run["p"] and policy_run["p"] != "none" and not protection_broken:
+        working.append(
+            "The protection that stops anyone sending email pretending to be your organization is switched on "
+            "and working. If someone tried to email your donors using your name, mailbox providers would "
+            "catch it rather than deliver it."
+        )
 
-    if urgent or risk_warning:
-        return ("Your domain is being looked after, and there's one thing we want you to know about. "
-                "We've set out below what happened, what it means and what we're doing -- you don't need to "
-                "take any action yourself unless we say so.")
+    # 2. Their own mail being recognised as genuinely theirs. Deliberately
+    #    framed as recognition/trust, not arrival -- the deliverability
+    #    section further down already gives the arrival number, and repeating
+    #    it here would just read as the same fact twice.
+    auth_broken = still_open_categories & {
+        "failure_investigation", "borrowed_sending_identity", "ptr_issue",
+        # Reputation problems belong here too. On a live domain this claim
+        # rendered two sections above "9 of the 31 emails you sent bounced,
+        # roughly 29%". Technically about different mechanisms; to the reader,
+        # a flat contradiction.
+        "mailgun_reputation", "ses_reputation", "ses_reputation_watch", "ses_rejected",
+    }
+    if total and total >= 50 and rate is not None and rate >= 0.98 and not auth_broken:
+        working.append(
+            "Your own emails are being recognised as genuinely yours, so the messages you send to funders and "
+            "supporters arrive looking trustworthy rather than suspicious."
+        )
+
+    # 3. Registration paid up. Unglamorous, but it's the one failure that
+    #    takes the website and every email address down at the same moment,
+    #    and the one thing on this list only they can act on.
+    if "domain_expiring_soon" not in still_open_categories:
+        exp = conn.execute(
+            "SELECT expires_at FROM domain_expiry_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1",
+            (domain_id,),
+        ).fetchone()
+        if exp and exp["expires_at"]:
+            days_left = days_until(exp["expires_at"])
+            # Needs real headroom, not just "hasn't tripped the warning yet".
+            # At 38 days out (one live domain, today) "your domain is paid up"
+            # is technically true and practically misleading -- renewal is a
+            # month away. Twice the warning threshold means this only ever
+            # reads as genuine good news, and a domain in the gap between the
+            # two simply doesn't get the line.
+            try:
+                warn_days = int(ensure_default_settings(conn).get("domain_expiry_warn_days", 30))
+            except (TypeError, ValueError):
+                warn_days = 30
+            comfortable = warn_days * 2
+            if days_left is not None and days_left > comfortable:
+                working.append(
+                    f"Your domain name is paid up until {exp['expires_at']}, so your website and every email "
+                    f"address on it keep working. We're watching the date and will remind you in good time."
+                )
+
+    return working
+
+
+def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_warning):
+    """One short, factual line orienting the reader before the detail: is
+    there something here they need to know about, or not.
+
+    Deliberately terse. This used to be a three-clause paragraph asserting
+    the domain was "being looked after" / "in good hands" -- reassurance
+    stated outright, which the user found read as padding on top of an email
+    whose whole tone already conveys it. Everything worth saying about how
+    safe they are is now shown as evidence in _whats_working() instead.
+    Returns None where a sentence would add nothing at all: with no problems
+    to flag, the "what's already working" list is a better opening than any
+    summary of it could be."""
+    if still_open_categories & _URGENT_STILL_OPEN_CATEGORIES or risk_warning:
+        return "There's one thing on this update we want to flag for you, and it's explained below."
     if still_open_categories:
-        return ("Your domain is in good hands and nothing here is urgent. "
-                + ("The protection that stops people faking emails in your name is active, " if protected else "")
-                + "and the few things still on our list are routine housekeeping we're handling for you.")
-    return ("Everything is in good order on your domain this month. "
-            + ("The protection that stops people faking emails in your name is active and working, " if protected
-               else "")
-            + "your mail is reaching people, and there's nothing you need to do.")
+        return "Nothing on your domain needs your attention this time."
+    return None
 
 
 def _report_period(row, now: datetime.datetime):

@@ -5,7 +5,12 @@ Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }}
 {{ headline }}
 {% endif %}{% if health_trend %}
 {{ health_trend }}
-{% endif %}{% if resolved %}
+{% endif %}{% if whats_working %}
+WHAT'S ALREADY WORKING FOR YOU
+{% for item in whats_working %}
+- {{ item }}
+{% endfor %}{% endif %}
+{%- if resolved %}
 WHAT WE SORTED OUT FOR YOU
 {% for item in resolved %}
 - {{ item.story[0]|upper }}{{ item.story[1:] }}. We've taken care of it.{% if item.why %} {{ item.why }}{% endif %}{% if item.impact %} The payoff: {{ item.impact }}.{% endif %}
@@ -54,7 +59,8 @@ HOW YOU COMPARE
 TIPS FOR THE NEXT FEW WEEKS
 {% for tip in tips %}
 - {{ tip }}
-{% endfor %}
+{% endfor %}{% endif %}
+{%- if still_open %}
 Whatever needs fixing here, aikyam will make sure it gets sorted properly. You don't have to solve this alone.
 {% endif %}
 This might look like a lot to take in, but it really matters. These are the things that decide whether people actually see your emails, and whether someone could try to impersonate your organization using your name. Please take a moment to read through it, and reply any time if anything's unclear. We're always happy to walk through it with you.

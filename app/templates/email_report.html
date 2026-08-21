@@ -21,6 +21,17 @@
       </div>
       {% endif %}
 
+      {% if whats_working %}
+      <div style="margin-bottom:24px; background:#f0f7f0; border-radius:6px; padding:14px 16px;">
+        <h2 style="font-size:16px; color:#1a7f37; margin:0 0 10px 0;">🛡️ What's already working for you</h2>
+        <ul style="font-size:15px; line-height:1.6; padding-left:20px; margin:0;">
+          {% for item in whats_working %}
+          <li style="margin-bottom:8px;">{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
       {% if health_trend %}
       <div style="margin-bottom:24px;">
         <h2 style="font-size:16px; color:#222222; margin:0 0 10px 0;">📊 Where you stand</h2>
@@ -121,8 +132,11 @@
           <li style="margin-bottom:6px;">{{ tip }}</li>
           {% endfor %}
         </ul>
-        <p style="font-size:15px; line-height:1.6; margin:10px 0 0 0;">Whatever needs fixing here, aikyam will make sure it gets sorted properly. You don't have to solve this alone.</p>
       </div>
+      {% endif %}
+
+      {% if still_open %}
+      <p style="font-size:15px; line-height:1.6; margin:0 0 24px 0;">Whatever needs fixing here, aikyam will make sure it gets sorted properly. You don't have to solve this alone.</p>
       {% endif %}
 
       <p style="font-size:15px; line-height:1.6; margin:24px 0 0 0;">
