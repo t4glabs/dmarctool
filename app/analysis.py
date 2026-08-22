@@ -80,6 +80,8 @@ DEFAULT_SETTINGS = {
     "volume_spike_multiplier": "2.0",      # recent avg must be at least this many times the baseline to flag
     "safe_browsing_recheck_hours": "24",   # Safe Browsing status doesn't change fast; daily is plenty
     "domain_expiry_recheck_hours": "24",   # registration expiry dates change at most once a year; daily is plenty
+    "lookalike_enabled": "1",              # watch for domains registered to look like yours
+    "lookalike_recheck_hours": "168",      # weekly -- ~530 DNS lookups per pass, no need to run it often
     "domain_expiry_warn_days": "30",       # flag + include in the email report once expiry is this close
     # Master switch for actually SENDING the plain-language owner reports.
     # Off by default and deliberately separate from each domain's own

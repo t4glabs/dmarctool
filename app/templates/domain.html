@@ -278,6 +278,68 @@
       </div>
     </div>
 
+    {% if lookalikes or lookalikes_ignored %}
+    <div class="section">
+      <h2 title="DMARC protects your own domain from being forged. It cannot do anything about a different domain that merely looks like yours -- that one passes its own authentication checks perfectly.">🪪 Domains that look like this one</h2>
+      <p class="muted" style="margin-top:0">
+        Registered domains whose names closely resemble {{ domain.name }}. The ones with a mail server can be
+        used to email your supporters while appearing to be you. Most look-alikes are innocent -- unrelated
+        organizations often own a similar name -- so mark the ones you recognise as known and they'll stop
+        being counted.
+      </p>
+      {% if lookalikes %}
+      <div class="table-wrap">
+      <table>
+        <tr><th>Domain</th><th>How it differs</th><th>Can send mail?</th><th>Mail host</th><th>First seen</th><th></th></tr>
+        {% for l in lookalikes %}
+        <tr>
+          <td><code>{{ l.candidate }}</code></td>
+          <td class="muted">{{ l.variant_kind }}</td>
+          <td>
+            {% if l.has_mx %}<span class="badge warn" title="This domain has working mail servers, so it can send and receive email">yes</span>
+            {% else %}<span class="badge muted" title="Registered, but with no mail server -- it cannot email anyone as things stand">no mail server</span>{% endif %}
+          </td>
+          <td class="muted" style="font-size:0.78rem">{{ l.mx_hosts or "--" }}</td>
+          <td class="muted">{{ l.first_seen_at[:10] }}</td>
+          <td>
+            <form class="inline" action="/domain/{{ domain.name }}/lookalike/ignore" method="post">
+              <input type="hidden" name="candidate" value="{{ l.candidate }}">
+              <button type="submit" class="small" title="Stop counting this one -- use it for a domain you recognise as unrelated or harmless">Mark as known</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      {{ fix_note(category_remediation('lookalike_domain')) }}
+      {% else %}
+      <p class="muted">Nothing currently counted -- everything found has been marked as known.</p>
+      {% endif %}
+
+      {% if lookalikes_ignored %}
+      <details style="margin-top:0.8rem">
+        <summary class="muted" style="cursor:pointer; font-size:0.85rem">{{ lookalikes_ignored|length }} marked as known</summary>
+        <div class="table-wrap" style="margin-top:0.5rem">
+        <table>
+          {% for l in lookalikes_ignored %}
+          <tr>
+            <td><code>{{ l.candidate }}</code></td>
+            <td class="muted">{{ l.variant_kind }}</td>
+            <td>
+              <form class="inline" action="/domain/{{ domain.name }}/lookalike/unignore" method="post">
+                <input type="hidden" name="candidate" value="{{ l.candidate }}">
+                <button type="submit" class="small">Count it again</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+        </div>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
+
   </div>
 
   <div class="tab-panel" data-tab="auth">

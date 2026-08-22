@@ -53,6 +53,7 @@ from app.domain_report import (
     save_report_settings, send_report_now,
 )
 from app.listmonk import run_listmonk_content_sync
+from app.lookalike import findings_for_domain, run_lookalike_checks
 from app.mailgun import run_mailgun_checks
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.postmaster import run_postmaster_checks
@@ -190,6 +191,7 @@ def _startup():
         run_safe_browsing_checks(c, verbose=False)
         run_mta_sts_checks(c, verbose=False)
         run_report_auth_checks(c, verbose=False)
+        run_lookalike_checks(c, verbose=False)
         run_domain_expiry_checks(c, verbose=False)
         run_report_emails(c, verbose=False)
         prune_old_access_log(c, retention_days=int(ensure_default_settings(c)["access_log_retention_days"]))
@@ -413,6 +415,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "SELECT * FROM dns_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 15", (domain_id,)
     ).fetchall()
     report_auth = latest_report_auth(conn, domain_id)
+    lookalikes = findings_for_domain(conn, domain_id)
+    lookalikes_ignored = [r for r in findings_for_domain(conn, domain_id, include_ignored=True) if r["ignored"]]
 
     safe_browsing = conn.execute(
         "SELECT * FROM safe_browsing_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
@@ -723,6 +727,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         # refuses on the same condition rather than trusting the template.
         "report_auth": report_auth,
         "source_classes": source_classes,
+        "lookalikes": lookalikes,
+        "lookalikes_ignored": lookalikes_ignored,
         "ingested_report_count": conn.execute(
             "SELECT COUNT(*) as n FROM reports WHERE domain_id=?", (domain_id,)).fetchone()["n"],
         "health_score": health_score,
@@ -1011,6 +1017,42 @@ def add_domain(name: str = Form(...)):
     )
 
 
+@app.post("/domain/{name}/lookalike/ignore")
+def ignore_lookalike(name: str, candidate: str = Form(...)):
+    return _set_lookalike_ignored(name, candidate, True)
+
+
+@app.post("/domain/{name}/lookalike/unignore")
+def unignore_lookalike(name: str, candidate: str = Form(...)):
+    return _set_lookalike_ignored(name, candidate, False)
+
+
+def _set_lookalike_ignored(name: str, candidate: str, ignored: bool):
+    """Mark a look-alike domain as recognised (or start counting it again).
+    Most look-alikes are unrelated businesses that happen to own a similar
+    name, and a false positive you can't silence becomes noise on its second
+    sighting -- so this has to persist across scans, which is why the flag
+    lives on the row rather than on the action item."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if domain:
+        conn.execute(
+            "UPDATE lookalike_domains SET ignored=? WHERE domain_id=? AND candidate=?",
+            (1 if ignored else 0, domain["id"], candidate),
+        )
+        conn.commit()
+        # Re-derive the action item immediately, so the count on the page the
+        # user lands on already reflects what they just did.
+        from app.lookalike import _apply_action_item
+        _apply_action_item(conn, domain["id"], name)
+        conn.commit()
+    verb = "marked as known" if ignored else "being counted again"
+    return RedirectResponse(
+        f"/domain/{name}?flash=" + urllib.parse.quote(f"{candidate} is now {verb}."),
+        status_code=303,
+    )
+
+
 @app.post("/domain/{name}/untrack")
 def untrack_domain(name: str):
     """Undo for add_domain -- deliberately refused once a domain has any
@@ -1221,6 +1263,7 @@ def run_checks():
     run_safe_browsing_checks(conn, verbose=False)
     run_mta_sts_checks(conn, verbose=False)
     run_report_auth_checks(conn, verbose=False)
+    run_lookalike_checks(conn, verbose=False)
     run_domain_expiry_checks(conn, verbose=False)
     return RedirectResponse(
         "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, Safe Browsing, MTA-STS, and domain expiry checks refreshed.",

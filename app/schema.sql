@@ -704,3 +704,24 @@ CREATE TABLE IF NOT EXISTS report_auth_checks (
     checked_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_report_auth_domain ON report_auth_checks(domain_id, destination_domain, checked_at);
+
+-- Domains registered to look like a tracked one (see app/lookalike.py).
+-- A row per (domain, candidate), updated in place rather than appended, so the
+-- `ignored` flag an operator sets survives every later scan -- a dismissed
+-- false positive that reappears weekly is worse than no feature.
+CREATE TABLE IF NOT EXISTS lookalike_domains (
+    id              INTEGER PRIMARY KEY,
+    domain_id       INTEGER NOT NULL REFERENCES domains(id),
+    root_domain     TEXT NOT NULL,
+    candidate       TEXT NOT NULL,
+    variant_kind    TEXT,
+    registered      INTEGER,
+    has_mx          INTEGER,
+    mx_hosts        TEXT,
+    status          TEXT,
+    ignored         INTEGER NOT NULL DEFAULT 0,
+    first_seen_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    last_checked_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (domain_id, candidate)
+);
+CREATE INDEX IF NOT EXISTS idx_lookalike_domain ON lookalike_domains(domain_id, registered, has_mx, ignored);
