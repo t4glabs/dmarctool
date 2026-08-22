@@ -59,6 +59,7 @@ from app.postmaster import run_postmaster_checks
 from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest
 from app.safe_browsing import run_safe_browsing_checks
+from app.source_classification import classify_sources
 from app.mta_sts import run_mta_sts_checks
 from app.report_authorization import latest_report_auth, run_report_auth_checks
 from app.watchlist import build_watchlist
@@ -412,6 +413,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "SELECT * FROM dns_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 15", (domain_id,)
     ).fetchall()
     report_auth = latest_report_auth(conn, domain_id)
+
     safe_browsing = conn.execute(
         "SELECT * FROM safe_browsing_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
     ).fetchone()
@@ -439,6 +441,14 @@ def domain_detail(request: Request, name: str, flash: str = None):
     window_total, window_rate = None, None
     providers = []
     streams = []
+    # What kind of thing each sending source is (forwarder / third party /
+    # unverified), over the same window the sender table itself shows.
+    source_classes = {}
+    if latest_report["latest"]:
+        source_classes = classify_sources(
+            conn, domain_id, domain["name"],
+            latest_report["latest"] - window_days * 86400, latest_report["latest"],
+        )
     if latest_report["latest"]:
         window_start = latest_report["latest"] - window_days * 86400
         total, passed, rate = domain_window_stats(conn, domain_id, window_start, latest_report["latest"])
@@ -692,7 +702,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     report_preview_subject, report_preview_text, _ = preview_domain_report(conn, domain_id, name)
 
     verdicts = {
-        "senders": senders_verdict(senders),
+        "senders": senders_verdict(senders, source_classes),
         "providers": provider_verdict(providers),
         "streams": stream_verdict(streams),
         "spf_dkim": spf_dkim_verdict(spf_checks, dkim_checks),
@@ -712,6 +722,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         # Gates the "stop tracking" control -- see untrack_domain(), which
         # refuses on the same condition rather than trusting the template.
         "report_auth": report_auth,
+        "source_classes": source_classes,
         "ingested_report_count": conn.execute(
             "SELECT COUNT(*) as n FROM reports WHERE domain_id=?", (domain_id,)).fetchone()["n"],
         "health_score": health_score,

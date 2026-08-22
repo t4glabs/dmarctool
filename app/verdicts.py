@@ -38,10 +38,18 @@ def domain_vibe_verdict(health_score):
     return "bad", "Multiple signals are struggling -- worth working through the open action items below."
 
 
-def senders_verdict(senders):
+def senders_verdict(senders, classifications=None):
+    """`classifications` from app.source_classification.classify_sources.
+    Passing it keeps forwarded mail out of the issue list: a relay that broke
+    our own DKIM signature is not a sender problem, it is someone else's mail
+    server doing something to our message in transit, and nothing at this end
+    can fix it. Counting it as an issue is what made this verdict cry wolf --
+    on pattic.org it accounted for 21 of the 27 sources it was flagging."""
     if not senders:
         return "muted", "No known senders recorded yet."
 
+    classifications = classifications or {}
+    forwarded = 0
     issues = []
     for s in senders:
         bl = s.get("blocklist_status")
@@ -51,13 +59,23 @@ def senders_verdict(senders):
         if pt and pt["status"] in ("ptr_missing", "mismatch"):
             issues.append(f"{s['source_ip']} has a PTR/reverse-DNS problem")
         if s["total_msgs"] and s["total_msgs"] >= 20 and (s["pass_msgs"] / s["total_msgs"]) < 0.95:
-            issues.append(f"{s['source_ip']} is failing authentication ({s['pass_msgs']}/{s['total_msgs']} passed)")
+            kind = (classifications.get(s["source_ip"]) or {}).get("kind")
+            if kind == "forwarded":
+                forwarded += 1
+            elif kind == "third_party":
+                signed = (classifications[s["source_ip"]].get("signed_by") or ["another domain"])[0]
+                issues.append(f"{s['source_ip']} sends as this domain but authenticates as {signed}")
+            else:
+                issues.append(f"{s['source_ip']} is failing authentication ({s['pass_msgs']}/{s['total_msgs']} passed)")
 
+    fwd_note = (f" {forwarded} other source(s) fail only because their mail was forwarded, which is normal "
+                f"and nothing you can fix." if forwarded else "")
     if not issues:
-        return "ok", f"✅ All {len(senders)} known sender(s) look healthy -- no blocklist, PTR, or authentication problems."
+        return "ok", (f"✅ All {len(senders)} known sender(s) look healthy -- no blocklist, PTR, or "
+                      f"authentication problems.{fwd_note}")
     shown = "; ".join(issues[:3])
     more = f" (+{len(issues) - 3} more)" if len(issues) > 3 else ""
-    return "bad", f"⚠️ {len(issues)} sender issue(s) need attention: {shown}{more}."
+    return "bad", f"⚠️ {len(issues)} sender issue(s) need attention: {shown}{more}.{fwd_note}"
 
 
 def provider_verdict(providers):

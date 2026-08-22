@@ -486,3 +486,14 @@ code { background: var(--card-raised); padding: 0.1rem 0.35rem; border-radius: 4
   min-width: 1.4rem; text-align: right; font-weight: 600; flex: none;
 }
 .spf-cost.zero { color: var(--muted); font-weight: 400; }
+
+/* The senders table is the widest in the app (9 columns since the Kind column
+   was added), so it scrolls sideways on most screens. Pin the IP column: it's
+   the row's identity, and scrolling it out of view leaves the reader looking
+   at facts about a machine they can no longer name. */
+.senders-table th:first-child, .senders-table td:first-child {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--card);
+  box-shadow: 1px 0 0 var(--border);
+}
+.senders-table tr:hover td:first-child { background: var(--raised, var(--card-raised)); }

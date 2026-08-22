@@ -588,11 +588,21 @@
       </p>
       <div class="verdict {{ verdicts.senders[0] }}">{{ verdicts.senders[1] }}</div>
       <div class="table-wrap">
-      <table>
-        <tr><th>Source IP</th><th>Msgs</th><th>Pass rate</th><th>First seen</th><th>Last seen</th><th>Blocklist</th><th>PTR/rDNS</th><th>What is this?</th></tr>
+      <table class="senders-table">
+        <tr><th>Source IP</th><th>Kind</th><th>Msgs</th><th>Pass rate</th><th>First seen</th><th>Last seen</th><th>Blocklist</th><th>PTR/rDNS</th><th>What is this?</th></tr>
         {% for s in senders %}
+        {% set cls = source_classes.get(s.source_ip) %}
         <tr>
           <td>{{ s.source_ip }}</td>
+          <td>
+            {% if cls %}
+              {% set badge = {'aligned':'ok','forwarded':'muted','third_party':'warn','unverified':'bad','unknown':'muted'}[cls.kind] %}
+              <span class="badge {{ badge }}" title="{{ cls.help }}">{{ cls.label }}</span>
+              {# Only worth saying when the identity is BORROWED. "signs as pattic.org"
+                 under a passing pattic.org source just restates the column next to it. #}
+              {% if cls.kind == 'third_party' and cls.signed_by %}<div class="muted" style="font-size:0.72rem; margin-top:0.15rem;">signs as {{ cls.signed_by[0] }}</div>{% endif %}
+            {% else %}<span class="muted">-</span>{% endif %}
+          </td>
           <td>{{ s.total_msgs }}</td>
           <td>{{ "%.0f"|format(100 * s.pass_msgs / s.total_msgs) if s.total_msgs else "-" }}%</td>
           <td>{{ s.first_seen_date }}</td>
