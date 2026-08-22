@@ -689,3 +689,18 @@ CREATE TABLE IF NOT EXISTS access_log (
     ip          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_access_log_ts ON access_log(ts);
+
+-- External-destination authorization for DMARC report addresses (RFC 7489 s7.1).
+-- One row per (domain, destination) per check, kept as history like dns_checks
+-- so a destination that silently loses its authorization is visible as a change
+-- rather than only as a current state.
+CREATE TABLE IF NOT EXISTS report_auth_checks (
+    id                 INTEGER PRIMARY KEY,
+    domain_id          INTEGER NOT NULL REFERENCES domains(id),
+    destination_domain TEXT NOT NULL,
+    status             TEXT NOT NULL,   -- authorized | missing | lookup_failed
+    authorized_via     TEXT,            -- exact | wildcard | NULL
+    note               TEXT,
+    checked_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_report_auth_domain ON report_auth_checks(domain_id, destination_domain, checked_at);

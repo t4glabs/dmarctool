@@ -59,6 +59,7 @@ from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest
 from app.safe_browsing import run_safe_browsing_checks
 from app.mta_sts import run_mta_sts_checks
+from app.report_authorization import latest_report_auth, run_report_auth_checks
 from app.watchlist import build_watchlist
 from app.ingest import ingest_source
 from app.labels import (
@@ -68,6 +69,7 @@ from app.labels import (
 )
 from app.verdicts import (
     dns_history_verdict, domain_vibe_verdict, mailgun_verdict, postmaster_verdict, provider_verdict,
+    report_auth_verdict,
     senders_verdict, ses_account_verdict, ses_identity_verdict, ses_verdict, spf_dkim_verdict, stream_verdict,
 )
 
@@ -185,6 +187,7 @@ def _startup():
         run_listmonk_content_sync(c, verbose=False)
         run_safe_browsing_checks(c, verbose=False)
         run_mta_sts_checks(c, verbose=False)
+        run_report_auth_checks(c, verbose=False)
         run_domain_expiry_checks(c, verbose=False)
         run_report_emails(c, verbose=False)
         prune_old_access_log(c, retention_days=int(ensure_default_settings(c)["access_log_retention_days"]))
@@ -407,6 +410,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     dns_history = conn.execute(
         "SELECT * FROM dns_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 15", (domain_id,)
     ).fetchall()
+    report_auth = latest_report_auth(conn, domain_id)
     safe_browsing = conn.execute(
         "SELECT * FROM safe_browsing_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
     ).fetchone()
@@ -680,6 +684,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "streams": stream_verdict(streams),
         "spf_dkim": spf_dkim_verdict(spf_checks, dkim_checks),
         "dns_history": dns_history_verdict(dns_history),
+        "report_auth": report_auth_verdict(report_auth),
         "mailgun": mailgun_verdict(mailgun_stats, float(settings["mailgun_bounce_rate_warn"]), float(settings["mailgun_complaint_rate_warn"])),
         "ses": ses_verdict(ses_stats, float(settings["ses_bounce_rate_warn"]), float(settings["ses_complaint_rate_warn"])),
         "postmaster": postmaster_verdict(postmaster_compliance),
@@ -693,6 +698,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "domain": domain,
         # Gates the "stop tracking" control -- see untrack_domain(), which
         # refuses on the same condition rather than trusting the template.
+        "report_auth": report_auth,
         "ingested_report_count": conn.execute(
             "SELECT COUNT(*) as n FROM reports WHERE domain_id=?", (domain_id,)).fetchone()["n"],
         "health_score": health_score,
@@ -1190,6 +1196,7 @@ def run_checks():
     run_listmonk_content_sync(conn, verbose=False)
     run_safe_browsing_checks(conn, verbose=False)
     run_mta_sts_checks(conn, verbose=False)
+    run_report_auth_checks(conn, verbose=False)
     run_domain_expiry_checks(conn, verbose=False)
     return RedirectResponse(
         "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, Safe Browsing, MTA-STS, and domain expiry checks refreshed.",

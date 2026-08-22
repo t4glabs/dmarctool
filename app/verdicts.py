@@ -120,6 +120,26 @@ def spf_dkim_verdict(spf_checks, dkim_checks):
     return "bad", f"⚠️ {shown}{more}."
 
 
+def report_auth_verdict(report_auth):
+    """Deliberately 'warn', never 'bad': as of the first run every domain
+    reporting to aikyamfellows.org lacked its authorization record while
+    Google, Outlook, GoDaddy and Zoho were all still delivering reports.
+    Calling a latent standards gap a failure would be false, and would train
+    the reader to discount the badges that do mean something."""
+    if not report_auth:
+        return "muted", "No external report addresses to check."
+    missing = [c for c in report_auth if c["status"] == "missing"]
+    failed = [c for c in report_auth if c["status"] == "lookup_failed"]
+    if missing:
+        names = ", ".join(c["destination_domain"] for c in missing[:3])
+        return "warn", (f"⚠️ {names} hasn't published a record permitting it to collect this domain's "
+                        f"reports. Reports are still arriving, so this is housekeeping -- but a strict "
+                        f"provider would stop sending them silently.")
+    if failed:
+        return "muted", "Couldn't check the permission record this time (DNS lookup failed)."
+    return "ok", f"✅ All {len(report_auth)} report destination(s) are properly authorized."
+
+
 def dns_history_verdict(dns_history):
     if not dns_history:
         return "muted", "No DNS checks recorded yet."
