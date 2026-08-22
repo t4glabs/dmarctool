@@ -12,6 +12,7 @@ after each ingest.
 
 import csv
 import io
+import json as _json
 import re
 import secrets
 import shutil
@@ -42,7 +43,7 @@ from app.charts import (
     disposition_donut_chart, health_score_sparkline, metric_trend_chart, pass_rate_sparkline,
     provider_stacked_bar_chart, spam_rate_sparkline, vibe_distribution_donut, volume_bar_chart,
 )
-from app.compliance import run_compliance_checks
+from app.compliance import flatten_spf_tree, run_compliance_checks
 from app.config import get_secret
 from app.db import get_connection, get_or_create_domain, init_db
 from app.dns_check import check_domain, discover_untracked_subdomains, run_dns_checks
@@ -523,6 +524,18 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "SELECT * FROM spf_checks WHERE domain_id=? AND checked_at = (SELECT MAX(checked_at) FROM spf_checks sc2 WHERE sc2.domain_id=spf_checks.domain_id AND sc2.spf_domain=spf_checks.spf_domain) ORDER BY spf_domain",
         (domain_id,),
     ).fetchall()
+    # Attach the parsed include tree so the template can show *which* branch
+    # spends the lookups, not just the total (the honest alternative to SPF
+    # flattening -- see compliance.spf_lookup_tree).
+    spf_checks = [dict(c) for c in spf_checks]
+    for c in spf_checks:
+        c["tree_rows"] = []
+        if c.get("lookup_tree"):
+            try:
+                c["tree_rows"] = flatten_spf_tree(_json.loads(c["lookup_tree"]))
+            except (ValueError, TypeError, KeyError):
+                pass  # a malformed stored tree must not take the page down
+
     dkim_checks = conn.execute(
         "SELECT * FROM dkim_checks WHERE domain_id=? AND checked_at = (SELECT MAX(checked_at) FROM dkim_checks dc2 WHERE dc2.domain_id=dkim_checks.domain_id AND dc2.signing_domain=dkim_checks.signing_domain AND dc2.selector=dkim_checks.selector) ORDER BY signing_domain, selector",
         (domain_id,),

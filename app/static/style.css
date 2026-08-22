@@ -473,3 +473,16 @@ code { background: var(--card-raised); padding: 0.1rem 0.35rem; border-radius: 4
 .rate-trend-head { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
 .rate-trend-title { font-weight: 600; font-size: 0.86rem; }
 .rate-trend-value { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* SPF include tree -- nested list under each SPF row, showing which branch
+   spends the 10-lookup budget. */
+.spf-tree-row > td { padding-top: 0; }
+.spf-tree-row summary { cursor: pointer; font-size: 0.82rem; color: var(--muted); padding: 0.2rem 0; }
+.spf-tree-row summary:hover { color: var(--fg); }
+.spf-tree { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.spf-tree li { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.15rem 0; font-size: 0.84rem; }
+.spf-cost {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  min-width: 1.4rem; text-align: right; font-weight: 600; flex: none;
+}
+.spf-cost.zero { color: var(--muted); font-weight: 400; }

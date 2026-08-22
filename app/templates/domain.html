@@ -405,6 +405,30 @@
             {% else %}<span class="badge muted" title="{{ c.note }}">Couldn't check</span>{% endif %}
           </td>
         </tr>
+        {% if c.tree_rows %}
+        <tr class="spf-tree-row">
+          <td colspan="3">
+            <details>
+              <summary title="SPF's 10-lookup limit is spent by the includes in your record. This shows which ones cost what, so you can remove what you no longer use instead of resorting to hard-coding IP addresses.">Where {{ c.spf_domain }}'s {{ c.lookup_count }} lookup{{ 's' if c.lookup_count != 1 else '' }} go</summary>
+              <ul class="spf-tree">
+                {% for t in c.tree_rows %}
+                <li style="margin-left:{{ t.depth * 1.15 }}rem">
+                  <span class="spf-cost{{ ' zero' if not t.total }}">{{ t.total }}</span>
+                  <code>{{ t.via }}:{{ t.domain }}</code>
+                  {% if t.status == 'lookup_failed' %}<span class="badge muted">couldn't check</span>{% endif %}
+                  {% if not t.total and t.leaf %}<span class="muted" style="font-size:0.78rem">free -- lists addresses directly</span>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+              <p class="muted" style="font-size:0.8rem; margin:0.5rem 0 0">
+                Each number is the total lookups that branch costs, including everything nested under it.
+                The biggest is listed first. If a branch belongs to a service you've stopped using,
+                removing that one <code>include:</code> is the safest way to get the budget back.
+              </p>
+            </details>
+          </td>
+        </tr>
+        {% endif %}
         {% endfor %}
       </table>
       </div>

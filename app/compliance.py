@@ -18,6 +18,7 @@ drift and blocklist checks.
 """
 
 import argparse
+import json
 import base64
 import ipaddress
 import re
@@ -104,51 +105,134 @@ def _spf_record_for(domain, timeout=5.0):
     return ""
 
 
-def _count_spf_lookups(domain, timeout, depth, seen):
+def _spf_tree(domain, timeout, depth, seen):
+    """One traversal that both counts lookups and records where they went.
+
+    Returns {"domain", "record", "status", "own", "total", "children", "note"}
+    where `own` is the lookups this record spends directly and `total` adds
+    everything its includes/redirects spend underneath it.
+
+    Counting semantics are deliberately identical to the flat counter this
+    replaced -- same shared `seen` set (a domain reached twice is not charged
+    twice, which also stops include loops), same depth guard, same >30 bail --
+    because those numbers are already stored, already shown, and already
+    compared against the limit. This adds attribution, not a new opinion
+    about what counts.
+    """
+    node = {"domain": domain, "record": None, "status": "ok", "own": 0,
+            "total": 0, "children": [], "note": None}
+
     if depth > 10 or domain in seen:
-        return 0, "ok", None
+        return node
     seen.add(domain)
 
     record = _spf_record_for(domain, timeout)
     if record is None:
-        return 0, "lookup_failed", f"could not fetch SPF record for {domain}"
+        node["status"] = "lookup_failed"
+        node["note"] = f"could not fetch SPF record for {domain}"
+        return node
     if record == "":
-        return 0, "ok", None if depth else "missing"
+        if not depth:
+            node["status"] = "missing"
+        return node
+    node["record"] = record
 
-    count = 0
     for token in record.split()[1:]:
         if token.startswith(("+", "-", "~", "?")):
             token = token[1:]
+
         if "=" in token:
             key, _, target = token.partition("=")
             if key.lower() == "redirect" and target:
-                count += 1
-                sub_count, sub_status, sub_note = _count_spf_lookups(target, timeout, depth + 1, seen)
-                if sub_status == "lookup_failed":
-                    return count, "lookup_failed", sub_note
-                count += sub_count
+                node["own"] += 1
+                child = _spf_tree(target, timeout, depth + 1, seen)
+                child["via"] = "redirect"
+                node["children"].append(child)
+                if child["status"] == "lookup_failed":
+                    node["status"] = "lookup_failed"
+                    node["note"] = child["note"]
+                    node["total"] = node["own"] + sum(c["total"] for c in node["children"])
+                    return node
             continue
+
         mech = token.split(":", 1)[0].split("/", 1)[0].lower()
         target = token.split(":", 1)[1] if ":" in token else None
+
         if mech == "include" and target:
-            count += 1
-            sub_count, sub_status, sub_note = _count_spf_lookups(target, timeout, depth + 1, seen)
-            if sub_status == "lookup_failed":
-                return count, "lookup_failed", sub_note
-            count += sub_count
+            node["own"] += 1
+            child = _spf_tree(target, timeout, depth + 1, seen)
+            child["via"] = "include"
+            node["children"].append(child)
+            if child["status"] == "lookup_failed":
+                node["status"] = "lookup_failed"
+                node["note"] = child["note"]
+                node["total"] = node["own"] + sum(c["total"] for c in node["children"])
+                return node
         elif mech in SPF_LOOKUP_MECHANISMS:
-            count += 1
-        if count > 30:  # safety cap -- we already know it's well over the limit
-            return count, "over_limit_probably", None
-    return count, "ok", None
+            node["own"] += 1
+
+        running = node["own"] + sum(c["total"] for c in node["children"])
+        if running > 30:  # already far past the limit; stop burning lookups
+            node["status"] = "over_limit_probably"
+            node["total"] = running
+            return node
+
+    node["total"] = node["own"] + sum(c["total"] for c in node["children"])
+    return node
 
 
-def count_spf_lookups(domain: str, timeout: float = 5.0):
-    """Returns (lookup_count, status, note). status: 'ok'|'missing'|'lookup_failed'."""
-    count, status, note = _count_spf_lookups(domain, timeout, 0, set())
+def _tree_to_result(domain, tree):
+    """Same (count, status, note) shape count_spf_lookups returns, from an
+    already-computed tree -- so run_compliance_checks keeps its existing
+    logic while traversing DNS only once."""
+    count, status, note = tree["total"], tree["status"], tree["note"]
     if status in ("lookup_failed", "missing"):
         return count, status, note or (f"no SPF (v=spf1) record found at {domain}" if status == "missing" else None)
     return count, "ok", None
+
+
+def spf_lookup_tree(domain: str, timeout: float = 5.0) -> dict:
+    """Public entry point: the full include tree for one SPF domain, with
+    lookups attributed per branch.
+
+    This is the honest alternative to the SPF flattening these tools sell.
+    Flattening copies someone else's IP addresses into your record, where
+    they go stale silently and take your mail with them. Knowing that one
+    unused vendor costs four of your ten lookups lets you *remove* it, which
+    is the actual fix and cannot break later."""
+    return _spf_tree(domain, timeout, 0, set())
+
+
+def count_spf_lookups(domain: str, timeout: float = 5.0):
+    """Returns (lookup_count, status, note). status: 'ok'|'missing'|'lookup_failed'.
+    Kept as-is for existing callers; now derived from the tree so there is one
+    traversal and one set of DNS queries, not two that could disagree."""
+    tree = spf_lookup_tree(domain, timeout)
+    count, status, note = tree["total"], tree["status"], tree["note"]
+    if status in ("lookup_failed", "missing"):
+        return count, status, note or (f"no SPF (v=spf1) record found at {domain}" if status == "missing" else None)
+    return count, "ok", None
+
+
+def flatten_spf_tree(node, depth=0, out=None):
+    """The tree as a flat list of (depth, via, domain, own, total, status) rows,
+    which is what a template can actually iterate over. Sorted so the branch
+    spending the most lookups comes first at every level -- the whole point is
+    to answer "what do I remove", so the biggest cost belongs at the top."""
+    if out is None:
+        out = []
+    for child in sorted(node.get("children", []), key=lambda c: -c["total"]):
+        out.append({
+            "depth": depth,
+            "via": child.get("via", "include"),
+            "domain": child["domain"],
+            "own": child["own"],
+            "total": child["total"],
+            "status": child["status"],
+            "leaf": not child.get("children"),
+        })
+        flatten_spf_tree(child, depth + 1, out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +426,8 @@ def _run_spf(conn, recheck_hours, warn_threshold, verbose):
     results = {}
     if spf_domains:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(spf_domains))) as ex:
-            results = dict(zip(spf_domains, ex.map(count_spf_lookups, spf_domains)))
+            trees = dict(zip(spf_domains, ex.map(spf_lookup_tree, spf_domains)))
+        results = {d: _tree_to_result(d, t) for d, t in trees.items()}
 
     for (domain_id, spf_domain), domain_name in by_target.items():
         if spf_domain not in results:
@@ -357,8 +442,9 @@ def _run_spf(conn, recheck_hours, warn_threshold, verbose):
                 note = f"{count} DNS lookups (limit 10)"
 
         conn.execute(
-            "INSERT INTO spf_checks (domain_id, spf_domain, status, lookup_count, note) VALUES (?,?,?,?,?)",
-            (domain_id, spf_domain, status, count, note),
+            """INSERT INTO spf_checks (domain_id, spf_domain, status, lookup_count, note, lookup_tree)
+               VALUES (?,?,?,?,?,?)""",
+            (domain_id, spf_domain, status, count, note, json.dumps(trees.get(spf_domain))),
         )
         if verbose:
             print(f"[SPF] {spf_domain} ({domain_name}): {status} -- {note}")

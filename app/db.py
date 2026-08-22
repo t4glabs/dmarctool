@@ -70,6 +70,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         "tracking_open_setting": "INTEGER",
         "tracking_click_setting": "INTEGER",
     })
+    _ensure_columns(conn, "spf_checks", {
+        # The include tree as JSON: nested, variable-depth, and only ever read
+        # back whole for one domain's display -- so a column beats a table of
+        # rows we'd immediately have to re-nest.
+        "lookup_tree": "TEXT",
+    })
     _ensure_columns(conn, "domains", {
         "pinned": "INTEGER NOT NULL DEFAULT 0",
     })
