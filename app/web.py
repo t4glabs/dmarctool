@@ -61,6 +61,7 @@ from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest
 from app.safe_browsing import run_safe_browsing_checks
 from app.source_classification import classify_sources
+from app.source_view import shared_cause_verdict, source_overview
 from app.mta_sts import run_mta_sts_checks
 from app.report_authorization import latest_report_auth, run_report_auth_checks
 from app.watchlist import build_watchlist
@@ -1294,6 +1295,22 @@ def access_log_page(request: Request):
     entries = recent_access_log(conn, limit=300)
     return templates.TemplateResponse(request, "access_log.html", {
         "entries": entries, "retention_days": settings["access_log_retention_days"],
+    })
+
+
+@app.get("/source/{ip}", response_class=HTMLResponse)
+def source_page(request: Request, ip: str):
+    """One sending source across every domain it touches. Everything else in
+    this tool is per-domain, which hides the case where one misconfigured
+    relay creates a separate-looking problem on several domains at once."""
+    conn = get_connection()
+    overview = source_overview(conn, ip)
+    if not overview:
+        return HTMLResponse(f"No mail on record from {ip}", status_code=404)
+    return templates.TemplateResponse(request, "source.html", {
+        "src": overview,
+        "verdict": shared_cause_verdict(overview),
+        "fmt_date": _fmt_date,
     })
 
 

@@ -655,7 +655,7 @@
         {% for s in senders %}
         {% set cls = source_classes.get(s.source_ip) %}
         <tr>
-          <td>{{ s.source_ip }}</td>
+          <td><a href="/source/{{ s.source_ip }}" title="See everything this source does, across all your domains">{{ s.source_ip }}</a></td>
           <td>
             {% if cls %}
               {% set badge = {'aligned':'ok','forwarded':'muted','third_party':'warn','unverified':'bad','unknown':'muted'}[cls.kind] %}

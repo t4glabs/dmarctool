@@ -251,6 +251,38 @@ def _passing_auth_domains(conn, domain_id: int, source_ip: str) -> dict:
     return by_domain
 
 
+def _identity_message_share(conn, domain_id: int, source_ip: str, auth_domain: str) -> float:
+    """What fraction of this source's mail for this domain actually carries a
+    valid signature for `auth_domain`.
+
+    detect_borrowed_sending_identity claims the mail "persistently"
+    authenticates as another domain, but nothing measured that -- any single
+    passing signature anywhere in the source's history was enough. The high
+    volume and multi-day gates hid it; once low-volume evidence paths were
+    added it surfaced immediately, flagging a Microsoft relay as borrowing
+    adityabirla.com's identity on the strength of 1 message out of 5.
+
+    EXISTS rather than a join: a record carries a separate auth-result row per
+    mechanism, so joining counts a message twice when both SPF and DKIM pass
+    for the same domain -- which reported every genuine case as 200%."""
+    total = conn.execute(
+        "SELECT total_msgs FROM known_senders WHERE domain_id=? AND source_ip=?",
+        (domain_id, source_ip),
+    ).fetchone()
+    if not total or not total["total_msgs"]:
+        return 0.0
+    matched = conn.execute(
+        """SELECT SUM(rr.count) AS n
+           FROM report_records rr JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND rr.source_ip = ? AND EXISTS (
+             SELECT 1 FROM record_auth_results ar
+             WHERE ar.record_id = rr.id AND ar.result = 'pass'
+               AND LOWER(TRIM(ar.domain)) = LOWER(?))""",
+        (domain_id, source_ip, auth_domain),
+    ).fetchone()
+    return (matched["n"] or 0) / total["total_msgs"]
+
+
 def _cross_domain_labels(conn, source_ip: str, exclude_domain_id: int):
     """Other tracked domains where this exact IP is already manually
     classified -- the strongest possible identification signal (you already
@@ -612,6 +644,16 @@ def sender_ip_context(conn, domain_id: int, domain_name: str, source_ip: str, ca
 # blip/test -- deliberately short (this is a heuristic tuning constant, same
 # spirit as click_quality.py's thresholds, not a per-user policy choice worth
 # a Settings entry).
+# How much mail a source needs on THIS domain when the same borrowed identity
+# is already proven on another one. Matches source_classification's own
+# minimum -- below a few messages there is no pattern to corroborate, just a
+# coincidence.
+# How much of a source's mail must carry an identity before it counts as that
+# source's identity rather than a one-off passing signature.
+MIN_IDENTITY_SHARE = 0.5
+
+MIN_CORROBORATED_MSGS = 3
+
 MIN_BORROWED_IDENTITY_DAYS = 5
 
 # ESPs commonly dual-sign with their own generic default domain *in addition*
@@ -638,23 +680,90 @@ def detect_borrowed_sending_identity(conn, domain_id: int, domain_name: str, set
     high_fail_rate = float(settings["high_fail_rate_threshold"])
     tracked = {row["name"] for row in conn.execute("SELECT name FROM domains")}
 
+    # Cross-domain corroboration and observed harm, both used below to let a
+    # source qualify on evidence other than its own volume. See the two
+    # alternative paths in the loop.
+    from app.source_view import corroborated_identity_pairs
+    corroborated = corroborated_identity_pairs(
+        conn, high_vol, high_fail_rate, MIN_BORROWED_IDENTITY_DAYS
+    )
+    acted_by_ip = {
+        r["source_ip"]: r["acted"] for r in conn.execute(
+            """SELECT rr.source_ip, SUM(rr.count) AS acted
+               FROM report_records rr JOIN reports r ON r.id = rr.report_id
+               WHERE r.domain_id = ? AND rr.disposition IN ('quarantine','reject')
+               GROUP BY rr.source_ip""",
+            (domain_id,),
+        )
+    }
+
     senders = conn.execute("SELECT * FROM known_senders WHERE domain_id = ?", (domain_id,)).fetchall()
     by_auth_domain = {}
     for s in senders:
         total = s["total_msgs"]
         pass_rate = s["pass_msgs"] / total if total else 0
-        if total < high_vol or pass_rate >= high_fail_rate:
+        # The core signal is never relaxed: this source's mail has to be mostly
+        # FAILING alignment. Everything below only varies how much of it we
+        # need to see before saying so.
+        if pass_rate >= high_fail_rate:
             continue
         span_days = epoch_day(s["last_seen"]) - epoch_day(s["first_seen"])
-        if span_days < MIN_BORROWED_IDENTITY_DAYS:
-            continue
+        acted = acted_by_ip.get(s["source_ip"], 0)
+
         for auth_domain in _passing_auth_domains(conn, domain_id, s["source_ip"]):
             if auth_domain == domain_name or auth_domain in _ESP_DEFAULT_AUTH_DOMAINS:
                 continue
-            bucket = by_auth_domain.setdefault(auth_domain, {"total": 0, "ips": [], "span_days": 0})
+
+            # "Persistently" has to mean something: this identity must account
+            # for most of what the source sends, not just appear once in its
+            # history. Every genuine case measures 100% here; the incidental
+            # ones sit around 20%.
+            if _identity_message_share(conn, domain_id, s["source_ip"], auth_domain) < MIN_IDENTITY_SHARE:
+                continue
+
+            # Three ways to qualify, in descending order of independence.
+            elsewhere = [d for d in corroborated.get((s["source_ip"], auth_domain), [])
+                         if d != domain_name]
+            if total >= high_vol and span_days >= MIN_BORROWED_IDENTITY_DAYS:
+                # (a) Proven here, on this domain's own evidence.
+                basis = None
+            elif elsewhere and total >= MIN_CORROBORATED_MSGS:
+                # (b) Same source, same borrowed identity, already proven on
+                # another of your domains. Requiring independent weeks of
+                # evidence per domain meant the identical misconfiguration
+                # went unreported on the quieter ones -- 69.72.42.14 raised an
+                # item on aikyamhq.com (49 msgs) and nothing on tinybridge.in
+                # (4 msgs), despite being one setup with one fix.
+                basis = (f"This is the same pattern already confirmed on {', '.join(sorted(elsewhere))}, "
+                         f"from the same sending computer, so it is one setup to fix rather than "
+                         f"{len(elsewhere) + 1} separate problems.")
+            elif acted and total >= MIN_CORROBORATED_MSGS:
+                # (c) Providers have already quarantined or rejected some of
+                # it. Waiting for a volume threshold to be crossed before
+                # mentioning measurable harm is backwards -- but harm lowers
+                # the volume bar rather than removing it. Without the floor
+                # this fired on nine separate Google and Microsoft IPs
+                # carrying 1-2 forwarded pattic.org messages each: at that
+                # size a single quarantined message is indistinguishable from
+                # a forward or a stray probe, so it identifies nothing.
+                basis = (f"Flagged despite the low volume because {acted} message(s) from this source have "
+                         f"already been sent to spam or blocked outright, so the damage is measurable "
+                         f"rather than hypothetical.")
+            else:
+                continue
+
+            bucket = by_auth_domain.setdefault(
+                auth_domain, {"total": 0, "ips": [], "span_days": 0, "basis": None})
             bucket["total"] += total
             bucket["ips"].append(s["source_ip"])
             bucket["span_days"] = max(bucket["span_days"], span_days)
+            # A finding proven on this domain's own evidence never carries an
+            # explanatory caveat, even if another source in the same bucket
+            # needed one.
+            if basis and bucket["basis"] is not False:
+                bucket["basis"] = basis
+            if basis is None:
+                bucket["basis"] = False
 
     findings = []
     for auth_domain, info in by_auth_domain.items():
@@ -671,7 +780,8 @@ def detect_borrowed_sending_identity(conn, domain_id: int, domain_name: str, set
                        f"own sending domain with that provider. As long as this continues, raising {domain_name}'s "
                        f"DMARC enforcement (pct) will quarantine/reject a growing share of this mail -- if you "
                        f"don't plan to verify {domain_name} separately, keep its policy at p=none (or a low pct) "
-                       f"rather than following a ramp-up recommendation."),
+                       f"rather than following a ramp-up recommendation."
+                       + (f" {info['basis']}" if info.get("basis") else "")),
         })
     return findings
 
