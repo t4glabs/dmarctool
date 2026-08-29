@@ -221,12 +221,38 @@ def discover_untracked_subdomains(conn, verbose: bool = True) -> None:
     tracked = {row["name"] for row in conn.execute("SELECT name FROM domains")}
     domains = all_domains(conn)
 
-    # Clear any previously-flagged subdomain that's since been added as its
-    # own tracked domain -- the gap this check exists for is now closed.
+    # A subdomain we ALREADY monitor as a sending source -- a matched Mailgun
+    # sending domain, or an SES configuration set (dots->hyphens, the same
+    # naming convention ses_events.py uses) -- is not an unknown blind spot.
+    # This check exists for subdomains "nobody told DMARCTool about"; flagging
+    # one the operator deliberately set up and that the tool is already
+    # tracking the sending for contradicts its own premise ("zero visibility
+    # until now") and just reads as noise. Only genuinely-unseen subdomains
+    # with their own DMARC record are worth surfacing.
+    mailgun_senders = {row["mailgun_domain"] for row in conn.execute("SELECT DISTINCT mailgun_domain FROM mailgun_stats")}
+    ses_config_sets = {row["configuration_set"] for row in conn.execute("SELECT DISTINCT configuration_set FROM ses_event_counts")}
+    # SES configuration sets are commonly named after the APEX domain
+    # (aikyamjobs.org -> "aikyamjobs-org"), even though the mail is sent from a
+    # subdomain (mails.aikyamjobs.org). So an exact subdomain->config-set match
+    # misses it. If a domain already has SES sending data, we ARE monitoring its
+    # SES bounces/complaints/deliveries -- so its sending subdomains aren't a
+    # blind spot either. (Safe: a _dmarc record under this domain can only be
+    # published by whoever controls the domain's DNS, i.e. the operator, so a
+    # sending-prefix subdomain here is theirs, not an attacker's.)
+    ses_domain_ids = {row["domain_id"] for row in conn.execute("SELECT DISTINCT domain_id FROM ses_event_counts")}
+
+    def _covered(name, parent_id):
+        return (name in mailgun_senders
+                or name.replace(".", "-") in ses_config_sets
+                or parent_id in ses_domain_ids)
+
+    # Clear any previously-flagged subdomain that's since been added as its own
+    # tracked domain, or that we've now recognised as a known sending source --
+    # either way the gap this check exists for is closed.
     for item in conn.execute(
-        "SELECT id, ref_key FROM action_items WHERE category='untracked_sending_subdomain' AND status='open'"
+        "SELECT id, ref_key, domain_id FROM action_items WHERE category='untracked_sending_subdomain' AND status='open'"
     ).fetchall():
-        if item["ref_key"] in tracked:
+        if item["ref_key"] in tracked or _covered(item["ref_key"], item["domain_id"]):
             conn.execute(
                 "UPDATE action_items SET status='dismissed', resolved_at=datetime('now') WHERE id=?",
                 (item["id"],),
@@ -237,6 +263,7 @@ def discover_untracked_subdomains(conn, verbose: bool = True) -> None:
         for domain in domains
         for prefix in SENDING_SUBDOMAIN_PREFIXES
         if f"{prefix}.{domain['name']}" not in tracked
+        and not _covered(f"{prefix}.{domain['name']}", domain["id"])
     ]
     if not candidates:
         conn.commit()

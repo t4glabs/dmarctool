@@ -27,6 +27,7 @@ separately against wall-clock time.
 
 import argparse
 import datetime
+import ipaddress
 import socket
 import subprocess
 from collections import Counter
@@ -57,6 +58,7 @@ DEFAULT_SETTINGS = {
     "mailgun_events_window_days": "7",   # lookback window for the per-sender-identity breakdown (event-log pull, kept shorter than the stats window since it's heavier per domain)
     "mailgun_bounce_rate_warn": "0.05",  # bounce rate (of accepted) that triggers a flag
     "mailgun_complaint_rate_warn": "0.001",  # complaint rate (of accepted) that triggers a flag
+    "mailgun_min_volume_for_rate": "50",  # don't flag a bounce/complaint RATE until this many were accepted -- 1 bounce out of 11 is 9% but meaningless noise
     "postmaster_recheck_hours": "24",     # Postmaster Tools data itself lags/aggregates daily
     "postmaster_stats_window_days": "30", # lookback window for the SPAM_RATE / delivery-error metrics
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
@@ -95,6 +97,7 @@ DEFAULT_SETTINGS = {
     "report_sender_name": "Domain Health",           # display name for the domain-health email's From header
     "report_subject_template": "Your {domain} domain health update from aikyam",  # {domain} substituted at send time
     "report_signoff_name": "The aikyam Team",         # sign-off name at the bottom of the domain-health email
+    "report_reply_to": "jinso@aikyamfellows.org",     # where replies go, since the From address isn't a monitored inbox
 }
 
 
@@ -190,7 +193,23 @@ def current_policy_run(conn, domain_id: int):
 # 2/3. Known senders + new/failing sender flags
 # ---------------------------------------------------------------------------
 
+def _valid_ip(ip: str) -> bool:
+    """Whether `ip` is a real IPv4/IPv6 address. Gate for the lookup helpers
+    below: `ip` reaches them from a URL path (/source/<ip>), and passing an
+    unvalidated value straight to the `whois` command is argument injection
+    (e.g. a leading '-' read as a flag). Not shell injection -- calls use list
+    args, no shell -- but a real address is the only thing these should ever
+    look up."""
+    try:
+        ipaddress.ip_address((ip or "").strip())
+        return True
+    except ValueError:
+        return False
+
+
 def _reverse_dns(ip: str, timeout: float = 1.5):
+    if not _valid_ip(ip):
+        return None
     try:
         socket.setdefaulttimeout(timeout)
         host, _, _ = socket.gethostbyaddr(ip)
@@ -330,40 +349,54 @@ def _guess_provider(ptr: str):
 
 
 _WHOIS_ORG_FIELDS = ("orgname:", "organization:", "org-name:", "descr:", "netname:")
+_WHOIS_COUNTRY_FIELDS = ("country:", "country-code:")
 
 
-def _whois_org(ip: str, timeout: float = 4.0):
-    """Best-effort network/organization owner for an IP via the `whois` CLI
-    (already present on macOS, same "shell out to a standard tool" pattern as
-    dig elsewhere in this codebase) -- a fallback identification signal for
-    when reverse DNS doesn't match a known ESP pattern at all, e.g. a generic
-    cloud-VM hostname like "bc.googleusercontent.com" that doesn't say
-    anything about which specific app/service is actually running there.
-    WHOIS output format varies a lot by registry (ARIN/RIPE/APNIC/etc all use
-    different field names), so this only tries a handful of common ones
-    rather than fully parsing it -- same "good enough, not exhaustive"
-    tradeoff as the PTR pattern list above. Slow and sometimes rate-limited
-    by upstream registries -- background-job use only, never call this from
-    a live page render (see guess_sender_identity's skip_lookup)."""
+def _whois_lookup(ip: str, timeout: float = 4.0):
+    """(org, country) for an IP via the `whois` CLI (already present on macOS,
+    same "shell out to a standard tool" pattern as dig elsewhere) -- a fallback
+    identification signal for when reverse DNS doesn't match a known ESP
+    pattern, e.g. a generic cloud-VM hostname that says nothing about the app
+    running there, plus the registry country code shown next to caught-
+    impersonation examples. WHOIS output format varies a lot by registry
+    (ARIN/RIPE/APNIC/etc), so this only tries a handful of common field names
+    rather than fully parsing it -- same "good enough, not exhaustive" tradeoff
+    as the PTR pattern list above. Slow and sometimes rate-limited by upstream
+    registries -- background-job use only, never from a live page render (see
+    guess_sender_identity's skip_lookup). Returns (None, None) on failure."""
+    if not _valid_ip(ip):
+        return None, None
     try:
         out = subprocess.run(["whois", ip], capture_output=True, text=True, timeout=timeout)
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
+        return None, None
     if out.returncode != 0:
-        return None
+        return None, None
     lines = [line.strip() for line in out.stdout.splitlines()]
-    # Check by field *priority*, not document order -- a field like NetName
-    # (a short internal registry code, e.g. "GOOGL-46") often appears earlier
-    # in the raw text than the more human-readable OrgName/Organization, so
-    # scanning line-by-line and stopping at the first match of any field
-    # would pick the less useful one.
-    for field in _WHOIS_ORG_FIELDS:
-        for line in lines:
-            if line.lower().startswith(field):
-                value = line.split(":", 1)[1].strip()
-                if value and value.upper() not in ("NA", "N/A", ""):
-                    return value
-    return None
+
+    def _first(fields):
+        # Check by field *priority*, not document order -- a field like NetName
+        # (a short internal registry code, e.g. "GOOGL-46") often appears
+        # earlier in the raw text than the human-readable OrgName, so scanning
+        # line-by-line and stopping at the first match of any field would pick
+        # the less useful one.
+        for field in fields:
+            for line in lines:
+                if line.lower().startswith(field):
+                    value = line.split(":", 1)[1].strip()
+                    if value and value.upper() not in ("NA", "N/A", ""):
+                        return value
+        return None
+
+    org = _first(_WHOIS_ORG_FIELDS)
+    country = _first(_WHOIS_COUNTRY_FIELDS)
+    return org, (country.upper()[:2] if country else None)
+
+
+def _whois_org(ip: str, timeout: float = 4.0):
+    """Just the org owner -- back-compat wrapper over _whois_lookup for callers
+    that don't need the country."""
+    return _whois_lookup(ip, timeout)[0]
 
 
 WHOIS_CACHE_RECHECK_HOURS = 24 * 30  # IP network ownership rarely changes; avoid re-hitting rate-limited registries
@@ -384,14 +417,49 @@ def cached_whois_org(conn, ip: str, allow_live: bool):
             return row["org"]
     if not allow_live:
         return None
-    org = _whois_org(ip)
+    org, country = _whois_lookup(ip)
     conn.execute(
-        """INSERT INTO ip_whois_cache (source_ip, org, checked_at) VALUES (?, ?, datetime('now'))
-           ON CONFLICT(source_ip) DO UPDATE SET org=excluded.org, checked_at=excluded.checked_at""",
-        (ip, org),
+        """INSERT INTO ip_whois_cache (source_ip, org, country, checked_at) VALUES (?, ?, ?, datetime('now'))
+           ON CONFLICT(source_ip) DO UPDATE SET org=excluded.org, country=excluded.country, checked_at=excluded.checked_at""",
+        (ip, org, country),
     )
     conn.commit()
     return org
+
+
+def ip_label_map(conn) -> dict:
+    """{source_ip: label} for every operator-assigned sender label -- read once
+    and looked up per row when rendering the senders table, so one query covers
+    the whole page."""
+    return {row["source_ip"]: row["label"] for row in conn.execute("SELECT source_ip, label FROM ip_labels")}
+
+
+def get_ip_label(conn, ip: str):
+    row = conn.execute("SELECT label FROM ip_labels WHERE source_ip=?", (ip,)).fetchone()
+    return row["label"] if row else None
+
+
+def set_ip_label(conn, ip: str, label: str) -> None:
+    """Set, or clear (empty/blank label), the friendly label for a sending IP.
+    Display-only -- see the ip_labels table comment."""
+    label = (label or "").strip()
+    if label:
+        conn.execute(
+            """INSERT INTO ip_labels (source_ip, label) VALUES (?, ?)
+               ON CONFLICT(source_ip) DO UPDATE SET label=excluded.label""",
+            (ip, label),
+        )
+    else:
+        conn.execute("DELETE FROM ip_labels WHERE source_ip=?", (ip,))
+    conn.commit()
+
+
+def cached_whois_country(conn, ip: str):
+    """Registry country code for an IP from the WHOIS cache, or None. Read-only
+    (never a live lookup) -- safe to call from a page render; a background pass
+    populates the cache via cached_whois_org(allow_live=True)."""
+    row = conn.execute("SELECT country FROM ip_whois_cache WHERE source_ip=?", (ip,)).fetchone()
+    return row["country"] if row else None
 
 
 # Consumer/residential/mobile ISPs never legitimately run bulk email

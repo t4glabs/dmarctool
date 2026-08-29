@@ -607,7 +607,18 @@ CREATE TABLE IF NOT EXISTS domain_health_snapshots (
 CREATE TABLE IF NOT EXISTS ip_whois_cache (
     source_ip  TEXT PRIMARY KEY,
     org        TEXT,
+    country    TEXT,
     checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Operator-assigned friendly labels for a sending IP (e.g. "YAMM" for the
+-- Google/Gmail IPs a mail-merge tool sends from). Global, not per-domain: a
+-- given IP means the same thing wherever it sends, and the cross-domain source
+-- view shows it once. Display-only -- never affects bounce/spam/auth detection.
+CREATE TABLE IF NOT EXISTS ip_labels (
+    source_ip  TEXT PRIMARY KEY,
+    label      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_health_snapshots_domain ON domain_health_snapshots(domain_id, snapshot_date);

@@ -47,6 +47,14 @@ MAX_WORKERS = 6
 STATS_METRICS = {"spam_rate": "SPAM_RATE", "delivery_error_rate": "DELIVERY_ERROR_RATE",
                   "delivery_error_count": "DELIVERY_ERROR_COUNT"}
 
+# Google's published "keep under" spam-rate line (0.10%). When Postmaster marks
+# USER_REPORTED_SPAM_RATE as NEEDS_WORK but the MEASURED rate is at/below this,
+# the verdict is a low-volume/data-confidence artifact (Gmail hasn't seen enough
+# mail to score it), not real complaints -- the same shape as DELIVERABILITY's
+# MESSAGE_VOLUME_LOW. Raising an action item then produces the nonsensical
+# "0.000% spam, needs work, prune your list" flag the user hit, so we don't.
+RECOMMENDED_SPAM_RATE_CEILING = 0.001
+
 
 def _refresh_access_token():
     client_id = get_secret("GOOGLE_POSTMASTER_CLIENT_ID")
@@ -307,7 +315,18 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
                 print(f"[postmaster]   {requirement}: {status}" + (f" ({reason})" if reason else ""))
 
             ref_key = f"{postmaster_domain}:{requirement}"
-            if status == "NEEDS_WORK":
+            # A spam-rate 'needs work' verdict is only a real, actionable
+            # problem when the MEASURED rate is actually elevated. At/below
+            # Google's recommended ceiling it's a data-confidence artifact on
+            # low Gmail volume -- record the status for the dashboard, but don't
+            # raise (or keep) an action item claiming people are marking you as
+            # spam when the number is 0%.
+            measured = stats.get("spam_rate") if stats else None
+            flag = status == "NEEDS_WORK" and not (
+                requirement == "USER_REPORTED_SPAM_RATE"
+                and measured is not None and measured <= RECOMMENDED_SPAM_RATE_CEILING
+            )
+            if flag:
                 spam_note = ""
                 if requirement == "USER_REPORTED_SPAM_RATE" and stats and stats.get("spam_rate") is not None:
                     spam_note = f" (measured spam rate: {stats['spam_rate']:.3%} over the last {window_days}d)"

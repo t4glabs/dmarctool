@@ -237,6 +237,14 @@ def postmaster_remediation(ref_key, current_p=None, current_pct=None, current_sp
         return "No DMARC record found for this domain. Publish one in DNS -- p=none is a fine starting point (see the Authentication tab)."
 
     if requirement == "USER_REPORTED_SPAM_RATE":
+        # At/below Google's recommended 0.10% ceiling, a "needs work" verdict is
+        # about low Gmail volume/data confidence, not real complaints -- saying
+        # "you're being marked as spam" at 0.000% is just wrong and alarming.
+        if current_spam_rate is not None and current_spam_rate <= 0.001:
+            return (f"Your measured spam rate ({current_spam_rate:.3%}) is within Google's recommended range -- this "
+                    f"\"needs work\" verdict is about Gmail not having enough volume from this domain to score it "
+                    f"confidently, not people marking your mail as spam. It typically clears on its own as consistent "
+                    f"sending builds up; if everything else here is Compliant, there's nothing to actively fix.")
         rate_note = f" (currently {current_spam_rate:.3%})" if current_spam_rate is not None else ""
         return (f"Gmail users are marking your mail as spam more than recommended{rate_note}. Use the "
                 f"\"Download suppressions\" button in this Deliverability & Spam tab (if you send via Mailgun/SES) "
@@ -426,6 +434,11 @@ SETTINGS_META = {
         "help": "If the share of accepted mail marked as spam (via providers that report it back to Mailgun) goes above this, you'll get an action item.",
         "example": "0.001 means a flag once 0.1% or more of your mail gets marked as spam.",
     },
+    "mailgun_min_volume_for_rate": {
+        "label": "Minimum emails before a bounce/complaint rate is flagged",
+        "help": "A percentage means nothing on tiny volume -- 1 bounce out of 11 emails is '9%' but not a real problem. The bounce/complaint flag stays quiet until at least this many emails were accepted in the window, so you only hear about rates that are actually meaningful. Doesn't affect the numbers shown, only whether they raise an action item.",
+        "example": "50 means a bounce/complaint rate won't be flagged unless you sent at least 50 emails in the window.",
+    },
     "postmaster_recheck_hours": {
         "label": "Minimum gap between Postmaster Tools polls",
         "help": "How often we re-fetch spam rate and compliance status from Google. Postmaster Tools' own data is aggregated/lagged by about a day, so polling more often than this wouldn't show anything new.",
@@ -571,6 +584,11 @@ SETTINGS_META = {
         "help": "The name shown at the very bottom of every domain health update email, under \"With care,\".",
         "example": "\"The aikyam Team\" -- shown exactly as typed, no substitution.",
     },
+    "report_reply_to": {
+        "label": "Domain health email -- reply-to address",
+        "help": "Where a recipient's reply goes. The email is sent from an unmonitored address, so this points replies at an inbox someone actually reads. Leave blank to send with no reply-to (replies would then bounce back to the unmonitored sending address).",
+        "example": "\"jinso@aikyamfellows.org\" -- when a recipient hits Reply, their message is addressed here instead of the sending address.",
+    },
 }
 
 # Purely a display grouping for the Settings page (long flat list -> grouped
@@ -593,7 +611,7 @@ SETTINGS_GROUPS = [
     ]),
     ("📨 Mailgun", [
         "mailgun_recheck_hours", "mailgun_stats_window_days", "mailgun_events_window_days",
-        "mailgun_bounce_rate_warn", "mailgun_complaint_rate_warn",
+        "mailgun_bounce_rate_warn", "mailgun_complaint_rate_warn", "mailgun_min_volume_for_rate",
     ]),
     ("📮 Google Postmaster Tools", [
         "postmaster_recheck_hours", "postmaster_stats_window_days",
@@ -622,7 +640,8 @@ SETTINGS_GROUPS = [
         "access_log_retention_days",
     ]),
     ("📧 Domain health email reports", [
-        "report_emails_enabled", "report_sender_name", "report_subject_template", "report_signoff_name",
+        "report_emails_enabled", "report_sender_name", "report_reply_to",
+        "report_subject_template", "report_signoff_name",
     ]),
 ]
 

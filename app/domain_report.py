@@ -31,6 +31,7 @@ import datetime
 
 from app.analysis import (cached_whois_org, current_policy_run, domain_window_stats, ensure_default_settings,
                            epoch_day, guess_sender_identity, recent_campaigns, sending_cadence)
+from app.source_classification import caught_impersonation
 from app.config import get_secret
 from app.db import get_connection, init_db
 from app.domain_expiry import days_until
@@ -86,8 +87,23 @@ _PROBLEM_STORY = {
     "sending_cadence_irregular": ("your newsletters haven't been going out on a very consistent schedule lately, "
                                    "and a steady rhythm helps mailbox providers trust your mail more"),
     "domain_expiring_soon": "your website's domain name registration is coming up for renewal soon",
+    "spf_lookup_limit": ("the settings that prove your emails really come from you had grown too complicated for "
+                          "some mail systems to finish checking, which can let a few of your genuine emails be doubted"),
+    "dkim_weak_key": ("the digital signature that vouches for your emails was weaker than today's mail systems "
+                       "expect (or was missing), which can make some of them trust your mail less"),
+    "mta_sts_broken": ("the extra protection that keeps email sent *to* your organization from being quietly "
+                        "intercepted had stopped working the way it should"),
+    "campaign_compliance_issue": ("one of your newsletters was missing some of the formatting mailbox providers "
+                                   "now expect from regular senders, such as a working one-click unsubscribe link"),
+    "display_name_inconsistent": ("the name your newsletters showed as being \"from\" kept changing between sends, "
+                                   "and a steady, recognisable name is part of how readers learn to trust your mail"),
+    # lookalike_domain is reader-facing too, but only ever in the still-open
+    # section: it's a heads-up we monitor, not something Aikyam can "fix" (you
+    # can't un-register someone else's domain), so it's kept out of the "we've
+    # taken care of it" resolved list -- see _RESOLVED_EXCLUDED_CATEGORIES.
+    "lookalike_domain": ("we spotted a web address deliberately registered to look like yours -- the kind that can "
+                          "be used to trick your supporters -- and we're keeping an eye on what it does"),
 }
-_GENERIC_PROBLEM_STORY = "something about your website's email setup needed attention"
 
 # These are operator-facing/internal signals about Aikyam's own workflow or
 # data pipeline (e.g. "haven't ingested reports lately", "here's Aikyam's own
@@ -103,7 +119,22 @@ _GENERIC_PROBLEM_STORY = "something about your website's email setup needed atte
 _OPERATOR_ONLY_CATEGORIES = {
     "ramp_recommendation", "data_stale", "untracked_sending_subdomain",
     "volume_spike",
+    # rua_unauthorized is Aikyam's own report-collection housekeeping (whether
+    # the collecting domain consents to receive reports) -- reports still
+    # arrive, the beneficiary can't act on it, and it's not about their mail's
+    # safety. ses_event_backlog is an internal queue-drain signal. Neither is a
+    # "problem with your website"; both used to fall through to the generic
+    # phrase and, being distinct categories, stacked into identical repeated
+    # lines in the email.
+    "rua_unauthorized", "ses_event_backlog",
 }
+
+# Categories that are real and worth telling a beneficiary about, but never
+# under "what we sorted out for you": Aikyam can't actually resolve them, so
+# "we've taken care of it" would overclaim. A look-alike domain is someone
+# else's registration -- we can watch it and warn, not delete it -- so it only
+# ever appears in the still-open section, framed as something we're monitoring.
+_RESOLVED_EXCLUDED_CATEGORIES = {"lookalike_domain"}
 
 # Still-open categories serious enough to explicitly invite the reader to
 # contact Aikyam directly, rather than just listing the problem and moving on.
@@ -111,6 +142,11 @@ _URGENT_STILL_OPEN_CATEGORIES = {
     "mailgun_reputation", "ses_reputation", "ses_reputation_watch",
     "ses_rejected", "blocklist", "safe_browsing_flagged", "dns_policy_weakened",
     "domain_expiring_soon",
+    # A look-alike domain is a live donor-scam vector; the auth ones (SPF too
+    # complex to check, DKIM signature weak/missing) undermine the proof that
+    # mail is genuinely theirs. A non-technical reader shouldn't sit alone on
+    # any of these.
+    "lookalike_domain", "spf_lookup_limit", "dkim_weak_key",
 }
 
 # Gmail/Postmaster's own calibration points, reused from the same thresholds
@@ -137,6 +173,11 @@ _TIP_LIBRARY = {
     "dns_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "dkim_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can -- if it lapses, your website and all your email stop working right away, and someone else could register it.",
+    "spf_lookup_limit": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "dkim_weak_key": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "mta_sts_broken": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link -- most newsletter tools have a single setting for this.",
+    "display_name_inconsistent": "Keep your newsletter's \"from\" name consistent and clearly recognisable as your organization across every email you send.",
 }
 _CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or month each time. A predictable "
                      "rhythm helps mailbox providers trust your mail more, and helps your readers know when to "
@@ -148,6 +189,7 @@ _CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or 
 _PASS_RATE_IMPACT_CATEGORIES = {
     "dns_drift", "ptr_issue", "spf_missing", "dns_missing", "dkim_missing",
     "failure_investigation", "new_sender", "borrowed_sending_identity",
+    "spf_lookup_limit", "dkim_weak_key",
 }
 # A couple of categories have their own cleaner, more specific rate (the
 # ESP's own bounce+complaint rate) instead of the generic pass-rate impact.
@@ -158,8 +200,99 @@ MATERIAL_PASS_RATE_DELTA = 2   # percentage points -- below this, don't manufact
 MATERIAL_ESP_RATE_DELTA = 1    # percentage points -- ESP bounce/complaint rates are usually much smaller numbers
 
 
-def _plain_problem(category: str) -> str:
-    return _PROBLEM_STORY.get(category, _GENERIC_PROBLEM_STORY)
+def _plain_problem(category: str):
+    """Plain-language story for a category, or None if we have no curated
+    wording for it. Returning None (rather than a generic "something needed
+    attention" catch-all) is deliberate: an unclassified category is skipped
+    entirely instead of emitting vague, anxious filler -- which is also what
+    used to let several distinct unclassified categories each render the same
+    generic sentence, stacking into duplicate lines. Any genuinely
+    reader-facing category earns a real story in _PROBLEM_STORY; anything
+    internal goes in _OPERATOR_ONLY_CATEGORIES. Silence beats vagueness."""
+    return _PROBLEM_STORY.get(category)
+
+
+_TIMES_WORD = {2: "twice", 3: "three times", 4: "four times", 5: "five times"}
+
+
+def _times_phrase(n: int) -> str:
+    return _TIMES_WORD.get(n, f"{n} times")
+
+
+def _care_ledger(conn, domain_id: int):
+    """One cumulative reassurance line: since the first scan of this domain,
+    how many client-facing issues Aikyam has resolved and how many are still
+    open. This is the 'ongoing care' story a single before/after can't tell --
+    it's what makes trusting Aikyam with the domain feel justified over time.
+
+    Counts distinct (category, ref_key) per state so a re-raised issue isn't
+    double-counted, and excludes the same operator-only + list-hygiene
+    categories the report already hides everywhere else -- the tally must only
+    contain things the org would actually recognise as 'an issue with us'.
+    Returns None until there's something real to report (nothing resolved and
+    nothing open says nothing worth a line)."""
+    excluded = _OPERATOR_ONLY_CATEGORIES | {"mailgun_new_suppressions", "ses_new_suppressions"}
+    placeholders = ",".join("?" * len(excluded))
+    row = conn.execute(
+        f"""SELECT
+              COUNT(DISTINCT CASE WHEN status IN ('done','dismissed')
+                    THEN category || '|' || COALESCE(ref_key,'') END) resolved,
+              COUNT(DISTINCT CASE WHEN status='open'
+                    THEN category || '|' || COALESCE(ref_key,'') END) open,
+              MIN(created_at) first_seen
+            FROM action_items
+            WHERE domain_id=? AND category IS NOT NULL AND category NOT IN ({placeholders})""",
+        (domain_id, *excluded),
+    ).fetchone()
+    resolved, open_count = row["resolved"] or 0, row["open"] or 0
+    if not resolved and not open_count:
+        return None
+    since = ""
+    if row["first_seen"]:
+        since = " in " + datetime.datetime.strptime(row["first_seen"][:10], "%Y-%m-%d").strftime("%B")
+
+    def _n(n, singular):
+        return f"{n} {singular}" + ("" if n == 1 else "s")
+
+    if resolved:
+        line = (f"Since aikyam began looking after this domain{since}, we've resolved "
+                f"{_n(resolved, 'issue')} that could have hurt your reputation or kept your emails from reaching people")
+    else:
+        line = f"Since aikyam began looking after this domain{since}, we've been keeping watch over its email safety"
+    if open_count:
+        # "more" never pluralises ("2 more", not "2 mores"); "thing" does.
+        tail = f"{open_count} more" if resolved else _n(open_count, "thing")
+        line += f", and we're on {tail} right now."
+    else:
+        line += ", and there's nothing outstanding right now."
+    return line
+
+
+def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool):
+    """A short 'this has happened before' clause for an incident's category,
+    or None. Counts the distinct DAYS this category was raised for this domain
+    -- so several IPs/selectors flagged in one scan count as one incident, not
+    a fake streak -- and only speaks up at 2+. A 'first time' note on every
+    line would be exactly the repetitive clutter this report just shed; the
+    signal worth carrying is a problem that KEEPS coming back. History only
+    reaches back to the first scan, so it never implies we watched longer than
+    we did."""
+    days = sorted({
+        r["d"] for r in conn.execute(
+            """SELECT substr(created_at, 1, 10) d FROM action_items
+               WHERE domain_id=? AND category=? AND created_at IS NOT NULL""",
+            (domain_id, category),
+        ).fetchall()
+    })
+    if len(days) < 2:
+        return None
+    first_month = datetime.datetime.strptime(days[0], "%Y-%m-%d").strftime("%B")
+    phrase = _times_phrase(len(days))
+    if resolved:
+        return (f"We've now sorted this out {phrase} since {first_month} -- it has a habit of coming back, "
+                f"so we keep a close eye on it for you.")
+    return (f"This has surfaced {phrase} since {first_month}, even after earlier fixes, so we're watching it "
+            f"closely rather than assuming it'll stay away.")
 
 
 def _pass_rate_impact(conn, domain_id: int, around: datetime.datetime):
@@ -324,9 +457,12 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklis
         (domain_id, start_str, end_str),
     ).fetchall()
     items = []
+    seen_stories = set()
     for r in rows:
         category = r["category"]
         if category in _OPERATOR_ONLY_CATEGORIES:
+            continue
+        if category in _RESOLVED_EXCLUDED_CATEGORIES:
             continue
         # Never claim we fixed something that is ALSO still open. Action items
         # are per-(category, ref_key), so one IP's failure can be resolved
@@ -350,6 +486,15 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklis
         if category in ("mailgun_new_suppressions", "ses_new_suppressions"):
             continue
 
+        story = _plain_problem(category)
+        # No curated wording -> skip it rather than emit generic filler. This
+        # is what structurally prevents a newly-added detector category from
+        # ever leaking "something needed attention" (and several of them from
+        # stacking into identical duplicate lines) into a beneficiary's report.
+        if not story or story in seen_stories:
+            continue
+        seen_stories.add(story)
+
         impact = None
         if category in _PASS_RATE_IMPACT_CATEGORIES:
             impact = _pass_rate_impact(conn, domain_id, resolved_at)
@@ -357,7 +502,8 @@ def _resolved_items(conn, domain_id: int, start_str: str, end_str: str, blocklis
             impact = _mailgun_rate_impact(conn, r["ref_key"], resolved_at)
         elif category in _SES_RATE_IMPACT_CATEGORIES and r["ref_key"]:
             impact = _ses_rate_impact(conn, r["ref_key"], resolved_at)
-        items.append({"story": _plain_problem(category), "impact": impact, "why": _why_it_matters(category)})
+        items.append({"story": story, "impact": impact, "why": _why_it_matters(category),
+                      "history": _incident_recurrence(conn, domain_id, category, resolved=True)})
     return items
 
 
@@ -441,6 +587,7 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
         (domain_id,),
     ).fetchall()
     items = []
+    seen_stories = set()
     for r in rows:
         category, ref_key = r["category"], r["ref_key"]
         if category in _OPERATOR_ONLY_CATEGORIES:
@@ -467,7 +614,14 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
         story = _plain_problem(category)
         if category == "postmaster_compliance":
             story = _postmaster_story(conn, domain_id) or story
-        items.append({"story": story, "detail": detail, "why": _why_it_matters(category)})
+        # Same discipline as _resolved_items: no curated wording -> skip, and
+        # never render the same sentence twice (two categories can share one
+        # story, e.g. the mailgun/ses reputation pair).
+        if not story or story in seen_stories:
+            continue
+        seen_stories.add(story)
+        items.append({"story": story, "detail": detail, "why": _why_it_matters(category),
+                      "history": _incident_recurrence(conn, domain_id, category, resolved=False)})
     return items
 
 
@@ -755,6 +909,49 @@ def _blocklist_split(conn, domain_id: int, domain_name: str, start_str: str, end
     return good_story, set(real_ips)
 
 
+# A handful of the countries most likely to show up in real spoofing attempts
+# against these domains -- turns a bare "CN" into plain prose for a reader who
+# shouldn't have to know ISO codes. Falls back to the raw code for anything not
+# listed, which is still better than nothing.
+_COUNTRY_NAMES = {
+    "CN": "China", "RU": "Russia", "IN": "India", "US": "the United States",
+    "NG": "Nigeria", "BR": "Brazil", "VN": "Vietnam", "ID": "Indonesia",
+    "KR": "South Korea", "TR": "Turkey", "UA": "Ukraine", "PK": "Pakistan",
+    "DE": "Germany", "FR": "France", "GB": "the United Kingdom", "NL": "the Netherlands",
+}
+
+
+def _impersonation_good_news(conn, domain_id: int, domain_name: str, start_epoch: int, end_epoch: int):
+    """The 'someone tried to impersonate you and it didn't work' story, as one
+    plain-language good-news line for the report -- the wow-factor a reader
+    actually feels, and the clearest possible demonstration of why this all
+    matters. Reuses source_classification.caught_impersonation() (the same
+    detection the dashboard shows) and is worded honestly by what DMARC
+    actually did: never 'blocked' when the policy only detected. Returns None
+    when there were no caught attempts this period, so the line just doesn't
+    appear."""
+    data = caught_impersonation(conn, domain_id, domain_name, start_epoch, end_epoch)
+    if not data:
+        return None
+    n = data["attempts"]
+    countries = list(dict.fromkeys(e["country"] for e in data["examples"] if e["country"]))
+    where = ""
+    if countries:
+        names = [_COUNTRY_NAMES.get(c, c) for c in countries[:2]]
+        where = f", one of them from {names[0]}" if len(names) == 1 else f", from places like {names[0]} and {names[1]}"
+    base = (f"We caught {n} attempt{'s' if n != 1 else ''} to send email pretending to be your "
+            f"organization{where}")
+    if data["all_blocked"]:
+        return (f"{base}. Not one reached anyone -- your protection blocked them all. This is exactly "
+                f"what it's there for.")
+    if data["blocked"]:
+        return (f"{base}. {data['blocked']} {'was' if data['blocked'] == 1 else 'were'} blocked outright and the "
+                f"rest were caught and reported to us. As we finish strengthening your protection, attempts "
+                f"like these get stopped automatically.")
+    return (f"{base}. They were caught and reported to us, though not blocked outright yet -- strengthening "
+            f"your protection to full strength is what stops attempts like these from reaching anyone at all.")
+
+
 def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, end_date: str, prev_start_date: str):
     """Opens/bounces/complaints for newsletters sent in this window vs. the
     equal-length window before it, phrased relatively and naming the
@@ -826,6 +1023,16 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     prev_start_epoch = start_epoch - (end_epoch - start_epoch)
 
     blocklist_good_news, blocklist_real_ips = _blocklist_split(conn, domain_id, domain_name, start_str, end_str)
+    impersonation_good_news = _impersonation_good_news(conn, domain_id, domain_name, start_epoch, end_epoch)
+    # These two celebrate overlapping events -- a spoofing attempt that was ALSO
+    # on a public blocklist appears in both, and their opening sentences are
+    # near-identical ("We caught N attempts to send fake email pretending to be
+    # your organization"). Showing both is the same "don't restate one fact
+    # twice" trap the resolved/still-open sections already guard against. The
+    # impersonation line is the broader, more accurate story, so it wins; the
+    # blocklist real-IPs set (used for gating elsewhere) is untouched.
+    if impersonation_good_news:
+        blocklist_good_news = None
     still_open_categories = _still_open_categories(conn, domain_id, blocklist_real_ips)
     still_open = _still_open_items(conn, domain_id, start_str, end_str, blocklist_real_ips)
     resolved = _resolved_items(conn, domain_id, start_str, end_str, blocklist_real_ips,
@@ -858,6 +1065,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end))
     whats_working = _whats_working(conn, domain_id, still_open_categories, rate, total, period_end)
     health_trend = _health_trend(conn, domain_id, period_start)
+    health_timeline = _health_timeline(conn, domain_id)
     list_hygiene = _list_hygiene(conn, domain_id, start_str, end_str)
     protection_tightened = _protection_tightened(conn, domain_id, period_start)
     spam_trend = _spam_rate_trend(conn, domain_id, period_end)
@@ -866,11 +1074,14 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     contact_cta = _contact_aikyam_cta(still_open_categories)
     cadence = sending_cadence(conn, domain_id)
     tips = _tips_for_domain(still_open_categories, cadence["irregular"])
+    care_ledger = _care_ledger(conn, domain_id)
 
     return {
         "headline": headline,
+        "care_ledger": care_ledger,
         "whats_working": whats_working,
         "health_trend": health_trend,
+        "health_timeline": health_timeline,
         "list_hygiene": list_hygiene,
         "resolved": resolved,
         "still_open": still_open,
@@ -878,6 +1089,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "protection": protection,
         "newsletter": newsletter,
         "blocklist_good_news": blocklist_good_news,
+        "impersonation_good_news": impersonation_good_news,
         "protection_tightened": protection_tightened,
         "spam_trend": spam_trend,
         "risk_warning": risk_warning,
@@ -926,11 +1138,56 @@ _WHY_IT_MATTERS = {
     "subject_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
     "sending_cadence_irregular": "A steady rhythm is part of how mailbox providers decide to trust your mail.",
     "domain_expiring_soon": "If a domain lapses, your website and every email address on it stop working the same day.",
+    "spf_lookup_limit": "This is part of what proves an email really came from you, so it's worth keeping it working cleanly.",
+    "dkim_weak_key": "This is the signature a funder's mail system uses to confirm your message is genuinely yours.",
+    "mta_sts_broken": "It's what stops someone quietly reading or tampering with email sent to your organization.",
+    "campaign_compliance_issue": "Mailbox providers increasingly expect this from newsletter senders, and missing it can push your mail toward spam.",
+    "display_name_inconsistent": "A consistent \"from\" name is part of how readers decide an email is really you and worth opening.",
+    "lookalike_domain": "A look-alike address is exactly how someone would try to scam your donors in your name, so we watch for them.",
 }
 
 
 def _why_it_matters(category):
     return _WHY_IT_MATTERS.get(category)
+
+
+def _health_timeline(conn, domain_id: int, min_points: int = 3):
+    """A multi-month view of this domain's OWN health score -- the last score
+    recorded in each calendar month, most recent last -- so improvement is
+    visible as a trajectory, not just a single now-vs-last number. Deliberately
+    dormant until there are at least `min_points` distinct months: with less
+    history it would either duplicate _health_trend() or draw a 'trend' out of
+    two dots, so it simply returns None and the section is omitted. It lights
+    up on its own once the 6-hourly snapshot job has accumulated enough months
+    (as of 2026-08 there was only ~2 weeks of data, so nothing renders yet).
+    Caps at the last 6 months to stay a glanceable one-liner."""
+    rows = conn.execute(
+        """SELECT substr(snapshot_date,1,7) month, health_score, snapshot_date
+           FROM domain_health_snapshots
+           WHERE domain_id=? AND health_score IS NOT NULL
+             AND id IN (SELECT MAX(id) FROM domain_health_snapshots
+                        WHERE domain_id=? AND health_score IS NOT NULL
+                        GROUP BY substr(snapshot_date,1,7))
+           ORDER BY snapshot_date""",
+        (domain_id, domain_id),
+    ).fetchall()
+    if len(rows) < min_points:
+        return None
+    rows = rows[-6:]
+    points = [(datetime.datetime.strptime(r["month"] + "-01", "%Y-%m-%d").strftime("%b"),
+               round(r["health_score"])) for r in rows]
+    trail = ", ".join(f"{name} {score}" for name, score in points)
+    first_score, last_score = points[0][1], points[-1][1]
+    delta = last_score - first_score
+    if delta >= 3:
+        tail = (f"That's steady improvement -- up {delta} point{'s' if delta != 1 else ''} since "
+                f"{points[0][0]}, and it's the payoff from the fixes we've made together.")
+    elif delta <= -3:
+        tail = (f"It's dipped {abs(delta)} point{'s' if abs(delta) != 1 else ''} over that stretch; "
+                f"the items below are what we're working through to turn it back up.")
+    else:
+        tail = "It's held steady over these months, which is exactly what you want to see."
+    return f"Your email health month by month: {trail}. {tail}"
 
 
 def _health_trend(conn, domain_id: int, period_start):
@@ -1195,12 +1452,13 @@ def send_report_now(conn, domain_id: int, domain_name: str, recipient_email: str
     context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
     sender_name = settings["report_sender_name"]
     from_header = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+    reply_to = settings.get("report_reply_to") or None
     subject = settings["report_subject_template"].replace("{domain}", domain_name)
     html = templates.env.get_template("email_report.html").render(**context)
     text = templates.env.get_template("email_report.txt").render(**context)
 
     message_id, err = send_message(sender_domain, api_key, from_header, recipient_email, subject, text, html,
-                                    cc_addr=cc_email)
+                                    cc_addr=cc_email, reply_to=reply_to)
     status = "failed" if err else "sent"
     _log_send(conn, domain_id, period_start, period_end, recipient_email, status, err)
     if err:

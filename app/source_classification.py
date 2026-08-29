@@ -36,6 +36,8 @@ Read-only and computed on demand from data already ingested. No DNS, no
 network, no new tables.
 """
 
+import datetime
+
 # A source needs a bit of history before its shape means anything -- one
 # failing message proves nothing either way.
 MIN_MSGS_TO_CLASSIFY = 3
@@ -182,6 +184,160 @@ def classify_sources(conn, domain_id: int, domain_name: str,
             "signed_by": _informative(others)[:3] if kind == "third_party" else _informative(own)[:3],
         }
     return out
+
+
+def caught_impersonation(conn, domain_id: int, domain_name: str,
+                          start_epoch: int, end_epoch: int, example_limit: int = 3) -> dict:
+    """The 'someone tried to impersonate you and it didn't work' story, told
+    as the good news it is rather than a chore.
+
+    A caught attempt is a report record whose From address is this domain (or a
+    subdomain of it), that failed authentication and carries NO valid signature
+    for anyone -- the 'unverified' shape above, the only bucket where forgery
+    is actually on the table. We additionally require that neither the sending
+    IP nor the From identity EVER appears in a passing record for this domain,
+    so one of your real senders having an occasional bad day is never
+    mislabelled an attacker. (This is what a spoofer looks like: a made-up
+    subdomain like munh.arpo.in, one message, from an IP that never sends your
+    real mail.)
+
+    Split honestly by what DMARC actually did, because the wording depends on
+    it and we must never claim mail was blocked when the policy didn't act:
+      blocked  -- disposition quarantine/reject: the receiver stopped it.
+      detected -- disposition none: seen and reported to us, but not stopped,
+                  because enforcement isn't at full strength yet.
+
+    `country`/`org` on each example are read from the WHOIS cache only (never a
+    live lookup -- this runs on page render); a separate background pass fills
+    that cache in. Returns None when there were no caught attempts in the
+    window, so the section simply doesn't render."""
+    # cached_whois_org/country are read-only here (allow_live=False); imported
+    # locally to avoid a heavier import at module load, matching the codebase's
+    # circular-import-avoidance style elsewhere.
+    from app.analysis import cached_whois_org, cached_whois_country
+
+    rows = conn.execute(
+        """WITH passing_ips AS (
+             SELECT DISTINCT rr.source_ip FROM report_records rr
+               JOIN reports r ON r.id = rr.report_id
+              WHERE r.domain_id = ? AND (rr.dkim_result='pass' OR rr.spf_result='pass')
+           ), passing_from AS (
+             SELECT DISTINCT rr.header_from FROM report_records rr
+               JOIN reports r ON r.id = rr.report_id
+              WHERE r.domain_id = ? AND (rr.dkim_result='pass' OR rr.spf_result='pass')
+           )
+           SELECT rr.source_ip, rr.header_from,
+                  SUM(CASE WHEN rr.disposition IN ('quarantine','reject') THEN rr.count ELSE 0 END) AS blocked,
+                  SUM(CASE WHEN rr.disposition NOT IN ('quarantine','reject') THEN rr.count ELSE 0 END) AS detected,
+                  SUM(rr.count) AS vol, MAX(r.date_end) AS last_ts
+             FROM report_records rr
+             JOIN reports r ON r.id = rr.report_id
+            WHERE r.domain_id = ? AND r.date_end >= ? AND r.date_begin <= ?
+              AND rr.header_from IS NOT NULL
+              AND (rr.header_from = ? OR rr.header_from LIKE '%.' || ?)
+              AND rr.dkim_result != 'pass' AND (rr.spf_result IS NULL OR rr.spf_result != 'pass')
+              AND NOT EXISTS (SELECT 1 FROM record_auth_results ar
+                                WHERE ar.record_id = rr.id AND ar.result = 'pass')
+              AND rr.source_ip NOT IN (SELECT source_ip FROM passing_ips)
+              AND rr.header_from NOT IN (SELECT header_from FROM passing_from)
+            GROUP BY rr.source_ip, rr.header_from
+            ORDER BY last_ts DESC""",
+        (domain_id, domain_id, domain_id, start_epoch, end_epoch, domain_name, domain_name),
+    ).fetchall()
+
+    if not rows:
+        return None
+
+    attempts = len(rows)
+    blocked = sum(r["blocked"] for r in rows)
+    detected = sum(r["detected"] for r in rows)
+    examples = []
+    for r in rows[:example_limit]:
+        date = datetime.datetime.utcfromtimestamp(r["last_ts"]).date().isoformat() if r["last_ts"] else None
+        examples.append({
+            "identity": r["header_from"],
+            "date": date,
+            "country": cached_whois_country(conn, r["source_ip"]),
+            "org": cached_whois_org(conn, r["source_ip"], allow_live=False),
+        })
+    return {
+        "attempts": attempts,
+        "blocked": blocked,
+        "detected": detected,
+        "all_blocked": detected == 0 and blocked > 0,
+        "examples": examples,
+    }
+
+
+def impersonation_source_ips(conn, domain_id: int, start_epoch: int, end_epoch: int) -> list:
+    """The distinct sending IPs behind caught-impersonation records in a window
+    -- the input the background WHOIS-enrichment pass uses to fill in each
+    example's country/org, so caught_impersonation() (which never does a live
+    lookup) can show them. Same detection predicate as caught_impersonation()."""
+    domain = conn.execute("SELECT name FROM domains WHERE id=?", (domain_id,)).fetchone()
+    if not domain:
+        return []
+    name = domain["name"]
+    return [r["source_ip"] for r in conn.execute(
+        """SELECT DISTINCT rr.source_ip FROM report_records rr
+             JOIN reports r ON r.id = rr.report_id
+            WHERE r.domain_id = ? AND r.date_end >= ? AND r.date_begin <= ?
+              AND rr.header_from IS NOT NULL
+              AND (rr.header_from = ? OR rr.header_from LIKE '%.' || ?)
+              AND rr.dkim_result != 'pass' AND (rr.spf_result IS NULL OR rr.spf_result != 'pass')
+              AND NOT EXISTS (SELECT 1 FROM record_auth_results ar
+                                WHERE ar.record_id = rr.id AND ar.result = 'pass')
+              AND rr.source_ip NOT IN (
+                    SELECT DISTINCT rr2.source_ip FROM report_records rr2 JOIN reports r2 ON r2.id=rr2.report_id
+                     WHERE r2.domain_id=? AND (rr2.dkim_result='pass' OR rr2.spf_result='pass'))
+              AND rr.header_from NOT IN (
+                    SELECT DISTINCT rr3.header_from FROM report_records rr3 JOIN reports r3 ON r3.id=rr3.report_id
+                     WHERE r3.domain_id=? AND (rr3.dkim_result='pass' OR rr3.spf_result='pass'))""",
+        (domain_id, start_epoch, end_epoch, name, name, domain_id, domain_id),
+    ).fetchall()]
+
+
+def enrich_impersonation_whois(conn, lookback_days: int = 180, max_lookups: int = 20, verbose: bool = True) -> None:
+    """Background pass: make sure every recent caught-impersonation source IP
+    has a WHOIS org/country cached, so caught_impersonation() (which never does
+    a live lookup on a page render) can show it. Bounded per run because the
+    whois CLI is slow and rate-limited -- an uncached IP just shows no country
+    until a later run reaches it, which is fine. Same "background-job only"
+    discipline as guess_sender_identity's live lookups."""
+    import datetime as _dt
+    from app.analysis import _whois_lookup  # (org, country) from the whois CLI
+
+    end = int(_dt.datetime.utcnow().timestamp())
+    start = end - lookback_days * 86400
+    wanted = []
+    seen = set()
+    for d in conn.execute("SELECT id FROM domains").fetchall():
+        for ip in impersonation_source_ips(conn, d["id"], start, end):
+            if ip not in seen:
+                seen.add(ip)
+                wanted.append(ip)
+
+    # Only look up IPs with no country cached yet -- either never checked, or
+    # cached back when the org column existed but country didn't. Written
+    # directly (not via cached_whois_org, which short-circuits on a fresh org
+    # row and would never backfill the missing country). Capped per run since
+    # the whois CLI is slow/rate-limited.
+    to_do = [
+        ip for ip in wanted
+        if (conn.execute("SELECT country FROM ip_whois_cache WHERE source_ip=?", (ip,)).fetchone() or {"country": None})["country"] is None
+    ]
+    done = 0
+    for ip in to_do[:max_lookups]:
+        org, country = _whois_lookup(ip)
+        conn.execute(
+            """INSERT INTO ip_whois_cache (source_ip, org, country, checked_at) VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(source_ip) DO UPDATE SET org=excluded.org, country=excluded.country, checked_at=excluded.checked_at""",
+            (ip, org, country),
+        )
+        done += 1
+    conn.commit()
+    if verbose:
+        print(f"[impersonation_whois] {done} IP(s) enriched, {len(to_do) - done} still pending")
 
 
 def classification_summary(classifications: dict) -> dict:

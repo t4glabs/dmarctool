@@ -79,6 +79,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "domains", {
         "pinned": "INTEGER NOT NULL DEFAULT 0",
     })
+    _ensure_columns(conn, "ip_whois_cache", {
+        # Registry country code (e.g. "CN") parsed from the same whois output as
+        # `org` -- shown next to caught-impersonation examples. Nullable: many
+        # registries omit it, and "looked up, none found" is a valid answer.
+        "country": "TEXT",
+    })
     conn.commit()
 
 

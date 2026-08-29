@@ -30,6 +30,7 @@ from fastapi.templating import Jinja2Templates
 from app.analysis import (
     all_domains, bounce_category_breakdown, current_policy_run, daily_pass_series, display_name_summary,
     domain_window_stats, day_to_date, epoch_day, ensure_default_settings, guess_sender_identity,
+    get_ip_label, ip_label_map, set_ip_label,
     health_score_series, likely_causal_senders, mailgun_daily_series, portfolio_daily_pass_series,
     postmaster_daily_series, provider_breakdown, rate_trend_summary, recent_campaigns,
     recent_mailgun_campaigns, run_analysis,
@@ -60,8 +61,8 @@ from app.postmaster import run_postmaster_checks
 from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest
 from app.safe_browsing import run_safe_browsing_checks
-from app.source_classification import classify_sources
-from app.source_view import shared_cause_verdict, source_overview
+from app.source_classification import classify_sources, caught_impersonation, enrich_impersonation_whois
+from app.source_view import shared_cause_verdict, source_action_guide, source_overview
 from app.mta_sts import run_mta_sts_checks
 from app.report_authorization import latest_report_auth, run_report_auth_checks
 from app.watchlist import build_watchlist
@@ -194,6 +195,7 @@ def _startup():
         run_report_auth_checks(c, verbose=False)
         run_lookalike_checks(c, verbose=False)
         run_domain_expiry_checks(c, verbose=False)
+        enrich_impersonation_whois(c, verbose=False)
         run_report_emails(c, verbose=False)
         prune_old_access_log(c, retention_days=int(ensure_default_settings(c)["access_log_retention_days"]))
 
@@ -449,6 +451,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     # What kind of thing each sending source is (forwarder / third party /
     # unverified), over the same window the sender table itself shows.
     source_classes = {}
+    impersonation_caught = None
     if latest_report["latest"]:
         source_classes = classify_sources(
             conn, domain_id, domain["name"],
@@ -457,6 +460,12 @@ def domain_detail(request: Request, name: str, flash: str = None):
     if latest_report["latest"]:
         window_start = latest_report["latest"] - window_days * 86400
         total, passed, rate = domain_window_stats(conn, domain_id, window_start, latest_report["latest"])
+        # Impersonation attempts DMARC caught -- good news, not a chore. Its own
+        # 90-day window: the rolling analysis window is far shorter and these are
+        # sparse events that would rarely fall inside it.
+        impersonation_caught = caught_impersonation(
+            conn, domain_id, domain["name"], latest_report["latest"] - 90 * 86400, latest_report["latest"],
+        )
         window_total, window_rate = total, (rate if total else None)
         providers = provider_breakdown(conn, domain_id, window_start, latest_report["latest"])
         streams = sending_stream_breakdown(conn, domain_id, window_start, latest_report["latest"])
@@ -728,6 +737,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         # refuses on the same condition rather than trusting the template.
         "report_auth": report_auth,
         "source_classes": source_classes,
+        "ip_labels": ip_label_map(conn),
+        "impersonation_caught": impersonation_caught,
         "lookalikes": lookalikes,
         "lookalikes_ignored": lookalikes_ignored,
         "ingested_report_count": conn.execute(
@@ -1109,6 +1120,16 @@ def classify_sender(name: str, ip: str, classification: str = Form(...)):
     return RedirectResponse(f"/domain/{name}#senders", status_code=303)
 
 
+@app.post("/senders/{ip}/label")
+def label_sender(ip: str, label: str = Form(""), redirect_to: str = Form(None)):
+    """Set or clear the operator's friendly name for a sending IP (e.g. "YAMM"
+    for a Gmail mail-merge source). Global -- applies wherever the IP shows up.
+    Display-only; never touches detection."""
+    conn = get_connection()
+    set_ip_label(conn, ip, label)
+    return RedirectResponse(redirect_to or f"/source/{ip}", status_code=303)
+
+
 @app.post("/domain/{name}/log")
 def log_manual_action(name: str, message: str = Form(...), p: str = Form(""), pct: str = Form(""), date: str = Form("")):
     conn = get_connection()
@@ -1266,6 +1287,7 @@ def run_checks():
     run_report_auth_checks(conn, verbose=False)
     run_lookalike_checks(conn, verbose=False)
     run_domain_expiry_checks(conn, verbose=False)
+    enrich_impersonation_whois(conn, verbose=False)
     return RedirectResponse(
         "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, Safe Browsing, MTA-STS, and domain expiry checks refreshed.",
         status_code=303,
@@ -1310,6 +1332,8 @@ def source_page(request: Request, ip: str):
     return templates.TemplateResponse(request, "source.html", {
         "src": overview,
         "verdict": shared_cause_verdict(overview),
+        "guide": source_action_guide(conn, overview),
+        "ip_label": get_ip_label(conn, ip),
         "fmt_date": _fmt_date,
     })
 

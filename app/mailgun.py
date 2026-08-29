@@ -60,16 +60,22 @@ def _get(url: str, api_key: str, timeout: float = 15.0):
 
 
 def send_message(mailgun_domain: str, api_key: str, from_addr: str, to_addr: str,
-                  subject: str, text: str, html: str, cc_addr: str = None, timeout: float = 20.0):
+                  subject: str, text: str, html: str, cc_addr: str = None,
+                  reply_to: str = None, timeout: float = 20.0):
     """Sends a single email via Mailgun's Messages API (POST {domain}/messages),
     same auth/base-URL conventions as every read-only call in this file --
     used by app.domain_report for the periodic plain-language owner reports.
     `to_addr`/`cc_addr` accept Mailgun's own comma-separated multi-address
-    format directly. Returns (message_id, error)."""
+    format directly. `reply_to`, when set, becomes the Reply-To header so
+    replies reach a monitored inbox even though the From address isn't one.
+    Returns (message_id, error)."""
     url = f"{API_BASE}/{mailgun_domain}/messages"
     fields = {"from": from_addr, "to": to_addr, "subject": subject, "text": text, "html": html}
     if cc_addr:
         fields["cc"] = cc_addr
+    if reply_to:
+        # Mailgun sets arbitrary message headers via h:<Header-Name> fields.
+        fields["h:Reply-To"] = reply_to
     data = urllib.parse.urlencode(fields).encode()
     req = urllib.request.Request(
         url, data=data, method="POST",
@@ -326,6 +332,41 @@ def _fetch_all(mailgun_domain, api_key, window_days, events_window_days):
             "identity": (identity, identity_failures, identity_err)}
 
 
+def _parse_mailgun_datetime(raw):
+    """Mailgun stamps suppression created_at in RFC-2822 ('Wed, 04 Mar 2026
+    16:21:19 UTC'), which sorts nonsensically as a string against our ISO
+    timestamps. Normalise it to 'YYYY-MM-DD HH:MM:SS' (UTC) so suppressed_at is
+    directly comparable to first_seen_at and the review watermark. Returns None
+    if absent or unparseable, and callers COALESCE to first_seen_at."""
+    if not raw:
+        return None
+    try:
+        return email.utils.parsedate_to_datetime(raw).astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def _suppression_watermark(conn, domain_id, mailgun_domain):
+    """The cutoff for what counts as a NEW suppression: nothing older than this
+    is 'new'. It's the later of (a) when we first started tracking this Mailgun
+    domain's list -- so the whole pre-existing list imported on first connect
+    isn't announced as 'new', which is exactly what confused people -- and (b)
+    the last time the suppressions item was marked done/dismissed, i.e. the
+    user's own 'I've reviewed and pruned up to here' line. After they mark
+    done, only addresses suppressed AFTER that moment surface again."""
+    base = conn.execute(
+        "SELECT MIN(first_seen_at) m FROM mailgun_suppressions WHERE mailgun_domain=?",
+        (mailgun_domain,),
+    ).fetchone()["m"]
+    ack = conn.execute(
+        """SELECT MAX(resolved_at) m FROM action_items
+           WHERE domain_id=? AND category='mailgun_new_suppressions' AND ref_key=? AND status IN ('done','dismissed')""",
+        (domain_id, mailgun_domain),
+    ).fetchone()["m"]
+    candidates = [x for x in (base, ack) if x]
+    return max(candidates) if candidates else None
+
+
 def run_mailgun_checks(conn, verbose: bool = True) -> None:
     settings = ensure_default_settings(conn)
     api_key = get_secret("MAILGUN_API_KEY")
@@ -339,6 +380,7 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
     events_window_days = int(settings["mailgun_events_window_days"])
     bounce_warn = float(settings["mailgun_bounce_rate_warn"])
     complaint_warn = float(settings["mailgun_complaint_rate_warn"])
+    min_volume_for_rate = int(settings["mailgun_min_volume_for_rate"])
 
     mg_domains, err = list_mailgun_domains(api_key)
     if err:
@@ -427,7 +469,13 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
                      day_totals["unsubscribed"]),
                 )
 
-            if accepted and (bounce_rate >= bounce_warn or complaint_rate >= complaint_warn):
+            # Only flag a RATE once enough mail was sent to make the percentage
+            # mean something. Without this floor, 1 bounce out of 11 accepted
+            # reads as an alarming "9% bounced" and re-appears every cycle until
+            # that single bounce ages out of the window -- pure low-volume noise
+            # that confused both the operator and the client. Same volume-bar
+            # discipline the blocklist/DKIM/SPF checks already use.
+            if accepted >= min_volume_for_rate and (bounce_rate >= bounce_warn or complaint_rate >= complaint_warn):
                 upsert_system_action(
                     conn, domain_id, "mailgun_reputation", mailgun_domain,
                     f"{domain_name}: Mailgun bounce/complaint rate is elevated ({mailgun_domain})",
@@ -442,46 +490,65 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
                     (mailgun_domain,),
                 )
 
-        new_counts = {}
         for endpoint, kind in SUPPRESSION_KINDS.items():
             items, err = fetched[mailgun_domain]["suppressions"][kind]
             if err:
                 if verbose:
                     print(f"[mailgun] {mailgun_domain}/{endpoint}: fetch failed -- {err}")
                 continue
-
-            existing = {
-                row["email"] for row in conn.execute(
-                    "SELECT email FROM mailgun_suppressions WHERE mailgun_domain=? AND kind=?",
-                    (mailgun_domain, kind),
-                )
-            }
-            new_count = 0
             for item in items:
                 address = item.get("address")
                 if not address:
                     continue
-                if address not in existing:
-                    new_count += 1
+                # Normalise Mailgun's RFC-2822 created_at to a sortable ISO
+                # timestamp, and keep it fresh on conflict so rows imported
+                # before this normalisation existed get backfilled on this run.
                 conn.execute(
                     """INSERT INTO mailgun_suppressions
                        (domain_id, mailgun_domain, email, kind, reason, suppressed_at)
                        VALUES (?,?,?,?,?,?)
-                       ON CONFLICT(mailgun_domain, email, kind) DO UPDATE SET last_checked_at=datetime('now')""",
-                    (domain_id, mailgun_domain, address, kind, item.get("error"), item.get("created_at")),
+                       ON CONFLICT(mailgun_domain, email, kind) DO UPDATE SET
+                         suppressed_at=excluded.suppressed_at, last_checked_at=datetime('now')""",
+                    (domain_id, mailgun_domain, address, kind, item.get("error"),
+                     _parse_mailgun_datetime(item.get("created_at"))),
                 )
-            new_counts[kind] = new_count
             if verbose and items:
-                print(f"[mailgun] {mailgun_domain}/{endpoint}: {len(items)} total, {new_count} new")
+                print(f"[mailgun] {mailgun_domain}/{endpoint}: {len(items)} total")
 
-        new_complaints = new_counts.get("complaint", 0)
-        new_bounces = new_counts.get("bounce", 0)
+        # What's genuinely NEW is decided by suppression DATE against the review
+        # watermark, not "have we stored this address before" -- which is what
+        # made the whole pre-existing list get announced as new on first import.
+        # Only addresses suppressed after the watermark (first-tracked time, or
+        # the last time the item was marked done) count.
+        watermark = _suppression_watermark(conn, domain_id, mailgun_domain)
+        counts = {"bounce": 0, "complaint": 0}
+        for row in conn.execute(
+            """SELECT kind, COUNT(*) n FROM mailgun_suppressions
+               WHERE mailgun_domain=? AND kind IN ('bounce','complaint')
+                 AND (? IS NULL OR COALESCE(suppressed_at, first_seen_at) > ?)
+               GROUP BY kind""",
+            (mailgun_domain, watermark, watermark),
+        ).fetchall():
+            counts[row["kind"]] = row["n"]
+        new_bounces, new_complaints = counts["bounce"], counts["complaint"]
+
         if new_complaints or new_bounces:
+            since = f" since you last reviewed on {watermark[:10]}" if watermark else ""
             upsert_system_action(
                 conn, domain_id, "mailgun_new_suppressions", mailgun_domain,
                 f"{domain_name}: new Mailgun suppressions ({mailgun_domain})",
-                f"{new_bounces} new bounce(s), {new_complaints} new complaint(s) since the last check -- "
-                f"these addresses won't receive mail from Mailgun anymore; worth pruning from Listmonk too.",
+                f"{new_bounces} address(es) bounced and {new_complaints} complained{since} -- these won't "
+                f"receive mail from Mailgun anymore. Prune them from Listmonk/Ghost too, then mark this done. "
+                f"(Leave them on Mailgun's own suppression list -- that list is what protects your reputation.)",
+            )
+        else:
+            # Nothing new since the watermark -> clear any lingering item so the
+            # historical-list-imported-as-new case (and any handled batch) goes
+            # away on its own instead of sitting open.
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='mailgun_new_suppressions' AND ref_key=? AND status='open'""",
+                (mailgun_domain,),
             )
 
     conn.commit()

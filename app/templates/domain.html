@@ -250,6 +250,27 @@
       {% endif %}
     </div>
 
+    {% if impersonation_caught %}
+    {% set imp = impersonation_caught %}
+    <div class="section">
+      <h2 class="first" title="Mail that used your domain in the From address, failed authentication, and carried no valid signature for anyone -- i.e. someone trying to pass themselves off as you. Detected from your DMARC reports over the last 90 days.">🛡️ Protection at work</h2>
+      <div class="verdict ok">
+        {% if imp.all_blocked %}
+          <strong>{{ imp.attempts }} attempt{{ 's' if imp.attempts != 1 else '' }} to impersonate {{ domain.name }} caught and blocked</strong> in the last 90 days -- none of them reached anyone. This is exactly what your email protection is for.
+        {% elif imp.blocked %}
+          <strong>{{ imp.attempts }} attempt{{ 's' if imp.attempts != 1 else '' }} to impersonate {{ domain.name }} caught</strong> in the last 90 days: {{ imp.blocked }} blocked outright, the rest flagged and reported to us. As your protection tightens, more of these get stopped automatically.
+        {% else %}
+          <strong>{{ imp.attempts }} attempt{{ 's' if imp.attempts != 1 else '' }} to impersonate {{ domain.name }} spotted</strong> in the last 90 days, from sources with nothing to do with you. They were detected and reported to us but not blocked outright yet -- moving your protection to full strength (blocking, on all mail) is what stops attempts like these automatically.
+        {% endif %}
+      </div>
+      <ul class="muted" style="margin:0.5rem 0 0 0; font-size:0.88rem; line-height:1.7;">
+        {% for ex in imp.examples %}
+        <li>Someone posing as <strong>{{ ex.identity }}</strong>{% if ex.country %} &middot; from {{ ex.country }}{% elif ex.org %} &middot; {{ ex.org }}{% endif %}{% if ex.date %} &middot; {{ ex.date }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
     <div class="section">
       <h2 class="first">🧭 Recommendation</h2>
       <p class="muted" style="margin-top:0">What we suggest doing next for this domain, and why -- based on your recent pass rate and how long you've been stable at the current setting (see Settings to adjust what counts as "safe").</p>
@@ -642,8 +663,9 @@
     <div class="section">
       <h2 class="first">📇 Known senders ({{ senders|length }})</h2>
       <p class="muted" style="margin-top:0">
-        Every mail source we've seen for this domain. Use the dropdown to label a sender once you know what it is
-        (e.g. your bulk email system, or Google Workspace) -- unrecognized senders with a lot of failing mail are
+        Every mail source we've seen for this domain. Use the dropdown to classify a sender, and the 🏷️ box to give
+        it your own name (e.g. "YAMM" for a Gmail mail-merge source) -- that name then shows wherever this IP appears,
+        across every domain. Unrecognized senders with a lot of failing mail are
         also called out under "Open action items" in the Overview tab. The Blocklist and PTR/rDNS columns matter
         even when DMARC/SPF/DKIM all pass: a blocklisted IP or missing reverse DNS can still get mail sent straight
         to spam or rejected outright, silently, with nothing showing up as a DMARC failure.
@@ -655,7 +677,10 @@
         {% for s in senders %}
         {% set cls = source_classes.get(s.source_ip) %}
         <tr>
-          <td><a href="/source/{{ s.source_ip }}" title="See everything this source does, across all your domains">{{ s.source_ip }}</a></td>
+          <td>
+            <a href="/source/{{ s.source_ip }}" title="See everything this source does, across all your domains">{{ s.source_ip }}</a>
+            {% if ip_labels.get(s.source_ip) %}<span class="badge ok" title="Your label for this sender -- edit it on the source page">🏷️ {{ ip_labels[s.source_ip] }}</span>{% endif %}
+          </td>
           <td>
             {% if cls %}
               {% set badge = {'aligned':'ok','forwarded':'muted','third_party':'warn','unverified':'bad','unknown':'muted'}[cls.kind] %}
@@ -704,6 +729,12 @@
               </select>
             </form>
             {% if s.guess %}{{ guess_note(s.guess) }}{% endif %}
+            <form class="inline" action="/senders/{{ s.source_ip }}/label" method="post" style="margin-top:0.2rem;">
+              <input type="hidden" name="redirect_to" value="/domain/{{ domain.name }}#senders">
+              <input type="text" name="label" value="{{ ip_labels.get(s.source_ip, '') }}" placeholder="your label" size="8"
+                     title="Your own name for this sending IP, e.g. YAMM. Shown wherever this IP appears. Leave blank to clear.">
+              <button class="small" type="submit">🏷️</button>
+            </form>
           </td>
         </tr>
         {% endfor %}

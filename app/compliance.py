@@ -342,7 +342,7 @@ def run_compliance_checks(conn, verbose: bool = True) -> None:
     dkim_min_bits = int(settings["dkim_min_bits"])
 
     _run_ptr(conn, settings, recheck_hours, verbose)
-    _run_spf(conn, recheck_hours, spf_warn, verbose)
+    _run_spf(conn, settings, recheck_hours, spf_warn, verbose)
     _run_dkim(conn, recheck_hours, dkim_min_bits, verbose, settings)
     conn.commit()
 
@@ -401,22 +401,61 @@ def _run_ptr(conn, settings, recheck_hours, verbose):
             )
 
 
-def _run_spf(conn, recheck_hours, warn_threshold, verbose):
+def _run_spf(conn, settings, recheck_hours, warn_threshold, verbose):
+    # Same volume/recency bar as the DKIM/blocklist/PTR checks. Without it, the
+    # SPF check flagged every subdomain that ever appeared as an SPF identity in
+    # a DMARC report -- including the random gibberish subdomains (munh.arpo.in,
+    # mnlt.arpo.in, ...) that spoofers invent, each seen once, from one IP, with
+    # spf=none. Those have no SPF record because they don't exist, and the owner
+    # can't and shouldn't publish one; DMARC reporting them IS the system
+    # working. Only subdomains with real, recent volume are worth checking. The
+    # domain's own apex is always checked (the UNION below), regardless of volume.
+    min_volume = int(settings["blocklist_min_volume"])
+    recent_cutoff = int(datetime.datetime.utcnow().timestamp()) - int(settings["blocklist_recent_days"]) * 86400
     targets = conn.execute(
-        """SELECT DISTINCT d.id as domain_id, d.name as domain_name, ar.domain as spf_domain
+        """SELECT d.id as domain_id, d.name as domain_name, ar.domain as spf_domain
            FROM record_auth_results ar
            JOIN report_records rr ON rr.id = ar.record_id
            JOIN reports r ON r.id = rr.report_id
            JOIN domains d ON d.id = r.domain_id
            WHERE ar.mechanism='spf' AND ar.domain IS NOT NULL
              AND (ar.domain = d.name OR ar.domain LIKE '%.' || d.name)
+           GROUP BY d.id, ar.domain
+           HAVING SUM(rr.count) >= ? AND MAX(r.date_end) >= ?
            UNION
-           SELECT id as domain_id, name as domain_name, name as spf_domain FROM domains"""
+           SELECT id as domain_id, name as domain_name, name as spf_domain FROM domains
+           UNION
+           -- Known Mailgun sending subdomains (e.g. mails.makestories.space),
+           -- regardless of DMARC-report volume. These are real senders the
+           -- operator set up, so their SPF matters and must stay fresh -- the
+           -- volume bar above is only there to drop spoofed one-off junk, not a
+           -- legitimate low-traffic sender, which would otherwise never get
+           -- re-checked (freezing a stale "missing" even after a fix).
+           SELECT ms.domain_id, d.name as domain_name, ms.mailgun_domain as spf_domain
+           FROM mailgun_stats ms JOIN domains d ON d.id = ms.domain_id""",
+        (min_volume, recent_cutoff),
     ).fetchall()
 
     by_target = {}
     for row in targets:
         by_target[(row["domain_id"], row["spf_domain"])] = row["domain_name"]
+
+    # Retire any open SPF action item whose target is no longer in scope -- e.g.
+    # a spoofed one-off subdomain that dropped below the volume/recency bar.
+    # Same discipline as report_authorization: don't leave an item open about
+    # something we no longer even evaluate, or it lingers forever as noise.
+    valid_by_domain = {}
+    for (domain_id, spf_domain) in by_target:
+        valid_by_domain.setdefault(domain_id, set()).add(spf_domain)
+    for it in conn.execute(
+        "SELECT DISTINCT domain_id, ref_key FROM action_items WHERE category='spf_lookup_limit' AND status='open'"
+    ).fetchall():
+        if it["ref_key"] not in valid_by_domain.get(it["domain_id"], set()):
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='spf_lookup_limit' AND status='open' AND domain_id=? AND ref_key=?""",
+                (it["domain_id"], it["ref_key"]),
+            )
 
     to_check = [
         key for key in by_target
