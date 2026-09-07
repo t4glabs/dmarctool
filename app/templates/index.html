@@ -164,6 +164,9 @@
       </div>
       <button type="submit">Ingest</button>
     </form>
+    <form action="/fetch_reports" method="post">
+      <button type="submit" title="Pull new DMARC reports straight from the mailbox over IMAP -- no Takeout needed. Also runs automatically every 6 hours once DMARC_IMAP_* is set in secrets.env.">📥 Fetch reports from mailbox</button>
+    </form>
     <form action="/run_checks" method="post">
       <button type="submit" title="Re-checks live DNS and re-calculates recommendations right now, instead of waiting for the automatic 6-hourly refresh">🔄 Refresh now</button>
     </form>

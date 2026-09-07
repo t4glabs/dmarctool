@@ -1044,9 +1044,7 @@
             {% endif %}
             {% if c.clicked != c.unique_clickers %}<br><span class="muted" style="font-size:0.8em">{{ c.clicked }} total clicks</span>{% endif %}
           </td>
-          <td>{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}
-            {% if c.bounce_breakdown %}<br><span class="muted" style="font-size:0.8em">{% for cat, n in c.bounce_breakdown %}{{ cat }}: {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
-          </td>
+          <td class="nowrap">{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}{% if c.bounce_breakdown %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Bounce reasons">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong style="display:block; margin-bottom:0.3rem;">Bounce reasons</strong>{% for cat, n in c.bounce_breakdown %}<div style="display:flex; justify-content:space-between; gap:1.5rem;"><span>{{ cat }}</span><span>{{ n }}</span></div>{% endfor %}</div></span>{% endif %}</td>
           <td>{{ c.rejected }}</td>
           <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.1f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
           <td>

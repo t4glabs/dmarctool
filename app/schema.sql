@@ -611,6 +611,16 @@ CREATE TABLE IF NOT EXISTS ip_whois_cache (
     checked_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- High-water mark for the IMAP report puller (app/imap_ingest.py) so each run
+-- only fetches messages newer than the last. uidvalidity guards against Gmail
+-- renumbering the folder (rare) -- if it changes, we reseed from SINCE.
+CREATE TABLE IF NOT EXISTS imap_ingest_state (
+    folder       TEXT PRIMARY KEY,
+    uidvalidity  INTEGER,
+    last_uid     INTEGER NOT NULL DEFAULT 0,
+    last_run     TEXT
+);
+
 -- Operator-assigned friendly labels for a sending IP (e.g. "YAMM" for the
 -- Google/Gmail IPs a mail-merge tool sends from). Global, not per-domain: a
 -- given IP means the same thing wherever it sends, and the cross-domain source

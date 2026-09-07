@@ -228,6 +228,7 @@ tr:hover td { background: var(--card-raised); }
   font-size: 0.83rem; margin: 0.45rem 0; padding: 0.5rem 0.7rem; border-radius: var(--radius-sm);
   background: var(--accent-bg); border-left: 3px solid var(--accent); white-space: pre-line;
 }
+.nowrap { white-space: nowrap; }
 .info-wrap { position: relative; display: inline-block; }
 .info-btn {
   width: 1.05rem; height: 1.05rem; margin-left: 0.35rem; padding: 0; border-radius: 4px;

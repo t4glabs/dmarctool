@@ -17,6 +17,7 @@ import re
 import secrets
 import shutil
 import tempfile
+import threading
 import urllib.parse
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 from pathlib import Path
@@ -67,6 +68,7 @@ from app.mta_sts import run_mta_sts_checks
 from app.report_authorization import latest_report_auth, run_report_auth_checks
 from app.watchlist import build_watchlist
 from app.ingest import ingest_source
+from app.imap_ingest import run_imap_ingest
 from app.labels import (
     SETTINGS_GROUPS, SETTINGS_META, category_help, category_label, category_remediation, classification_help,
     classification_label, dns_status_help, dns_status_label, explain_policy,
@@ -150,6 +152,37 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 _scheduler = BackgroundScheduler()
 
+# Serialises the full check sweep so a manual "Refresh now" and the 6-hourly
+# job never write the DB at the same time. Non-blocking acquire: if a sweep is
+# already running, a second trigger just skips rather than piling up.
+_checks_lock = threading.Lock()
+
+
+def run_all_checks(conn) -> bool:
+    """The full refresh sweep, shared by the background job and the "Refresh
+    now" button. Deliberately excludes run_report_emails() -- sending mail to
+    third parties is a scheduled action, never something a manual refresh
+    should trigger. Returns False (and does nothing) if a sweep is already in
+    progress. Each check swallows its own errors, so one flaky network call
+    can't abort the rest."""
+    if not _checks_lock.acquire(blocking=False):
+        return False
+    try:
+        for step in (
+            run_imap_ingest,  # pull new DMARC reports from the mailbox FIRST, so this sweep analyses them
+            run_analysis, run_dns_checks, discover_untracked_subdomains, run_blocklist_checks,
+            run_compliance_checks, run_mailgun_checks, run_mailgun_campaign_sync, run_postmaster_checks,
+            run_ses_event_ingest, run_ses_account_checks, run_listmonk_content_sync,
+            run_safe_browsing_checks, run_mta_sts_checks, run_report_auth_checks,
+            run_lookalike_checks, run_domain_expiry_checks, enrich_impersonation_whois,
+        ):
+            try:
+                step(conn, verbose=False)
+            except Exception as e:  # one flaky check shouldn't sink the whole sweep
+                print(f"[refresh] {getattr(step, '__name__', step)} failed: {e}")
+        return True
+    finally:
+        _checks_lock.release()
 
 
 @app.middleware("http")
@@ -177,25 +210,9 @@ def _startup():
 
     def _job():
         c = get_connection()
-        run_analysis(c, verbose=False)
-        run_dns_checks(c, verbose=False)
-        discover_untracked_subdomains(c, verbose=False)
-        run_blocklist_checks(c, verbose=False)
-        run_compliance_checks(c, verbose=False)
-        run_mailgun_checks(c, verbose=False)
-        run_mailgun_campaign_sync(c, verbose=False)
-        run_postmaster_checks(c, verbose=False)
-        # Background job: generous drain budget (nobody is waiting on it), so a
-        # real backlog actually clears instead of creeping up run after run.
-        run_ses_event_ingest(c, verbose=False)
-        run_ses_account_checks(c, verbose=False)
-        run_listmonk_content_sync(c, verbose=False)
-        run_safe_browsing_checks(c, verbose=False)
-        run_mta_sts_checks(c, verbose=False)
-        run_report_auth_checks(c, verbose=False)
-        run_lookalike_checks(c, verbose=False)
-        run_domain_expiry_checks(c, verbose=False)
-        enrich_impersonation_whois(c, verbose=False)
+        run_all_checks(c)  # the full sweep (shared with the Refresh button)
+        # Scheduled-only, never part of a manual refresh: sending mail to third
+        # parties, and log pruning.
         run_report_emails(c, verbose=False)
         prune_old_access_log(c, retention_days=int(ensure_default_settings(c)["access_log_retention_days"]))
 
@@ -1257,41 +1274,58 @@ def ingest(file: UploadFile = File(...)):
     except Exception:
         pass
 
+    # Surface WHAT the errors were, not just a count -- almost always one
+    # non-report or malformed file skipped, but the reader shouldn't have to
+    # guess. Log them all; show the first in the flash.
+    for e in stats["errors"]:
+        print(f"[ingest] skipped: {e}")
     flash = (f"Ingested {file.filename}: {stats['reports_stored']} reports stored, "
              f"{stats['duplicates']} duplicates skipped, {len(stats['errors'])} errors.")
-    return RedirectResponse(f"/?flash={flash}", status_code=303)
+    if stats["errors"]:
+        first = stats["errors"][0]
+        flash += f" First skip: {first[:160]}" + (" …" if len(stats["errors"]) > 1 else "")
+    return RedirectResponse(f"/?flash={urllib.parse.quote(flash)}", status_code=303)
+
+
+@app.post("/fetch_reports")
+def fetch_reports():
+    """Pull new DMARC reports straight from the mailbox over IMAP -- the
+    automated replacement for the manual Takeout upload. Runs in the background
+    (the first pull backfills a window and could exceed the tunnel's timeout);
+    reload to see newly-ingested reports. Re-analyses right after so the
+    dashboard reflects them."""
+    if not get_secret("DMARC_IMAP_HOST"):
+        return RedirectResponse(
+            "/?flash=" + urllib.parse.quote(
+                "Mailbox fetch isn't configured yet -- add DMARC_IMAP_* to secrets.env (see the setup notes)."),
+            status_code=303)
+
+    def _bg():
+        c = get_connection()
+        run_imap_ingest(c, verbose=True)
+        run_analysis(c, verbose=False)  # so the just-pulled reports show up
+    threading.Thread(target=_bg, daemon=True).start()
+    return RedirectResponse(
+        "/?flash=" + urllib.parse.quote(
+            "Fetching new reports from the mailbox in the background. Reload in a minute to see them."),
+        status_code=303)
 
 
 @app.post("/run_checks")
 def run_checks():
-    conn = get_connection()
-    run_analysis(conn, verbose=False)
-    run_dns_checks(conn, verbose=False)
-    discover_untracked_subdomains(conn, verbose=False)
-    run_blocklist_checks(conn, verbose=False)
-    run_compliance_checks(conn, verbose=False)
-    run_mailgun_checks(conn, verbose=False)
-    run_mailgun_campaign_sync(conn, verbose=False)
-    run_postmaster_checks(conn, verbose=False)
-    # Short budget here: this runs inside the request the "Refresh now" button
-    # made, so it must stay responsive. A large backlog keeps draining on the
-    # 6-hourly background job, which gets the full budget.
-    run_ses_event_ingest(
-        conn, verbose=False,
-        max_seconds=float(ensure_default_settings(conn)["ses_drain_seconds_interactive"]),
-    )
-    run_ses_account_checks(conn, verbose=False)
-    run_listmonk_content_sync(conn, verbose=False)
-    run_safe_browsing_checks(conn, verbose=False)
-    run_mta_sts_checks(conn, verbose=False)
-    run_report_auth_checks(conn, verbose=False)
-    run_lookalike_checks(conn, verbose=False)
-    run_domain_expiry_checks(conn, verbose=False)
-    enrich_impersonation_whois(conn, verbose=False)
-    return RedirectResponse(
-        "/?flash=Analysis, DNS, subdomain discovery, blocklist, compliance, Mailgun, Postmaster, SES, Listmonk content, Safe Browsing, MTA-STS, and domain expiry checks refreshed.",
-        status_code=303,
-    )
+    # Run the whole sweep in a BACKGROUND thread and return immediately. Doing
+    # it inline used to block the response for 60s+ -- an unpleasant wait
+    # locally, and over the Cloudflare tunnel it exceeded the ~100s edge timeout
+    # and showed an error page even though the work was fine. Now the button
+    # kicks off the work and the page comes back instantly; reload to see
+    # results. The lock in run_all_checks() means repeat clicks don't stack.
+    already_running = _checks_lock.locked()
+    if not already_running:
+        threading.Thread(target=lambda: run_all_checks(get_connection()), daemon=True).start()
+    msg = ("A refresh is already running -- reload in a minute to see the latest."
+           if already_running else
+           "Refresh started in the background. It takes about a minute; reload this page to see updated results.")
+    return RedirectResponse(f"/?flash={msg}", status_code=303)
 
 
 @app.get("/other-domains", response_class=HTMLResponse)
