@@ -59,6 +59,11 @@ DEFAULT_SETTINGS = {
     "mailgun_bounce_rate_warn": "0.05",  # bounce rate (of accepted) that triggers a flag
     "mailgun_complaint_rate_warn": "0.001",  # complaint rate (of accepted) that triggers a flag
     "mailgun_min_volume_for_rate": "50",  # don't flag a bounce/complaint RATE until this many were accepted -- 1 bounce out of 11 is 9% but meaningless noise
+    # SES drain: a single background run should fully EMPTY the queue, not clear
+    # a fixed slice and leave a residue -- the laptop sleeps, so if each run only
+    # drained 3000 the backlog grew faster than it cleared. The time budget is
+    # the real limiter (the background sweep has no HTTP timeout); the message
+    # cap is just a safety ceiling.
     "postmaster_recheck_hours": "24",     # Postmaster Tools data itself lags/aggregates daily
     "postmaster_stats_window_days": "30", # lookback window for the SPAM_RATE / delivery-error metrics
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
@@ -67,7 +72,7 @@ DEFAULT_SETTINGS = {
     "ses_complaint_rate_watch": "0.0008", # complaint rate (of delivered) that triggers an early "watch" flag
     "ses_complaint_rate_warn": "0.001",   # complaint rate (of delivered) that triggers a flag
     "ses_max_messages_per_run": "200000",  # absolute safety ceiling on one drain; the time budget below is what normally stops it
-    "ses_drain_seconds": "300",            # how long a background SES event drain may run (a pure message cap couldn't keep up with real campaign volume)
+    "ses_drain_seconds": "600",            # how long a background SES event drain may run (a pure message cap couldn't keep up with real campaign volume); the background sweep has no HTTP timeout, so a big backlog empties in one pass
     "ses_drain_seconds_interactive": "15", # much shorter budget for the "Refresh now" button, which a person is waiting on
     "ses_backlog_warn": "2000",            # queued events above this raise an action item, since it makes displayed numbers partial
     "ses_account_recheck_hours": "24",    # don't re-poll SES account health/identity verification more often than this

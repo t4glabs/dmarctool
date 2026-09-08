@@ -359,6 +359,62 @@ def build_portfolio_overview(conn, domains: list) -> dict:
     }
 
 
+# Categories too noisy / internal to belong in the human-readable activity feed.
+_FEED_EXCLUDE = {"data_stale", "ses_event_backlog", "volume_spike", "rua_unauthorized",
+                 "ramp_recommendation", "untracked_sending_subdomain"}
+
+
+def build_protection_summary(conn, days: int = 90):
+    """Account-wide 'impersonation attempts caught & blocked' across every
+    domain in the last `days` -- the satisfying headline for the command
+    centre. Reuses source_classification.caught_impersonation per domain (same
+    detection the per-domain 'Protection at work' card shows). None when there
+    were no caught attempts, so the block simply doesn't render."""
+    end = int(_datetime.utcnow().timestamp())
+    start = end - days * 86400
+    attempts = blocked = detected = 0
+    per_domain = []
+    for d in all_domains(conn):
+        r = caught_impersonation(conn, d["id"], d["name"], start, end)
+        if r:
+            attempts += r["attempts"]; blocked += r["blocked"]; detected += r["detected"]
+            per_domain.append({"name": d["name"], "attempts": r["attempts"]})
+    if not attempts:
+        return None
+    return {"attempts": attempts, "blocked": blocked, "detected": detected, "days": days,
+            "domains": sorted(per_domain, key=lambda x: -x["attempts"])}
+
+
+def build_activity_feed(conn, limit: int = 25, days: int = 45):
+    """A chronological 'story of your portfolio' -- reader-facing action items
+    raised or resolved across all domains, most recent first. Pure existing
+    data (action_items timestamps); the noisy/internal categories are dropped."""
+    since = (_datetime.utcnow() - _timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = conn.execute(
+        """SELECT d.name AS domain, a.category, a.status,
+                  CASE WHEN a.status='open' THEN a.created_at ELSE a.resolved_at END AS ts
+           FROM action_items a JOIN domains d ON d.id = a.domain_id
+           WHERE a.category IS NOT NULL
+             AND ((a.status='open' AND a.created_at >= ?)
+                  OR (a.status IN ('done','dismissed') AND a.resolved_at >= ?))
+           ORDER BY ts DESC LIMIT ?""",
+        (since, since, limit * 3),  # over-fetch, filter noise in Python, then trim
+    ).fetchall()
+    feed = []
+    for r in rows:
+        if r["category"] in _FEED_EXCLUDE or not r["ts"]:
+            continue
+        feed.append({
+            "when": r["ts"][:10],
+            "domain": r["domain"],
+            "category": r["category"],
+            "resolved": r["status"] in ("done", "dismissed"),
+        })
+        if len(feed) >= limit:
+            break
+    return feed
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, flash: str = None):
     conn = get_connection()
@@ -389,6 +445,8 @@ def index(request: Request, flash: str = None):
     return templates.TemplateResponse(request, "index.html", {
         "domains": domains, "overview": overview, "flash": flash,
         "kpis": kpis, "portfolio_sparkline_svg": portfolio_sparkline_svg, "vibe_donut_svg": vibe_donut_svg,
+        "protection": build_protection_summary(conn),
+        "activity": build_activity_feed(conn, limit=8),
     })
 
 

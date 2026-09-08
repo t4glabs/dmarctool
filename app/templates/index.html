@@ -1,304 +1,274 @@
 {% extends "base.html" %}
-{% block title %}DMARCTool - Overview{% endblock %}
+{% block title %}Vigil — DMARC Command Centre{% endblock %}
 {% block content %}
+{# Branded command-centre home. The <style> below only loads on this page, so
+   the aikyam-brand look is scoped here while the per-domain working tabs keep
+   the Ghost-admin neutrals (the hybrid direction). Visual tokens verified live
+   against aikyamhq.com / aikyamfellows.org: cream #FBF7F4, ink #1F2421,
+   Figtree display sans, Source Serif body, bold+light wordmark, uppercase
+   letter-spaced eyebrows, big-stat cards. #}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+  :root { --cc-cream:#FBF7F4; --cc-ink:#1F2421; --cc-muted:#7a746b; --cc-line:#e8e2d8;
+          --cc-accent:#7358B3; --cc-card:#ffffff;
+          --cc-display:'Figtree',-apple-system,'system-ui','Segoe UI',Roboto,sans-serif;
+          --cc-serif:'Source Serif 4',Georgia,'Iowan Old Style','Times New Roman',serif; }
+  /* Paint the home content area cream (scoped: this stylesheet only ships on / ) */
+  .content-area { background: var(--cc-cream); }
+  .cc { font-family: var(--cc-serif); color: var(--cc-ink); max-width: 1200px; }
+  .cc-eyebrow { font-family:var(--cc-display); font-size:11px; font-weight:600; letter-spacing:.14em;
+                text-transform:uppercase; color:var(--cc-muted); margin:0 0 .4rem; }
+  .cc h1.cc-title { font-family:var(--cc-display); font-weight:700; font-size:2.6rem; line-height:1.05;
+                    letter-spacing:-.01em; color:var(--cc-ink); margin:0 0 .3rem; border:0; }
+  .cc-sub { font-family:var(--cc-serif); color:var(--cc-muted); font-size:1.02rem; margin:0; }
+  .cc-wordmark { font-family:var(--cc-display); font-weight:400; }
+  .cc-wordmark b { font-weight:800; }
 
-<p class="muted" style="margin-top:0">
-  This tracks whether email sent from your domains is passing authentication checks, and tells you
-  what to do next for each one.
-</p>
+  .cc-hero { display:flex; justify-content:space-between; align-items:flex-end; gap:1.5rem;
+             flex-wrap:wrap; padding:.5rem 0 1.4rem; }
+  .cc-actions { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .cc-actions form { margin:0; }
+  .cc-actions button, .cc-actions .btn { font-family:var(--cc-display); font-weight:600; font-size:.85rem;
+             background:var(--cc-ink); color:#fff; border:0; border-radius:9px; padding:.55rem .9rem; cursor:pointer; }
+  .cc-actions button:hover { opacity:.9; }
 
-<details class="section" style="margin-bottom:1.2rem">
-  <summary style="cursor:pointer; font-weight:600">❓ What do these terms mean?</summary>
-  <ul style="margin:0.7rem 0 0 0; padding-left:1.2rem; font-size:0.88rem;">
-    <li><strong>p=none</strong> -- just watching, nothing is blocked or sent to spam yet.</li>
-    <li><strong>p=quarantine</strong> -- suspicious mail (failing checks) is sent to spam.</li>
-    <li><strong>p=reject</strong> -- suspicious mail is blocked outright, doesn't arrive at all.</li>
-    <li><strong>pct=</strong> -- what percentage of your mail this rule applies to. You normally start low (e.g. 10%) and raise it gradually once you've confirmed your real mail keeps passing.</li>
-    <li><strong>Pass rate</strong> -- the percentage of your mail that's passing authentication (DKIM/SPF). Higher is better; this is what "safe to move forward" is based on.</li>
-    <li><strong>Live DNS vs. Reports</strong> -- "Live DNS" is what's actually published right now; "Reports" is what mail providers have told us they've seen. These can disagree for a few days after you make a change -- that's normal, not necessarily a problem.</li>
-    <li><strong>Overall health</strong> -- one combined read per domain: your pass rate, Google's own reported spam rate, and your bounce/complaint rate, weighted into a single score out of 100. 80 or above is <em>Healthy</em>, 50-79 <em>Needs attention</em>, below 50 <em>At risk</em>. Meant to answer "how's this domain doing" at a glance without reading four separate numbers.</li>
-  </ul>
-</details>
+  /* KPI band -- big Figtree numbers, serif labels */
+  .cc-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.9rem; margin:0 0 1.4rem; }
+  .cc-kpi { background:var(--cc-card); border:1px solid var(--cc-line); border-radius:14px; padding:1.1rem 1.2rem; }
+  .cc-kpi-num { font-family:var(--cc-display); font-weight:700; font-size:2.1rem; line-height:1; color:var(--cc-ink); }
+  .cc-kpi-num.warn { color:#b26a00; } .cc-kpi-num.bad { color:#c0392b; } .cc-kpi-num.ok { color:#1a7f37; }
+  .cc-kpi-lbl { font-family:var(--cc-serif); color:var(--cc-muted); font-size:.9rem; margin-top:.35rem; }
 
-<div class="health-strip">
-  <div class="pill">
-    <div class="pill-top">🌐</div>
-    <div class="pill-value">{{ kpis.total_domains }}</div>
-    <div class="pill-label">Domains tracked</div>
-  </div>
-  <div class="pill {{ 'ok' if kpis.domains_with_issues == 0 else 'warn' }}">
-    <div class="pill-top">{{ '✅' if kpis.domains_with_issues == 0 else '⚠️' }}</div>
-    <div class="pill-value">{{ kpis.domains_with_issues }}</div>
-    <div class="pill-label">Domains with open items</div>
-  </div>
-  <div class="pill {{ 'bad' if kpis.expiring_soon else 'ok' }}">
-    <div class="pill-top">{{ '📅' if kpis.expiring_soon else '✅' }}</div>
-    <div class="pill-value">{{ kpis.expiring_soon }}</div>
-    <div class="pill-label">Expiring soon</div>
-  </div>
-</div>
+  /* Account-wide protection strip */
+  .cc-protection { background:#f0ece6; border:1px solid var(--cc-line); border-left:4px solid var(--cc-accent);
+                   border-radius:12px; padding:.9rem 1.1rem; margin:0 0 1.4rem; font-size:1rem; line-height:1.5; }
+  .cc-protection b { font-family:var(--cc-display); font-weight:700; }
 
-{# The health donut and the pass-rate trend used to be two full-width pills stacked
-   on their own rows -- a small circle floating in a wide empty box, then an
-   unrelated-looking graph underneath. They're the two halves of the same
-   question ("how are things, and which way are they moving"), so they share one
-   two-column panel: state on the left, direction on the right. #}
-<div class="health-panel">
-  <div class="hp-block">
-    <div class="hp-head">
-      <span class="hp-title" title="One combined read per domain -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single score out of 100."><span class="ico">🩺</span>Overall health right now</span>
-      <span class="hp-sub">{{ kpis.scored_domains }} of {{ kpis.total_domains }} domains scored</span>
+  /* Two-column: main + activity rail */
+  .cc-split { display:grid; grid-template-columns:minmax(0,1fr) minmax(240px,300px); gap:1.4rem; align-items:start; }
+  @media (max-width:900px){ .cc-split{ grid-template-columns:1fr; } }
+
+  .cc-panel { background:var(--cc-card); border:1px solid var(--cc-line); border-radius:16px; padding:1.2rem 1.3rem; margin:0 0 1.4rem; }
+  .cc-panel h2 { font-family:var(--cc-display); font-weight:600; font-size:1.15rem; margin:0 0 .8rem; border:0; color:var(--cc-ink); }
+
+  /* Activity feed */
+  .cc-feed { list-style:none; margin:0; padding:0; }
+  .cc-feed li { display:flex; gap:.6rem; padding:.5rem 0; border-bottom:1px solid var(--cc-line); font-size:.9rem; }
+  .cc-feed li:last-child { border-bottom:0; }
+  .cc-feed .cf-when { font-family:var(--cc-display); color:var(--cc-muted); font-size:.78rem; white-space:nowrap; min-width:52px; }
+  .cc-feed .cf-dot { font-size:.8rem; }
+  .cc-feed .cf-dom { font-family:var(--cc-display); font-weight:600; }
+
+  /* Domain toolbar */
+  .cc-domhead { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin:.4rem 0 1rem; }
+  .cc-domhead h2 { font-family:var(--cc-display); font-weight:700; font-size:1.6rem; margin:0; border:0; }
+
+  /* Domain cards -- the aikyamhq "programme card" pattern */
+  .cc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:1.1rem; }
+  .cc-card { background:var(--cc-card); border:1px solid var(--cc-line); border-radius:16px; padding:1.2rem 1.3rem;
+             transition:box-shadow .15s ease, transform .15s ease; position:relative; }
+  .cc-card:hover { box-shadow:0 6px 22px rgba(31,36,33,.08); transform:translateY(-1px); }
+  .cc-card.pinned { border-color:var(--cc-accent); }
+  .cc-card .cc-eyebrow { display:flex; justify-content:space-between; align-items:center; }
+  .cc-cardname { font-family:var(--cc-display); font-size:1.3rem; font-weight:400; margin:.1rem 0 .2rem; }
+  .cc-cardname a { color:var(--cc-ink); text-decoration:none; }
+  .cc-cardname a:hover { text-decoration:underline; }
+  .cc-cardname b { font-weight:800; }
+  .cc-score { display:flex; align-items:baseline; gap:.5rem; margin:.5rem 0 .2rem; }
+  .cc-score-num { font-family:var(--cc-display); font-weight:700; font-size:2rem; line-height:1; }
+  .cc-score-num.ok{color:#1a7f37;} .cc-score-num.warn{color:#b26a00;} .cc-score-num.bad{color:#c0392b;} .cc-score-num.muted{color:var(--cc-muted);}
+  .cc-tier { font-family:var(--cc-display); font-size:.72rem; font-weight:600; letter-spacing:.03em; padding:.15rem .5rem; border-radius:6px; }
+  .cc-tier.ok{background:#e6f4ea;color:#1a7f37;} .cc-tier.warn{background:#fbeecf;color:#8a5a00;} .cc-tier.bad{background:#fbe6e3;color:#c0392b;} .cc-tier.muted{background:#efece7;color:var(--cc-muted);}
+  .cc-card .sparkline { margin:.3rem 0 .5rem; }
+  .cc-meta { font-size:.85rem; color:var(--cc-muted); display:flex; flex-direction:column; gap:.28rem; margin-top:.4rem; }
+  .cc-meta .cm-row { display:flex; justify-content:space-between; gap:1rem; }
+  .cc-meta .cm-row b { font-family:var(--cc-display); font-weight:600; color:var(--cc-ink); }
+  .cc-pills { display:flex; flex-wrap:wrap; gap:.3rem; margin-top:.6rem; }
+  .cc-pill { font-family:var(--cc-display); font-size:.72rem; font-weight:600; padding:.18rem .5rem; border-radius:6px; background:#efece7; color:var(--cc-muted); }
+  .cc-pill.bad{background:#fbe6e3;color:#c0392b;} .cc-pill.warn{background:#fbeecf;color:#8a5a00;}
+  .cc-rec { font-family:var(--cc-serif); font-size:.85rem; color:var(--cc-ink); background:#f4f1ec; border-radius:8px; padding:.45rem .6rem; margin-top:.6rem; }
+  .cc-pin { background:none; border:0; cursor:pointer; color:var(--cc-line); padding:2px; }
+  .cc-pin.active, .cc-pin:hover { color:var(--cc-accent); }
+  .cc-search { display:flex; align-items:center; gap:.4rem; background:var(--cc-card); border:1px solid var(--cc-line); border-radius:10px; padding:.4rem .7rem; }
+  .cc-search input { border:0; outline:0; background:transparent; font-family:var(--cc-serif); font-size:.95rem; min-width:220px; color:var(--cc-ink); }
+  .cc-addform { display:flex; gap:.4rem; }
+  .cc-addform input { border:1px solid var(--cc-line); border-radius:9px; padding:.45rem .6rem; font-family:var(--cc-serif); }
+  .cc-addform button { font-family:var(--cc-display); font-weight:600; background:var(--cc-ink); color:#fff; border:0; border-radius:9px; padding:.45rem .8rem; cursor:pointer; }
+  .cc-secrow { display:flex; gap:.6rem; padding:.4rem 0; border-bottom:1px solid var(--cc-line); font-size:.9rem; flex-wrap:wrap; }
+  .cc-secrow:last-child{border-bottom:0;}
+  .cc-secrow .csr-lbl { font-family:var(--cc-display); font-weight:600; min-width:180px; }
+  .cc-badge-bad, .cc-badge-warn, .cc-badge-muted { font-family:var(--cc-display); font-size:.75rem; font-weight:600; padding:.15rem .5rem; border-radius:6px; margin:0 .3rem .2rem 0; display:inline-block; text-decoration:none; }
+  .cc-badge-bad{background:#fbe6e3;color:#c0392b;} .cc-badge-warn{background:#fbeecf;color:#8a5a00;} .cc-badge-muted{background:#efece7;color:var(--cc-muted);}
+  /* The health donut/trend reuse the Ghost .hp-block cards, which are dark in
+     dark mode -- flatten them onto the cream panel so the ink legend shows. */
+  .cc .health-panel { margin:0; }
+  .cc .hp-block { background:transparent; border:0; padding:0; }
+  .cc .tier-name, .cc .tier-count { color:var(--cc-ink); }
+  .cc .tier-share, .cc .hp-sub { color:var(--cc-muted); }
+  .cc .hp-donut, .cc .hp-trend, .cc .sparkline { color:var(--cc-ink); }
+</style>
+
+{% macro domain_name_split(name) %}{% set p = name.rsplit('.', 1) %}<b>{{ p[0] }}</b>{% if p|length > 1 %}.{{ p[1] }}{% endif %}{% endmacro %}
+
+<div class="cc">
+
+  <div class="cc-hero">
+    <div>
+      <p class="cc-eyebrow">DMARC command centre</p>
+      <h1 class="cc-title"><span class="cc-wordmark"><b>vigil</b></span> — your domains, protected</h1>
+      <p class="cc-sub">Whether every domain's email is passing authentication, and what to do next for each.</p>
     </div>
-    <div class="hp-body hp-body-split">
-      <div class="sparkline hp-donut">{{ vibe_donut_svg | safe }}</div>
-      <ul class="tier-legend">
-        {% for cls, count, name, hint in [
-              ('ok', kpis.good_count, 'Healthy', 'Scoring 80 or above -- authentication, spam rate and bounce/complaint rate all look fine'),
-              ('warn', kpis.bad_count, 'Needs attention', 'Scoring 50-79 -- at least one signal is off'),
-              ('bad', kpis.ugly_count, 'At risk', 'Scoring below 50 -- several signals are struggling at once')] %}
-        <li class="{{ 'is-zero' if not count }}" title="{{ hint }}">
-          <span class="tier-dot {{ cls }}"></span>
-          <span class="tier-count">{{ count }}</span>
-          <span class="tier-name">{{ name }}</span>
-          <span class="tier-share">{% if kpis.scored_domains %}{{ (count / kpis.scored_domains * 100)|round|int }}%{% else %}--{% endif %}</span>
-        </li>
-        {% endfor %}
-        {% if kpis.unscored_domains %}
-        <li class="is-muted" title="No health snapshot recorded for these yet -- they need report or sending data before they can be scored">
-          <span class="tier-dot muted"></span>
-          <span class="tier-count">{{ kpis.unscored_domains }}</span>
-          <span class="tier-name">Not enough data yet</span>
-          <span class="tier-share"></span>
-        </li>
-        {% endif %}
-      </ul>
-    </div>
-  </div>
-
-  <div class="hp-block">
-    <div class="hp-head">
-      <span class="hp-title" title="Every domain's mail added together, so one small domain having a bad day doesn't swing the line."><span class="ico">📈</span>Which way it's moving</span>
-      <span class="hp-sub">pass rate, all domains combined, last 60 days</span>
-    </div>
-    <div class="hp-body">
-      <div class="sparkline hp-trend">{{ portfolio_sparkline_svg | safe }}</div>
-    </div>
-  </div>
-</div>
-
-{% if overview.no_dmarc or overview.weakened or overview.expiring_soon or overview.suspicious_by_ip or overview.mta_sts_broken or overview.stale %}
-<div class="section" style="margin-bottom:1.2rem;">
-  <h2 class="first" style="margin-top:0">🛡️ Portfolio security overview</h2>
-  <p class="muted" style="margin-top:0">The handful of things worth checking across every domain at once, instead of clicking into each one.</p>
-
-  {% if overview.no_dmarc %}
-  <div class="row">
-    <span class="label" title="These domains have no DMARC record at all -- anyone can spoof them right now with zero protection or visibility">No DMARC record at all</span>
-    <span>{% for name in overview.no_dmarc %}<a href="/domain/{{ name }}" class="badge bad" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
-  </div>
-  {% endif %}
-
-  {% if overview.weakened %}
-  <div class="row">
-    <span class="label" title="Live DNS now enforces less than the last known-good baseline -- possibly an unintentional or unauthorized change">Protection weakened</span>
-    <span>{% for name in overview.weakened %}<a href="/domain/{{ name }}" class="badge bad" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
-  </div>
-  {% endif %}
-
-  {% if overview.expiring_soon %}
-  <div class="row">
-    <span class="label" title="These domains' own registration (not any DNS record) is close to expiring -- if it lapses, the website and all mail, including DMARC reports, stop working immediately">Domain registration expiring soon</span>
-    <span>{% for d in overview.expiring_soon %}<a href="/domain/{{ d.name }}" class="badge bad" style="margin-right:0.3rem;">{{ d.name }} ({{ d.days_left }}d)</a>{% endfor %}</span>
-  </div>
-  {% endif %}
-
-  {% if overview.suspicious_by_ip %}
-  <div class="row">
-    <span class="label" title="IPs manually flagged as suspicious (spam or spoofing) while reviewing a domain -- shown here since the same IP showing up elsewhere in your portfolio is a stronger signal than authentication alone">Sender IPs flagged suspicious</span>
-    <span>
-      {% for ip, names in overview.suspicious_by_ip.items() %}
-      <span class="badge warn" title="Flagged while reviewing: {{ names|join(', ') }}" style="margin-right:0.3rem;">{{ ip }}</span>
-      {% endfor %}
-    </span>
-  </div>
-  {% endif %}
-
-  {% if overview.mta_sts_broken %}
-  <div class="row">
-    <span class="label" title="A DNS record advertises MTA-STS but the actual policy file is missing or invalid -- worse than never setting it up">MTA-STS misconfigured</span>
-    <span>{% for name in overview.mta_sts_broken %}<a href="/domain/{{ name }}" class="badge warn" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
-  </div>
-  {% endif %}
-
-  {% if overview.stale %}
-  <div class="row">
-    <span class="label" title="No fresh DMARC reports in a while for these domains -- every other finding for them may be out of date until this is resolved">No fresh reports in a while</span>
-    <span>{% for name in overview.stale %}<a href="/domain/{{ name }}" class="badge muted" style="margin-right:0.3rem;">{{ name }}</a>{% endfor %}</span>
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
-{% set ns = namespace(total_open=0, domains_with_issues=0) %}
-{% for d in domains %}
-  {% if d.open_counts %}
-    {% set ns.domains_with_issues = ns.domains_with_issues + 1 %}
-    {% for cat, n in d.open_counts.items() %}
-      {% set ns.total_open = ns.total_open + n %}
-    {% endfor %}
-  {% endif %}
-{% endfor %}
-{% if ns.total_open > 0 %}
-<div class="portfolio-banner bad">🚨 {{ ns.total_open }} open action item{{ 's' if ns.total_open != 1 else '' }} across {{ ns.domains_with_issues }} domain{{ 's' if ns.domains_with_issues != 1 else '' }} -- click into a domain to see what's up.</div>
-{% else %}
-<div class="portfolio-banner ok">✅ No open action items across any domain right now.</div>
-{% endif %}
-
-<div class="top-actions">
-  <h1>Domains</h1>
-  <div class="formrow">
-    <form action="/ingest" method="post" enctype="multipart/form-data" class="formrow">
-      <div class="field">
-        <label>Add new reports (upload the .zip or .mbox export)</label>
-        <input type="file" name="file" required>
-      </div>
-      <button type="submit">Ingest</button>
-    </form>
-    <form action="/fetch_reports" method="post">
-      <button type="submit" title="Pull new DMARC reports straight from the mailbox over IMAP -- no Takeout needed. Also runs automatically every 6 hours once DMARC_IMAP_* is set in secrets.env.">📥 Fetch reports from mailbox</button>
-    </form>
-    <form action="/run_checks" method="post">
-      <button type="submit" title="Re-checks live DNS and re-calculates recommendations right now, instead of waiting for the automatic 6-hourly refresh">🔄 Refresh now</button>
-    </form>
-  </div>
-</div>
-
-{# Filters in the browser rather than round-tripping to the server: with a
-   couple of dozen domains the whole grid is already on the page, so a
-   keystroke-by-keystroke filter is instant and needs no route, no query
-   param and no re-render. Degrades to "no filter" with JS off, which is the
-   same as today. #}
-<div class="domain-toolbar">
-  <div class="domain-filter">
-    <span class="df-icon" aria-hidden="true">🔍</span>
-    <input type="search" id="domain-search" placeholder="Search domains by name..." autocomplete="off"
-           aria-label="Search domains by name" aria-describedby="domain-filter-count">
-    <span class="df-count muted" id="domain-filter-count" role="status" aria-live="polite"></span>
-  </div>
-  <form action="/domains/add" method="post" class="add-domain-form">
-    <input type="text" name="name" placeholder="example.org" required
-           aria-label="Domain to start tracking"
-           title="A domain only appears here on its own once one of its DMARC reports has been ingested -- so a domain with no DMARC record at all, exactly the kind worth checking, would never show up. Add it by hand instead."
-           autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button type="submit" class="small">+ Track a domain</button>
-  </form>
-</div>
-
-<div class="grid" id="domain-grid">
-  {% for d in domains %}
-  {% set has_issues = d.open_counts and d.open_counts.values()|sum > 0 %}
-  {% set dns_bad = d.dns_status in ('missing', 'multiple') or (d.dns_status == 'ok' and not d.dns_match) %}
-  {% set rate_bad = d.window_rate is not none and d.window_rate < 0.95 %}
-  {% set rate_warn = d.window_rate is not none and d.window_rate < 0.99 %}
-  {% if dns_bad or has_issues or rate_bad %}
-    {% set dot = 'bad' %}
-  {% elif rate_warn %}
-    {% set dot = 'warn' %}
-  {% else %}
-    {% set dot = 'ok' %}
-  {% endif %}
-  <div class="card{{ ' pinned' if d.pinned else '' }}" data-domain="{{ d.name }}">
-    <h3>
-      <span><span class="status-dot {{ dot }}"></span><a href="/domain/{{ d.name }}">{{ d.name }}</a></span>
-      <form class="inline pin-form" action="/domain/{{ d.name }}/pin" method="post">
-        <input type="hidden" name="redirect_to" value="/">
-        <button type="submit" class="pin-btn{{ ' active' if d.pinned else '' }}" title="{{ 'Unpin' if d.pinned else 'Pin to top' }}" aria-label="{{ 'Unpin' if d.pinned else 'Pin to top' }}">
-          <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><circle cx="8" cy="5" r="4"/><polygon points="8,8 5,15 11,15"/></svg>
-        </button>
+    <div class="cc-actions">
+      <form action="/fetch_reports" method="post">
+        <button type="submit" title="Pull new DMARC reports straight from the mailbox over IMAP -- no Takeout needed.">📥 Fetch reports</button>
       </form>
-    </h3>
-
-    <div class="row">
-      <span class="label" title="One combined read -- pass rate, Gmail's own spam rate, and bounce/complaint rate weighted into a single tier">Overall health</span>
-      <span>
-        <span class="badge {{ d.vibe_status }}">
-          {{ {'ok': 'Healthy', 'warn': 'Needs attention', 'bad': 'At risk'}.get(d.vibe_status, 'Not enough data') }}
-        </span>
-        {% if d.health_score is not none %}<span class="muted">({{ d.health_score|round|int }}/100)</span>{% endif %}
-      </span>
+      <form action="/run_checks" method="post">
+        <button type="submit" title="Re-check live DNS and recalculate recommendations now">🔄 Refresh</button>
+      </form>
     </div>
-
-    <div class="row">
-      <span class="label" title="What's actually published in DNS right now">Live DNS</span>
-      <span>
-        {% if d.dns_status == 'ok' %}
-          <span class="badge {{ 'ok' if d.dns_match else 'warn' }}" title="{{ explain_policy(d.dns_p, d.dns_pct) }}">p={{ d.dns_p }} pct={{ d.dns_pct }}</span>
-        {% elif d.dns_status == 'missing' %}
-          <span class="badge bad" title="{{ dns_status_help(d.dns_status) }}">no record</span>
-        {% elif d.dns_status == 'multiple' %}
-          <span class="badge bad" title="{{ dns_status_help(d.dns_status) }}">conflicting records</span>
-        {% elif d.dns_status == 'lookup_failed' %}
-          <span class="badge muted" title="{{ dns_status_help(d.dns_status) }}">couldn't check</span>
-        {% else %}
-          <span class="badge muted" title="{{ dns_status_help('unknown') }}">not checked yet</span>
-        {% endif %}
-      </span>
-    </div>
-
-    <div class="row">
-      <span class="label" title="What mail providers have reported seeing, which can lag a few days behind a real DNS change">Reports say</span>
-      <span>
-        {% if d.report_p %}
-          <span title="{{ explain_policy(d.report_p, d.report_pct) }}">p={{ d.report_p }} pct={{ d.report_pct }}</span> <span class="muted">(since {{ d.report_since }})</span>
-        {% else %}
-          <span class="muted">no reports yet</span>
-        {% endif %}
-      </span>
-    </div>
-
-    <div class="row">
-      <span class="label" title="% of your mail that passed authentication in this window">Pass rate ({{ d.window_days }}d)</span>
-      <span>
-        {% if d.window_rate is not none %}
-          <span class="badge {{ 'ok' if d.window_rate >= 0.99 else ('warn' if d.window_rate >= 0.95 else 'bad') }}">
-            {{ "%.1f"|format(d.window_rate * 100) }}%
-          </span>
-          <span class="muted">({{ d.window_total }} msgs)</span>
-        {% else %}
-          <span class="muted">not enough recent mail to tell</span>
-        {% endif %}
-      </span>
-    </div>
-
-    {% if d.card_sparkline_svg %}
-    <div class="sparkline" style="margin:0.4rem 0 0.6rem 0" title="Overall health score trend, last 30 days">{{ d.card_sparkline_svg | safe }}</div>
-    {% endif %}
-
-    <div class="row">
-      <span class="label" title="The most recent report data we have on file for this domain">Last ingested</span>
-      <span class="muted">{{ d.last_ingested or "never" }}</span>
-    </div>
-
-    {% if d.open_counts %}
-    <div class="row">
-      <span class="label" title="Open action items for this domain -- only the most important couple are shown here; the domain page lists them all">Open items</span>
-      <span>
-        {% for cat, n in d.top_issues %}
-          <span class="badge muted" title="{{ category_help(cat) }}">{{ category_label(cat) }}: {{ n }}</span>
-        {% endfor %}
-        {% if d.extra_issues_count %}
-          <a href="/domain/{{ d.name }}" class="muted" style="font-size:0.78rem;" title="See the rest on this domain's own page">+{{ d.extra_issues_count }} more</a>
-        {% endif %}
-      </span>
-    </div>
-    {% endif %}
-
-    {% if d.rec_title %}
-    <div class="rec">🧭 {{ d.rec_title }}</div>
-    {% endif %}
   </div>
-  {% endfor %}
-  <p class="df-empty muted" id="domain-filter-empty" hidden>No domains match that search.</p>
+
+  {# KPI band #}
+  <div class="cc-kpis">
+    <div class="cc-kpi"><div class="cc-kpi-num">{{ kpis.total_domains }}</div><div class="cc-kpi-lbl">Domains tracked</div></div>
+    <div class="cc-kpi"><div class="cc-kpi-num ok">{{ kpis.good_count }}</div><div class="cc-kpi-lbl">Healthy</div></div>
+    <div class="cc-kpi"><div class="cc-kpi-num {{ 'warn' if (kpis.bad_count + kpis.ugly_count) else '' }}">{{ kpis.bad_count + kpis.ugly_count }}</div><div class="cc-kpi-lbl">Need attention</div></div>
+    {% if protection %}
+    <div class="cc-kpi"><div class="cc-kpi-num">{{ protection.attempts }}</div><div class="cc-kpi-lbl">Impersonation attempts caught (90d)</div></div>
+    {% endif %}
+    <div class="cc-kpi"><div class="cc-kpi-num {{ 'bad' if kpis.expiring_soon else '' }}">{{ kpis.expiring_soon }}</div><div class="cc-kpi-lbl">Expiring soon</div></div>
+  </div>
+
+  {# Account-wide protection strip #}
+  {% if protection %}
+  <div class="cc-protection">🛡️ <b>{{ protection.attempts }} impersonation attempt{{ 's' if protection.attempts != 1 else '' }}</b> caught across your domains in the last {{ protection.days }} days{% if protection.blocked %}, {{ protection.blocked }} blocked outright{% endif %} — targeting {% for d in protection.domains[:3] %}{{ d.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% if protection.domains|length > 3 %} and {{ protection.domains|length - 3 }} more{% endif %}. This is your protection doing its job.</div>
+  {% endif %}
+
+  {% if ns_total is not defined %}{% set ns = namespace(total_open=0, domains_with_issues=0) %}
+  {% for d in domains %}{% if d.open_counts %}{% set ns.domains_with_issues = ns.domains_with_issues + 1 %}{% for cat, n in d.open_counts.items() %}{% set ns.total_open = ns.total_open + n %}{% endfor %}{% endif %}{% endfor %}{% endif %}
+
+  <div class="cc-split">
+    {# ---- MAIN COLUMN ---- #}
+    <div>
+      {# Health state + trend #}
+      <div class="cc-panel">
+        <h2>🩺 Overall health</h2>
+        <div class="health-panel" style="gap:1.2rem;">
+          <div class="hp-block">
+            <div class="hp-body hp-body-split">
+              <div class="sparkline hp-donut">{{ vibe_donut_svg | safe }}</div>
+              <ul class="tier-legend">
+                {% for cls, count, name in [('ok', kpis.good_count, 'Healthy'),('warn', kpis.bad_count, 'Needs attention'),('bad', kpis.ugly_count, 'At risk')] %}
+                <li class="{{ 'is-zero' if not count }}"><span class="tier-dot {{ cls }}"></span><span class="tier-count">{{ count }}</span><span class="tier-name">{{ name }}</span><span class="tier-share">{% if kpis.scored_domains %}{{ (count / kpis.scored_domains * 100)|round|int }}%{% endif %}</span></li>
+                {% endfor %}
+                {% if kpis.unscored_domains %}<li class="is-muted"><span class="tier-dot muted"></span><span class="tier-count">{{ kpis.unscored_domains }}</span><span class="tier-name">Not enough data yet</span><span class="tier-share"></span></li>{% endif %}
+              </ul>
+            </div>
+          </div>
+          <div class="hp-block">
+            <div class="hp-head"><span class="hp-sub">pass rate, all domains, last 60 days</span></div>
+            <div class="hp-body"><div class="sparkline hp-trend">{{ portfolio_sparkline_svg | safe }}</div></div>
+          </div>
+        </div>
+      </div>
+
+      {# Portfolio security overview #}
+      {% if overview.no_dmarc or overview.weakened or overview.expiring_soon or overview.suspicious_by_ip or overview.mta_sts_broken or overview.stale %}
+      <div class="cc-panel">
+        <h2>🛡️ Worth checking across every domain</h2>
+        {% if overview.no_dmarc %}<div class="cc-secrow"><span class="csr-lbl" title="No DMARC record at all">No DMARC record</span><span>{% for name in overview.no_dmarc %}<a href="/domain/{{ name }}" class="cc-badge-bad">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.weakened %}<div class="cc-secrow"><span class="csr-lbl" title="Live DNS enforces less than the last known-good baseline">Protection weakened</span><span>{% for name in overview.weakened %}<a href="/domain/{{ name }}" class="cc-badge-bad">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.expiring_soon %}<div class="cc-secrow"><span class="csr-lbl" title="Registration close to expiring">Registration expiring</span><span>{% for d in overview.expiring_soon %}<a href="/domain/{{ d.name }}" class="cc-badge-bad">{{ d.name }} ({{ d.days_left }}d)</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.suspicious_by_ip %}<div class="cc-secrow"><span class="csr-lbl" title="IPs flagged suspicious while reviewing a domain">Flagged sender IPs</span><span>{% for ip, names in overview.suspicious_by_ip.items() %}<span class="cc-badge-warn" title="{{ names|join(', ') }}">{{ ip }}</span>{% endfor %}</span></div>{% endif %}
+        {% if overview.mta_sts_broken %}<div class="cc-secrow"><span class="csr-lbl" title="MTA-STS advertised but the policy file is broken">MTA-STS misconfigured</span><span>{% for name in overview.mta_sts_broken %}<a href="/domain/{{ name }}" class="cc-badge-warn">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.stale %}<div class="cc-secrow"><span class="csr-lbl" title="No fresh DMARC reports in a while">No fresh reports</span><span>{% for name in overview.stale %}<a href="/domain/{{ name }}" class="cc-badge-muted">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    {# ---- ACTIVITY RAIL ---- #}
+    <div>
+      <div class="cc-panel">
+        <h2>📜 Recent activity</h2>
+        {% if activity %}
+        <ul class="cc-feed">
+          {% for e in activity %}
+          <li>
+            <span class="cf-when">{{ e.when }}</span>
+            <span class="cf-dot">{{ '✅' if e.resolved else '⚠️' }}</span>
+            <span>{{ 'Sorted' if e.resolved else 'Flagged' }} · {{ category_label(e.category) }}<br><span class="cf-dom">{{ e.domain }}</span></span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="cc-sub" style="font-size:.9rem;">Nothing notable lately — quiet is good.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ---- DOMAINS ---- #}
+  <div class="cc-domhead">
+    <h2>Domains</h2>
+    <div style="display:flex; gap:.6rem; flex-wrap:wrap; align-items:center;">
+      <div class="cc-search">🔍<input type="search" id="domain-search" placeholder="Search domains..." autocomplete="off" aria-label="Search domains"><span class="muted" id="domain-filter-count" role="status" aria-live="polite" style="font-size:.8rem;"></span></div>
+      <form action="/domains/add" method="post" class="cc-addform">
+        <input type="text" name="name" placeholder="example.org" required autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Domain to track">
+        <button type="submit">+ Track</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="cc-grid" id="domain-grid">
+    {% for d in domains %}
+    {% set has_issues = d.open_counts and d.open_counts.values()|sum > 0 %}
+    {% set dns_bad = d.dns_status in ('missing','multiple') or (d.dns_status=='ok' and not d.dns_match) %}
+    <div class="cc-card{{ ' pinned' if d.pinned else '' }}" data-domain="{{ d.name }}">
+      <div class="cc-eyebrow">
+        <span>Domain</span>
+        <form class="inline pin-form" action="/domain/{{ d.name }}/pin" method="post">
+          <input type="hidden" name="redirect_to" value="/">
+          <button type="submit" class="cc-pin{{ ' active' if d.pinned else '' }}" title="{{ 'Unpin' if d.pinned else 'Pin to top' }}" aria-label="{{ 'Unpin' if d.pinned else 'Pin to top' }}"><svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><circle cx="8" cy="5" r="4"/><polygon points="8,8 5,15 11,15"/></svg></button>
+        </form>
+      </div>
+      <div class="cc-cardname"><a href="/domain/{{ d.name }}">{{ domain_name_split(d.name) }}</a></div>
+
+      <div class="cc-score">
+        <span class="cc-score-num {{ d.vibe_status if d.health_score is not none else 'muted' }}">{% if d.health_score is not none %}{{ d.health_score|round|int }}{% else %}–{% endif %}</span>
+        <span class="cc-tier {{ d.vibe_status }}">{{ {'ok':'Healthy','warn':'Needs attention','bad':'At risk'}.get(d.vibe_status,'No data') }}</span>
+      </div>
+
+      {% if d.card_sparkline_svg %}<div class="sparkline" title="Health score, last 30 days">{{ d.card_sparkline_svg | safe }}</div>{% endif %}
+
+      <div class="cc-meta">
+        <div class="cm-row"><span>Live DNS</span><span>{% if d.dns_status=='ok' %}<b>p={{ d.dns_p }} · {{ d.dns_pct }}%</b>{% elif d.dns_status=='missing' %}<b style="color:#c0392b;">no record</b>{% elif d.dns_status=='multiple' %}<b style="color:#c0392b;">conflicting</b>{% else %}not checked{% endif %}</span></div>
+        <div class="cm-row"><span>Pass rate ({{ d.window_days }}d)</span><span>{% if d.window_rate is not none %}<b>{{ "%.1f"|format(d.window_rate*100) }}%</b> <span style="opacity:.7">({{ d.window_total }})</span>{% else %}—{% endif %}</span></div>
+        <div class="cm-row"><span>Last report</span><span>{{ d.last_ingested or "never" }}</span></div>
+      </div>
+
+      {% if d.open_counts %}
+      <div class="cc-pills">
+        {% for cat, n in d.top_issues %}<span class="cc-pill bad" title="{{ category_help(cat) }}">{{ category_label(cat) }} · {{ n }}</span>{% endfor %}
+        {% if d.extra_issues_count %}<a href="/domain/{{ d.name }}" class="cc-pill" style="text-decoration:none;">+{{ d.extra_issues_count }} more</a>{% endif %}
+      </div>
+      {% endif %}
+
+      {% if d.rec_title %}<div class="cc-rec">🧭 {{ d.rec_title }}</div>{% endif %}
+    </div>
+    {% endfor %}
+    <p class="cc-sub" id="domain-filter-empty" hidden>No domains match that search.</p>
+  </div>
+
+  {# Upload kept, tucked at the bottom for the rare manual import #}
+  <div style="margin-top:1.4rem;">
+    <form action="/ingest" method="post" enctype="multipart/form-data" style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+      <span class="cc-eyebrow" style="margin:0;">Manual import</span>
+      <input type="file" name="file" required>
+      <button type="submit" class="cc-addform" style="font-family:var(--cc-display); font-weight:600; background:var(--cc-ink); color:#fff; border:0; border-radius:9px; padding:.45rem .8rem; cursor:pointer;">Ingest .zip/.mbox</button>
+    </form>
+  </div>
 </div>
 
 <script>
@@ -309,27 +279,18 @@
   var cards = Array.prototype.slice.call(grid.querySelectorAll('[data-domain]'));
   var count = document.getElementById('domain-filter-count');
   var empty = document.getElementById('domain-filter-empty');
-
   function apply() {
-    var q = input.value.trim().toLowerCase();
-    var shown = 0;
+    var q = input.value.trim().toLowerCase(), shown = 0;
     cards.forEach(function (card) {
       var match = !q || card.getAttribute('data-domain').indexOf(q) !== -1;
-      card.hidden = !match;
-      if (match) shown++;
+      card.hidden = !match; if (match) shown++;
     });
-    // Only narrate the count while filtering -- "18 of 18" on an untouched
-    // page is noise, and this line is announced to screen readers.
     count.textContent = q ? (shown + ' of ' + cards.length) : '';
     empty.hidden = !(q && shown === 0);
   }
-
   input.addEventListener('input', apply);
-  input.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { input.value = ''; apply(); }
-  });
+  input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; apply(); } });
   apply();
 })();
 </script>
-
 {% endblock %}
