@@ -1,22 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Vigil — DMARC Command Centre{% endblock %}
 {% block content %}
-{# Branded command-centre home. The <style> below only loads on this page, so
-   the aikyam-brand look is scoped here while the per-domain working tabs keep
-   the Ghost-admin neutrals (the hybrid direction). Visual tokens verified live
-   against aikyamhq.com / aikyamfellows.org: cream #FBF7F4, ink #1F2421,
-   Figtree display sans, Source Serif body, bold+light wordmark, uppercase
-   letter-spaced eyebrows, big-stat cards. #}
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+{# Branded command-centre home. Colors/fonts below ALIAS the same global
+   tokens every other page uses (style.css :root, loaded via base.html) --
+   the whole app is one brand now, not home-plus-a-separate-admin-theme.
+   Only the .cc-* structural rules (grid/card layout) are page-specific. #}
 <style>
-  :root { --cc-cream:#FBF7F4; --cc-ink:#1F2421; --cc-muted:#7a746b; --cc-line:#e8e2d8;
-          --cc-accent:#7358B3; --cc-card:#ffffff;
-          --cc-display:'Figtree',-apple-system,'system-ui','Segoe UI',Roboto,sans-serif;
-          --cc-serif:'Source Serif 4',Georgia,'Iowan Old Style','Times New Roman',serif; }
-  /* Paint the home content area cream (scoped: this stylesheet only ships on / ) */
-  .content-area { background: var(--cc-cream); }
+  :root { --cc-cream:var(--bg); --cc-ink:var(--fg); --cc-muted:var(--muted); --cc-line:var(--border);
+          --cc-accent:var(--accent); --cc-card:var(--card);
+          --cc-display:var(--font-sans); --cc-serif:var(--font-serif); }
   .cc { font-family: var(--cc-serif); color: var(--cc-ink); max-width: 1200px; }
   .cc-eyebrow { font-family:var(--cc-display); font-size:11px; font-weight:600; letter-spacing:.14em;
                 text-transform:uppercase; color:var(--cc-muted); margin:0 0 .4rem; }

@@ -1,80 +1,51 @@
 :root {
-  color-scheme: light dark;
+  /* Light only, deliberately -- see the removed prefers-color-scheme block
+     below. The whole app (this file) plus the branded home (index.html) now
+     read the SAME tokens, so "looks like home" is true by construction rather
+     than something to keep in sync by hand. Palette verified live against
+     aikyamfellows.org / aikyamhq.com (cream #FBF7F4 / ink #1F2421 / purple
+     accent #7358B3), not guessed. */
+  color-scheme: light;
 
-  /* Neutral scale + typography, matching the aikyam design system
-     (aikyamjobs.org/design-system, Ghost-admin-derived): black + grey + white,
-     Inter-led sans-serif, no brand-colored primary actions. No @import/CDN
-     font load -- this app is self-hosted with no public exposure, so the
-     fallback stack (-apple-system/system-ui) is what most viewers actually
-     render; Inter is named first for anyone who has it installed. */
-  --grey-50:  #f9f9fb;
-  --grey-100: #f4f5f7;
-  --grey-200: #eff0f3;
-  --grey-300: #e3e5ea;
-  --grey-400: #d6d9e0;
-  --grey-500: #c0c4cf;
-  --grey-600: #adb2bf;
-  --grey-700: #8f96a7;
-  --grey-800: #6b7280;
-  --grey-900: #3d4451;
-  --black:    #202226;
+  --grey-50:  #F4EFE8;
+  --grey-100: #EFE9E0;
+  --grey-200: #E8E2D8;
+  --grey-300: #DAD2C4;
+  --grey-400: #C7BCA9;
+  --grey-500: #ADA08A;
+  --grey-600: #8f8570;
+  --grey-700: #756c5a;
+  --grey-800: #5c5548;
+  --grey-900: #3a352c;
+  --black:    #1F2421;
 
-  --bg: #ffffff;
+  --bg: #FBF7F4;
   --fg: var(--black);
-  --muted: var(--grey-800);
-  --border: var(--grey-300);
+  --muted: #7a746b;
+  --border: var(--grey-200);
   --card: #ffffff;
   --card-raised: var(--grey-50);
 
-  /* Semantic colors -- named after the design system's success/warning/danger/
-     info roles, but deepened a step from its raw brand hex (#30cf43/#f5c000/
-     #f30b0b/#42a4f5) where those are used as small text/border colors here,
-     since the raw yellow in particular doesn't hold contrast on white at
-     badge/label sizes. -bg tints stay close to the lighter, original hue. */
-  --ok: #1a9e3f;
-  --ok-bg: rgba(48,207,67,0.14);
+  /* Semantic colors -- kept close to the original hues (verified to hold
+     contrast on white/cream at badge size) so nothing in the huge existing
+     badge/verdict/pill vocabulary needed touching, just the surfaces around
+     them. --accent switches to the aikyam brand purple. */
+  --ok: #1a7f37;
+  --ok-bg: rgba(26,159,63,0.12);
   --warn: #9a6400;
-  --warn-bg: rgba(245,192,0,0.18);
-  --bad: #d10a0a;
-  --bad-bg: rgba(243,11,11,0.10);
-  --accent: #2f8fe0;
-  --accent-bg: rgba(66,164,245,0.12);
+  --warn-bg: rgba(245,192,0,0.16);
+  --bad: #c0392b;
+  --bad-bg: rgba(211,47,32,0.10);
+  --accent: #7358B3;
+  --accent-bg: rgba(115,88,179,0.12);
 
-  --radius: 12px;
-  --radius-sm: 6px;
-  --font-sans: "Inter", -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --radius: 14px;
+  --radius-sm: 8px;
+  /* Figtree (display/UI) + Source Serif 4 (editorial accents) -- loaded once
+     in base.html's <head>. Falls back to the system stack if offline. */
+  --font-sans: "Figtree", -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, "Iowan Old Style", "Times New Roman", serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --grey-50:  #24262b;
-    --grey-100: #292c32;
-    --grey-200: #2f323a;
-    --grey-300: #383c45;
-    --grey-400: #454a54;
-    --grey-500: #5b6170;
-    --grey-600: #767d8c;
-    --grey-700: #9aa0aa;
-    --grey-800: #b3b8c2;
-    --grey-900: #dcdfe4;
-    --black:    #f2f3f5;
-
-    --bg: #14161a;
-    --fg: var(--black);
-    --muted: var(--grey-800);
-    --border: var(--grey-300);
-    --card: #1b1e24;
-    --card-raised: #20242b;
-
-    --ok: #4fd17a;
-    --ok-bg: rgba(79,209,122,0.14);
-    --warn: #e0a24b;
-    --warn-bg: rgba(224,162,75,0.14);
-    --bad: #ef6a5f;
-    --bad-bg: rgba(239,106,95,0.14);
-    --accent: #6ea8fe;
-    --accent-bg: rgba(110,168,254,0.12);
-  }
 }
 * { box-sizing: border-box; }
 body {
