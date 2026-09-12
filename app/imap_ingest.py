@@ -115,7 +115,16 @@ def run_imap_ingest(conn, verbose: bool = True):
 
     stats = {"attachments_seen": 0, "reports_stored": 0, "records_stored": 0, "duplicates": 0, "errors": []}
     try:
-        M = imaplib.IMAP4_SSL(cfg["host"], cfg["port"])
+        # timeout is load-bearing: without it, the underlying socket has NO
+        # timeout at all, so a stalled connection (e.g. a half-open TCP socket
+        # right after the laptop wakes from sleep) blocks this call FOREVER --
+        # not an exception something could catch, an actual permanent hang.
+        # This ran inside the shared background-sweep thread holding the one
+        # sqlite connection open, so it froze every other request behind
+        # SQLite's lock too -- the whole app looked dead. 30s bounds every
+        # operation on this connection (login/select/search/fetch/logout all
+        # reuse the same socket), turning a hang into a normal, logged failure.
+        M = imaplib.IMAP4_SSL(cfg["host"], cfg["port"], timeout=30)
         M.login(cfg["user"], cfg["password"])
     except Exception as e:
         if verbose:

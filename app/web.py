@@ -1360,8 +1360,15 @@ def fetch_reports():
 
     def _bg():
         c = get_connection()
-        run_imap_ingest(c, verbose=True)
-        run_analysis(c, verbose=False)  # so the just-pulled reports show up
+        try:
+            run_imap_ingest(c, verbose=True)
+            run_analysis(c, verbose=False)  # so the just-pulled reports show up
+        except Exception as e:
+            # A bounded failure (e.g. IMAP timeout) should be a logged no-op,
+            # not an uncaught exception in a background thread -- and this
+            # thread isn't behind run_all_checks' own per-step try/except, so
+            # it needs its own.
+            print(f"[fetch_reports] failed: {e}")
     threading.Thread(target=_bg, daemon=True).start()
     return RedirectResponse(
         "/?flash=" + urllib.parse.quote(
