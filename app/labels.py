@@ -21,6 +21,7 @@ CATEGORY_LABELS = {
     "mailgun_reputation": "Mailgun bounce/complaint rate",
     "mailgun_new_suppressions": "New Mailgun suppressions",
     "postmaster_compliance": "Gmail Postmaster compliance",
+    "postmaster_domain_missing": "Not added to Postmaster Tools",
     "ses_reputation_watch": "SES bounce/complaint rate trending up",
     "ses_reputation": "SES bounce/complaint rate",
     "ses_new_suppressions": "New SES suppressions",
@@ -63,6 +64,7 @@ CATEGORY_PRIORITY_ORDER = [
     "ses_account_health",
     "ses_identity_unverified",
     "postmaster_compliance",
+    "postmaster_domain_missing",
     "borrowed_sending_identity",
     "failure_investigation",
     "new_sender",
@@ -108,6 +110,7 @@ CATEGORY_HELP = {
     "mailgun_reputation": "Mailgun's reported bounce or complaint rate for this domain crossed the warning threshold -- worth checking your list quality before sending more. Note: this only reflects providers that feed complaints back to Mailgun (e.g. Yahoo) -- Gmail generally doesn't, so a low number here doesn't mean Gmail recipients are happy too.",
     "mailgun_new_suppressions": "Mailgun automatically suppressed new addresses (bounced or complained) since the last check -- these won't receive mail from you again unless removed from Mailgun's suppression list, and are worth pruning from your Listmonk list too.",
     "postmaster_compliance": "Google's own verdict (from Postmaster Tools) on one of its published sender requirements for this domain -- this is Gmail telling you directly what's wrong, not an inference from DMARC reports.",
+    "postmaster_domain_missing": "Gmail reported seeing real, meaningful mail volume for this domain, but it isn't verified on this Postmaster Tools account -- so its actual Gmail spam rate and compliance verdicts are invisible to every check that depends on Postmaster (unlike DMARC reports, which every domain gets regardless).",
     "ses_reputation_watch": "Amazon SES's own bounce or complaint rate for this domain has crossed the earlier \"watch\" threshold -- not yet at the danger line, but trending the wrong way.",
     "ses_reputation": "Amazon SES's own bounce or complaint rate for this domain crossed the warning threshold, based on real bounce/complaint events from its dedicated configuration set -- worth checking list quality before sending more.",
     "ses_new_suppressions": "SES recorded new bounces or complaints since the last check for this domain's configuration set -- these addresses are effectively dead ends; worth pruning from Listmonk too.",
@@ -167,6 +170,7 @@ CATEGORY_REMEDIATION = {
     "dns_multiple": "Your DNS host has more than one TXT record at _dmarc.<your domain> -- mail providers can't tell which one to trust and may ignore your policy entirely as a result. Open your DNS control panel, list all TXT records for that exact name, and delete all but one (merge their content first if they differ). Most registrars show every record for a name on one screen, so this is usually a one-time cleanup.",
     "spf_missing": "Publish an SPF TXT record at your domain's apex (not a subdomain) listing everything that sends mail as you -- e.g. \"v=spf1 include:_spf.google.com include:mailgun.org ~all\" adjusted for whichever of Google Workspace/SES/Mailgun/etc. you actually use. Each provider's own setup docs give you the exact include: value to add. See the Gmail sender requirements table above once it's published to confirm it's being read correctly.",
     "dkim_missing": "Turn on DKIM signing in whichever service sends as this domain (Google Workspace: Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email; SES: Identities -> this domain -> DKIM; Mailgun: Domain settings -> DNS records), then publish the CNAME/TXT record it gives you. This is usually a one-time setup per sending service, not something that needs redoing per campaign.",
+    "postmaster_domain_missing": "The exact DNS TXT record to add is in the detail above -- copy it in at your DNS host exactly as shown. Once it's live, this tool checks automatically every cycle and completes verification for you; no need to open postmaster.google.com. If the detail says the record couldn't be fetched yet, that means the one-time re-authorization (`python -m app.postmaster_auth`) hasn't been done yet -- after that, this clears itself on the next refresh.",
     "untracked_sending_subdomain": "Check with whoever manages sending for this domain to confirm whether this subdomain is actually in use. If it is: make sure its DMARC record has a rua= reporting address (see the detail above for whether it's missing), then just let DMARCTool ingest reports for it -- adding a subdomain works exactly like any other domain, no special setup needed. If it's not in use / was a leftover from something abandoned, no action needed beyond knowing it's there.",
     "domain_expiring_soon": "Renew the domain now, at whichever registrar it's registered with (see the detail above for which one) -- most registrars let you renew any time before expiry, even years in advance. If auto-renew is available and the card on file is current, turning it on avoids this happening again.",
 }
@@ -449,6 +453,16 @@ SETTINGS_META = {
         "help": "How many days of Gmail-reported spam-rate history to pull each time.",
         "example": "30 means the number shown reflects the last 30 days, not all-time.",
     },
+    "postmaster_missing_min_volume": {
+        "label": "Minimum Gmail volume before flagging a domain as missing from Postmaster",
+        "help": "A domain that barely touches Gmail isn't worth registering in Postmaster Tools. This is the minimum number of messages Gmail must have reported seeing (in the window below) before the reminder to add the domain appears.",
+        "example": "50 means the reminder only appears once Gmail has reported at least 50 messages for that domain.",
+    },
+    "postmaster_missing_recent_days": {
+        "label": "Lookback window for that Gmail volume check",
+        "help": "How many days of Gmail-reported mail (from DMARC reports) to add up when deciding whether a domain sends enough to be worth registering in Postmaster Tools.",
+        "example": "30 means it looks at the last 30 days of Gmail-reported volume.",
+    },
     "ses_stats_window_days": {
         "label": "SES bounce/complaint rate lookback window",
         "help": "How many days of DMARCTool's own accumulated SES event counts to sum when computing the rate shown (SES itself has no on-demand stats API -- this is built entirely from events we've captured).",
@@ -615,6 +629,7 @@ SETTINGS_GROUPS = [
     ]),
     ("📮 Google Postmaster Tools", [
         "postmaster_recheck_hours", "postmaster_stats_window_days",
+        "postmaster_missing_min_volume", "postmaster_missing_recent_days",
     ]),
     ("☁️ Amazon SES", [
         "ses_stats_window_days", "ses_bounce_rate_watch", "ses_bounce_rate_warn",

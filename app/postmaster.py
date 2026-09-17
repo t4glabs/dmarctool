@@ -231,6 +231,102 @@ def _fetch_all(domain, access_token, window_days):
     return {"stats": (stats, stats_err), "compliance": (compliance, compliance_err), "daily": (daily, daily_err)}
 
 
+def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recent_days: int, verbose: bool) -> None:
+    """Tracked domains with real, recent Gmail-reported volume (per DMARC
+    aggregate reports already ingested -- no extra network call needed to
+    find candidates) that are NOT verified on this Postmaster Tools account,
+    meaning their spam-rate and compliance signals are completely invisible
+    to every check in this file. Reminder only above a real volume bar -- a
+    domain barely touching Gmail isn't worth registering.
+
+    Where possible, also fetches the exact DNS TXT verification token and
+    attempts to complete verification automatically (app/site_verification.py)
+    -- so getting a domain into Postmaster Tools can happen with zero visits
+    to postmaster.google.com. Degrades gracefully (a plain "add it manually"
+    reminder) if that scope hasn't been granted yet."""
+    from app.site_verification import attempt_verify, get_verification_token  # local: avoids a circular import
+
+    recent_cutoff = int(datetime.datetime.utcnow().timestamp()) - recent_days * 86400
+    rows = conn.execute(
+        """SELECT d.id as domain_id, d.name as domain_name, SUM(rr.count) as vol
+           FROM report_records rr
+           JOIN reports r ON r.id = rr.report_id
+           JOIN domains d ON d.id = r.domain_id
+           WHERE r.org_name = 'google.com' AND r.date_end >= ?
+           GROUP BY d.id
+           HAVING vol >= ?""",
+        (recent_cutoff, min_volume),
+    ).fetchall()
+
+    flagged_ids = set()
+    for row in rows:
+        domain_id, domain_name, vol = row["domain_id"], row["domain_name"], row["vol"]
+        if domain_id in matched_domain_ids:
+            continue
+        flagged_ids.add(domain_id)
+
+        # The record may already be live from a previous cycle -- try to
+        # finish the job before explaining anything.
+        verified, _ = attempt_verify(domain_name)
+        if verified:
+            conn.execute(
+                "UPDATE postmaster_verification_tokens SET verified_at=datetime('now') WHERE domain_id=?",
+                (domain_id,),
+            )
+            if verbose:
+                print(f"[postmaster] {domain_name}: verification completed automatically -- "
+                      f"will show as verified once Postmaster's own domain list next refreshes")
+            continue  # don't raise a reminder for something that just got fixed
+
+        cached = conn.execute(
+            "SELECT token FROM postmaster_verification_tokens WHERE domain_id=?", (domain_id,)
+        ).fetchone()
+        if cached:
+            token, token_err = cached["token"], None
+        else:
+            token, token_err = get_verification_token(domain_name)
+            if token:
+                conn.execute(
+                    "INSERT INTO postmaster_verification_tokens (domain_id, token) VALUES (?,?)",
+                    (domain_id, token),
+                )
+
+        record_note = (
+            f"Add this exact DNS TXT record at the root of {domain_name}: `{token}`. Once it's live, this "
+            f"tool checks automatically every cycle and completes verification for you -- no need to visit "
+            f"postmaster.google.com at all."
+        ) if token else (
+            f"Couldn't fetch the exact verification record yet ({token_err or 'no reason given'}). Add this "
+            f"domain manually at postmaster.google.com in the meantime."
+        )
+
+        upsert_system_action(
+            conn, domain_id, "postmaster_domain_missing", None,
+            f"{domain_name}: sending real Gmail volume but not added to Postmaster Tools",
+            f"Gmail reported seeing {vol} message(s) using this domain's name over the last {recent_days} days, "
+            f"but this domain isn't verified on this Postmaster Tools account -- so its Gmail spam rate and "
+            f"compliance status (SPF/DKIM, DMARC, unsubscribe, deliverability) are completely invisible to "
+            f"every check in this tool. {record_note}",
+        )
+
+    if flagged_ids:
+        placeholders = ",".join("?" * len(flagged_ids))
+        conn.execute(
+            f"""UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                WHERE category='postmaster_domain_missing' AND status='open'
+                  AND domain_id NOT IN ({placeholders})""",
+            tuple(flagged_ids),
+        )
+    else:
+        conn.execute(
+            """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+               WHERE category='postmaster_domain_missing' AND status='open'"""
+        )
+    if verbose:
+        print(f"[postmaster] {len(flagged_ids)} domain(s) flagged as missing from Postmaster Tools "
+              f"(>= {min_volume} Gmail msg(s) in last {recent_days}d)")
+
+
 def run_postmaster_checks(conn, verbose: bool = True) -> None:
     settings = ensure_default_settings(conn)
     access_token, err = _refresh_access_token()
@@ -252,6 +348,18 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
     if verbose:
         print(f"[postmaster] {len(matches)} verified domain(s) match a tracked domain "
               f"(of {len(pm_domains)} verified on the account)")
+
+    # Reminder for tracked domains with real Gmail volume that aren't verified
+    # here at all -- cheap (only reads already-ingested DMARC data + the
+    # domain list just fetched above), so it runs every cycle regardless of
+    # the per-domain staleness gate below.
+    _check_missing_domains(
+        conn, {domain_id for domain_id, _ in matches.values()},
+        min_volume=int(settings["postmaster_missing_min_volume"]),
+        recent_days=int(settings["postmaster_missing_recent_days"]),
+        verbose=verbose,
+    )
+    conn.commit()
 
     to_check = [d for d in matches if _stale(conn, d, recheck_hours)]
     if verbose:

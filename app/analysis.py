@@ -66,6 +66,8 @@ DEFAULT_SETTINGS = {
     # cap is just a safety ceiling.
     "postmaster_recheck_hours": "24",     # Postmaster Tools data itself lags/aggregates daily
     "postmaster_stats_window_days": "30", # lookback window for the SPAM_RATE / delivery-error metrics
+    "postmaster_missing_min_volume": "50",   # don't flag a domain as missing from Postmaster until Gmail's reported at least this much volume for it -- a domain barely touching Gmail isn't worth registering
+    "postmaster_missing_recent_days": "30",  # how far back to look for that Gmail-reported volume
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
     "ses_bounce_rate_watch": "0.02",       # bounce rate (of delivered) that triggers an early "watch" flag
     "ses_bounce_rate_warn": "0.05",       # bounce rate (of delivered) that triggers a flag

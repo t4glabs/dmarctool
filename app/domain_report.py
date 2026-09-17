@@ -126,7 +126,10 @@ _OPERATOR_ONLY_CATEGORIES = {
     # "problem with your website"; both used to fall through to the generic
     # phrase and, being distinct categories, stacked into identical repeated
     # lines in the email.
-    "rua_unauthorized", "ses_event_backlog",
+    # postmaster_domain_missing is Aikyam's own Postmaster Tools account admin
+    # (registering a domain there) -- a beneficiary org has no access to that
+    # account and can't act on it either way.
+    "rua_unauthorized", "ses_event_backlog", "postmaster_domain_missing",
 }
 
 # Categories that are real and worth telling a beneficiary about, but never
