@@ -37,6 +37,7 @@ from app.analysis import (
     postmaster_daily_series, provider_breakdown, rate_trend_summary, recent_campaigns,
     recent_mailgun_campaigns, run_analysis,
     sending_cadence, ses_daily_series, sending_stream_breakdown, subscriber_engagement_summary,
+    mark_subscribers_reviewed,
 )
 from app.access_log import prune_old_access_log, record_access, recent_access_log
 from app.bounce_reasons import categorize_bounce
@@ -1146,25 +1147,47 @@ def download_mailgun_identity_failures(name: str, mailgun_domain: str, from_addr
 
 
 @app.get("/domain/{name}/inactive_subscribers.csv")
-def download_inactive_subscribers(name: str):
+def download_inactive_subscribers(name: str, new: bool = False):
+    """`new=true` scopes to what's new since the last "mark reviewed" click
+    (same watermark subscriber_engagement_summary computes for the on-page
+    table); the bare route (default) is the complete list, for an audit --
+    same "bare route = full, param = new-only" convention as the suppression
+    exports."""
     conn = get_connection()
     domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
     if not domain:
         raise HTTPException(status_code=404, detail="domain not found")
 
     engagement = subscriber_engagement_summary(conn, domain["id"])
+    rows = engagement["inactive"] if new else engagement["inactive_all"]
 
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["email", "newsletters_received", "status", "reason", "first_received", "last_received"])
-    for s in engagement["inactive"]:
+    for s in rows:
         writer.writerow([s["email"], s["received"], "Inactive", s["reason"], s["first_received"], s["last_received"]])
 
+    suffix = "_new" if new else ""
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{name}_inactive_subscribers.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="{name}_inactive_subscribers{suffix}.csv"'},
     )
+
+
+@app.post("/domain/{name}/inactive_subscribers/mark_reviewed")
+def mark_inactive_subscribers_reviewed(name: str, redirect_to: str = Form(None)):
+    """Advances the review watermark -- after this, someone only reappears on
+    the on-page list / "new" CSV if they've received ANOTHER newsletter since
+    without opening it. If they were actually removed from Listmonk, no new
+    delivery ever arrives for them and they quietly drop off, same as the
+    chronic-transient-bounce mark-done logic."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    mark_subscribers_reviewed(conn, domain["id"])
+    return RedirectResponse(redirect_to or f"/domain/{name}#deliverability", status_code=303)
 
 
 @app.post("/domain/{name}/pin")

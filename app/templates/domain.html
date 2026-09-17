@@ -1140,16 +1140,37 @@
         in total; below are the ones who've received at least {{ engagement.threshold }} newsletters but never
         opened a single one. Worth re-engaging or removing from the list.
       </p>
+      {% if engagement.reviewed_at %}
+      <p class="muted" style="margin-top:0; font-size:0.85rem;">You last reviewed this on {{ engagement.reviewed_at[:10] }} -- the list below only shows people still crossing the threshold since then. {{ engagement.inactive_all|length }} in total, all-time.</p>
+      {% endif %}
+      {% if engagement.inactive_all %}
+      <div class="formrow" style="margin-bottom:0.6rem;">
+        <a href="/domain/{{ domain.name }}/inactive_subscribers.csv?new=true" title="Only people still crossing the inactivity threshold since you last marked this reviewed -- the one to actually act on if you've already handled an earlier batch.">
+          <button type="button">⬇️ Download NEW only</button>
+        </a>
+        <a href="/domain/{{ domain.name }}/inactive_subscribers.csv" title="The complete list, everyone who's ever crossed the threshold -- for a full audit.">
+          <button type="button" class="small">⬇️ Download full</button>
+        </a>
+        <form class="inline" action="/domain/{{ domain.name }}/inactive_subscribers/mark_reviewed" method="post">
+          <input type="hidden" name="redirect_to" value="/domain/{{ domain.name }}#deliverability">
+          <button type="submit" class="small" title="After this, someone only reappears if they've received another newsletter since without opening it -- if you actually remove them from Listmonk, they drop off on their own.">✓ Mark reviewed</button>
+        </form>
+      </div>
+      {% endif %}
       {% if engagement.inactive %}
-      <a href="/domain/{{ domain.name }}/inactive_subscribers.csv"><button type="button">⬇️ Download CSV</button></a>
       <div class="table-wrap">
       <table>
         <tr><th>Email</th><th>Newsletters received</th><th>First received</th><th>Last received</th></tr>
-        {% for s in engagement.inactive %}
+        {% for s in engagement.inactive[:20] %}
         <tr><td>{{ s.email }}</td><td>{{ s.received }}</td><td>{{ s.first_received }}</td><td>{{ s.last_received }}</td></tr>
         {% endfor %}
       </table>
       </div>
+      {% if engagement.inactive|length > 20 %}
+      <p class="muted" style="font-size:0.85rem;">+{{ engagement.inactive|length - 20 }} more -- download the CSV above to see everyone.</p>
+      {% endif %}
+      {% elif engagement.reviewed_at %}
+      <p class="muted">Nothing new since your last review -- {{ engagement.inactive_all|length }} still on the full list if you want to revisit it.</p>
       {% else %}
       <p class="muted">No one has crossed {{ engagement.threshold }} received newsletters with zero opens yet.</p>
       {% endif %}

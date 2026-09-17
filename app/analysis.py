@@ -1370,11 +1370,35 @@ def display_name_summary(conn, domain_id: int):
     return {"names": names, "consistent": len(names) <= 1}
 
 
+def subscriber_review_watermark(conn, domain_id: int):
+    row = conn.execute(
+        "SELECT reviewed_at FROM subscriber_review_watermarks WHERE domain_id=?", (domain_id,)
+    ).fetchone()
+    return row["reviewed_at"] if row else None
+
+
+def mark_subscribers_reviewed(conn, domain_id: int) -> None:
+    conn.execute(
+        """INSERT INTO subscriber_review_watermarks (domain_id, reviewed_at) VALUES (?, datetime('now'))
+           ON CONFLICT(domain_id) DO UPDATE SET reviewed_at=excluded.reviewed_at""",
+        (domain_id,),
+    )
+    conn.commit()
+
+
 def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
     """Replaces the manual monthly SQL query the team runs directly against
     Listmonk's DB ('received 9+ campaigns, opened zero') -- built from the
     same per-recipient SES event data as recent_campaigns, so it's the same
-    trusted source, just aggregated differently."""
+    trusted source, just aggregated differently.
+
+    `inactive` (used for the on-page table + default CSV) is scoped to what's
+    new since the last "mark reviewed" click -- same self-resolving watermark
+    idea as app.chronic_bounces: someone only stays on the list if they've
+    received ANOTHER newsletter since being reviewed (still qualifying,
+    still not opening); if they were removed from Listmonk, no new delivery
+    ever arrives for them and they quietly drop off. `inactive_all` is the
+    complete, unfiltered list, for a full audit."""
     if threshold is None:
         settings = ensure_default_settings(conn)
         threshold = int(settings["newsletter_inactive_campaigns"])
@@ -1385,7 +1409,8 @@ def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
            GROUP BY email""",
         (domain_id,),
     ).fetchall()
-    inactive = sorted(
+    watermark = subscriber_review_watermark(conn, domain_id)
+    inactive_all = sorted(
         (
             {
                 "email": r["email"], "received": r["received"],
@@ -1396,7 +1421,11 @@ def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
         ),
         key=lambda x: -x["received"],
     )
-    return {"total_subscribers": len(per_email), "inactive": inactive, "threshold": threshold}
+    inactive = [x for x in inactive_all if not watermark or x["last_received"] > watermark]
+    return {
+        "total_subscribers": len(per_email), "inactive": inactive, "inactive_all": inactive_all,
+        "threshold": threshold, "reviewed_at": watermark,
+    }
 
 
 def bounce_category_breakdown(conn, domain_id: int):

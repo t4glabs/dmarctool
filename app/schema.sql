@@ -336,6 +336,19 @@ CREATE TABLE IF NOT EXISTS postmaster_verification_tokens (
     verified_at TEXT
 );
 
+-- "I've reviewed the inactive-subscribers list" watermark (analysis.py's
+-- subscriber_engagement_summary) -- same self-resolving-watermark idea as
+-- app.chronic_bounces: after marking reviewed, someone only reappears if
+-- they've received ANOTHER newsletter since (still qualifying) without
+-- opening it; if they were removed from the list, no new delivery ever
+-- arrives for them and they drop off on their own. Not action_items-backed
+-- like the bounce reminders -- this is a periodic review checkbox, not a
+-- "something's wrong" alert.
+CREATE TABLE IF NOT EXISTS subscriber_review_watermarks (
+    domain_id   INTEGER PRIMARY KEY REFERENCES domains(id),
+    reviewed_at TEXT NOT NULL
+);
+
 -- Amazon SES bounce/complaint/delivery events, consumed from an SQS queue fed by
 -- one SNS topic that every per-domain configuration set publishes to. SES has no
 -- per-domain read API -- this is the only way to get separated stats/suppressions.
