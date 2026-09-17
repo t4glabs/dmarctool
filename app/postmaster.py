@@ -506,8 +506,16 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
             # spam when the number is 0%.
             measured = stats.get("spam_rate") if stats else None
             flag = status == "NEEDS_WORK" and not (
-                requirement == "USER_REPORTED_SPAM_RATE"
-                and measured is not None and measured <= RECOMMENDED_SPAM_RATE_CEILING
+                (requirement == "USER_REPORTED_SPAM_RATE"
+                 and measured is not None and measured <= RECOMMENDED_SPAM_RATE_CEILING)
+                # DELIVERABILITY's own MESSAGE_VOLUME_LOW reason IS the data-confidence
+                # signal itself (Google saying outright "not enough mail to judge this"),
+                # no measured-rate comparison needed -- the comment above already named
+                # this as "the same shape" but never actually covered it, so a domain
+                # with every other requirement COMPLIANT still got a permanent
+                # "needs work" flag for having too little volume, which is exactly the
+                # nonsensical case this whole check exists to avoid.
+                or reason == "MESSAGE_VOLUME_LOW"
             )
             if flag:
                 spam_note = ""

@@ -439,7 +439,15 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
     complaint_warn = float(settings_now["ses_complaint_rate_warn"])
     cutoff = (datetime.date.today() - datetime.timedelta(days=window_days)).isoformat()
 
-    touched = {(domain_id, config_set) for domain_id, config_set, _ in counts} | set(new_suppressions)
+    # Re-evaluate EVERY known domain's config set every run, not just ones with
+    # fresh events this run -- a domain that goes quiet (no new SES traffic at
+    # all) would otherwise keep whatever ses_reputation/ses_new_suppressions
+    # verdict it last had frozen open forever, since the dismiss branches below
+    # only ever ran for "touched" (newly active) sets. Confirmed live: a domain
+    # with a single stray bounce three weeks ago and nothing since still showed
+    # "22% bounced" today, because this loop never revisited it to recompute
+    # against the now-current (empty) 30-day window and dismiss it.
+    touched = {(domain_id, config_set) for config_set, (domain_id, _) in domain_map.items()}
     for domain_id, config_set in touched:
         domain_name = domain_map.get(config_set, (None, None))[1]
         row = conn.execute(
