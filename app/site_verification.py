@@ -22,7 +22,12 @@ actually requested on that specific consent screen. Until then, the
 the exact DNS record automatically, and says so.
 """
 
-from app.postmaster import _post, _refresh_access_token
+import json
+import re
+import urllib.error
+import urllib.request
+
+from app.postmaster import _refresh_access_token
 
 API_BASE = "https://www.googleapis.com/siteVerification/v1"
 
@@ -30,10 +35,47 @@ _REAUTH_HINT = ("Postmaster auth doesn't have the domain-verification permission
                 "`python -m app.postmaster_auth` once (mints a fresh token with the missing scope "
                 "added) and this will start working automatically.")
 
+# Google's error text embeds the exact per-project activation link when the
+# API itself (as opposed to the OAuth scope) hasn't been turned on for this
+# Cloud project yet -- a separate one-time gate from OAuth consent. Extracted
+# rather than hardcoded, so it's always this project's real URL.
+_ACTIVATION_URL_RE = re.compile(r"https://console\.developers\.google\.com/apis/api/\S+?(?=[\s\"]|$)")
 
-def _looks_like_missing_scope(err: str) -> bool:
+
+def _post_full(url: str, body: dict, access_token: str):
+    """Like postmaster._post, but returns the FULL error body (no 200-char
+    truncation) -- needed here because Google's "API not enabled" error
+    embeds a long activation URL that truncation would cut off mid-link."""
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(), method="POST",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read()), None
+    except urllib.error.HTTPError as e:
+        return None, e.read().decode(errors="replace")
+    except (urllib.error.URLError, TimeoutError) as e:
+        return None, f"network error: {e}"
+
+
+def _explain_error(err: str) -> str:
+    """Turn a raw Google API error into ONE clear, correctly-targeted
+    instruction. This project has hit two genuinely different one-time setup
+    gates -- an ungranted OAuth scope, and the Site Verification API not
+    being enabled on the Cloud project at all -- and they need different
+    fixes; telling someone to redo OAuth for an API-not-enabled error would
+    send them down the wrong path and waste their time."""
     low = (err or "").lower()
-    return "insufficient" in low or "scope" in low or "forbidden" in low
+    if "service_disabled" in low or "has not been used in project" in low or "accessnotconfigured" in low:
+        m = _ACTIVATION_URL_RE.search(err or "")
+        url = m.group(0) if m else "https://console.cloud.google.com/apis/library/siteverification.googleapis.com"
+        return (f"The Site Verification API itself isn't enabled yet for this Google Cloud project -- a separate, "
+                f"one-time, one-click step from the OAuth permission. Visit {url}, click Enable, wait a couple of "
+                f"minutes for it to take effect, then this will start working on the next check.")
+    if "insufficient" in low or "scope" in low or "forbidden" in low:
+        return _REAUTH_HINT
+    return err
 
 
 def get_verification_token(domain_name: str):
@@ -45,9 +87,9 @@ def get_verification_token(domain_name: str):
     if err:
         return None, err
     body = {"site": {"type": "INET_DOMAIN", "identifier": domain_name}, "verificationMethod": "DNS_TXT"}
-    data, err = _post(f"{API_BASE}/token", body, access_token)
+    data, err = _post_full(f"{API_BASE}/token", body, access_token)
     if err:
-        return None, (_REAUTH_HINT if _looks_like_missing_scope(err) else err)
+        return None, _explain_error(err)
     return data.get("token"), None
 
 
@@ -55,15 +97,15 @@ def attempt_verify(domain_name: str):
     """Try to complete verification now that (hopefully) the TXT record is
     live in DNS. Returns (verified: bool, error). Google rejecting this
     because the record isn't there yet is the ordinary, expected case while
-    DNS propagates -- NOT treated as an error, just "not yet"; safe to call
-    on every check cycle until it succeeds."""
+    DNS propagates -- reported as (False, None), not alarming; safe to call
+    on every check cycle until it succeeds. A genuine setup gate (scope/API
+    not enabled) is distinguished and surfaced instead."""
     access_token, err = _refresh_access_token()
     if err:
         return False, err
     body = {"site": {"type": "INET_DOMAIN", "identifier": domain_name}}
-    data, err = _post(f"{API_BASE}/webResource?verificationMethod=DNS_TXT", body, access_token)
+    data, err = _post_full(f"{API_BASE}/webResource?verificationMethod=DNS_TXT", body, access_token)
     if err:
-        if _looks_like_missing_scope(err):
-            return False, _REAUTH_HINT
-        return False, None  # most likely "record not found yet" -- ordinary, not alarming
+        explained = _explain_error(err)
+        return False, (explained if explained != err else None)  # unrecognised 4xx -> just "not yet", not alarming
     return True, None
