@@ -37,7 +37,25 @@ from app.bounce_reasons import PERMANENT_CATEGORIES, categorize_bounce
 MAX_EXAMPLES = 5
 
 
-def _ses_chronic(conn, domain_id: int, min_occurrences: int, min_days: int):
+def _chronic_watermark(conn, domain_id: int):
+    """The last time the operator marked this domain's chronic-transient
+    reminder done -- i.e. "I've reviewed and pruned this batch." Only usable
+    as real acknowledgment memory for SES (see the SES-vs-Mailgun note on
+    _mailgun_chronic below): SES's last_seen_at only moves when a genuinely
+    NEW bounce/complaint EVENT arrives for that address, so an address that
+    was actually removed from the sending list simply stops generating new
+    events and its last_seen_at freezes at its pre-acknowledgment value --
+    correctly dropping it from the list on the next check. One still
+    actively bouncing (never removed) gets a fresh event and reappears,
+    which is exactly the intended "keep nagging until truly fixed" behaviour."""
+    return conn.execute(
+        """SELECT MAX(resolved_at) m FROM action_items
+           WHERE domain_id=? AND category='chronic_transient_bounce' AND status IN ('done','dismissed')""",
+        (domain_id,),
+    ).fetchone()["m"]
+
+
+def _ses_chronic(conn, domain_id: int, min_occurrences: int, min_days: int, watermark):
     cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=min_days)).strftime("%Y-%m-%d %H:%M:%S")
     rows = conn.execute(
         """SELECT s.email, s.first_seen_at, s.last_seen_at, s.reason, s.bounce_type,
@@ -53,6 +71,8 @@ def _ses_chronic(conn, domain_id: int, min_occurrences: int, min_days: int):
         chronic = occurrences >= min_occurrences or r["first_seen_at"] <= cutoff
         if not chronic:
             continue
+        if watermark and r["last_seen_at"] <= watermark:
+            continue  # acknowledged, and nothing genuinely new since -- treat as handled
         category = categorize_bounce(r["reason"], r["bounce_type"])
         if category in PERMANENT_CATEGORIES:
             continue  # SES's own classification says transient, but the text reads permanent -- let that path handle it
@@ -64,6 +84,17 @@ def _ses_chronic(conn, domain_id: int, min_occurrences: int, min_days: int):
 
 
 def _mailgun_chronic(conn, domain_id: int, min_days: int):
+    """No acknowledgment memory here, unlike SES above -- a real data
+    limitation, not an oversight. mailgun_suppressions.last_checked_at is
+    touched on EVERY periodic sync for every address still on Mailgun's own
+    suppression list, whether or not a fresh send was actually attempted
+    (Mailgun's suppression list is a static roster it keeps forever, not an
+    event stream) -- so it can't distinguish "still actively bouncing" from
+    "pruned from Listmonk months ago but Mailgun still lists it". Marking the
+    reminder done here just clears it for the current check; it reappears
+    next cycle as a standing nudge rather than a one-time check-off. In
+    practice this rarely matters: Mailgun contributes ~0 of most domains'
+    chronic-transient list, SES dominates (confirmed: 220/220 on pattic.org)."""
     cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=min_days)).strftime("%Y-%m-%d %H:%M:%S")
     rows = conn.execute(
         """SELECT email, first_seen_at, last_checked_at, reason
@@ -88,8 +119,11 @@ def chronic_transient_bounces(conn, domain_id: int, min_occurrences: int, min_da
     longer than a fresh recovery would take, or across enough distinct sends
     that it plainly isn't a one-off -- i.e. actually dead in practice, just
     never escalated to a permanent bounce by the ESP itself. Sorted worst
-    (most persistent) first."""
-    found = (_ses_chronic(conn, domain_id, min_occurrences, min_days)
+    (most persistent) first. Once you've marked the reminder done, an SES
+    address only reappears if it's genuinely bounced again since -- if you
+    actually pruned it, it stays cleared (see _chronic_watermark)."""
+    watermark = _chronic_watermark(conn, domain_id)
+    found = (_ses_chronic(conn, domain_id, min_occurrences, min_days, watermark)
              + _mailgun_chronic(conn, domain_id, min_days))
     found.sort(key=lambda x: x["first_seen"])
     return found
@@ -116,7 +150,9 @@ def run_chronic_bounce_checks(conn, verbose: bool = True) -> None:
                 f"{min_occurrences}+ separate sends, without ever succeeding or being formally suppressed as "
                 f"permanent -- in practice they're dead, just never escalated by Mailgun/SES itself. "
                 f"Examples: {examples}{more}. Download the suppressions CSV on this domain's page (now includes "
-                f"these) and prune them from Listmonk/Ghost like a permanent bounce.",
+                f"these) and prune them from Listmonk/Ghost like a permanent bounce, then mark this done -- SES "
+                f"addresses you've genuinely removed won't reappear (only ones still actively bouncing will); "
+                f"Mailgun ones don't have that same memory and reappear each cycle as a standing reminder.",
             )
         else:
             conn.execute(
