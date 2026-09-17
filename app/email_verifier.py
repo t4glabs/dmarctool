@@ -146,6 +146,37 @@ def is_catchall(mx_host: str, domain: str, helo_name: str, mail_from: str, timeo
     return code in (250, 251)
 
 
+def _cached_is_catchall(conn, mx_host: str, domain: str, helo_name: str, mail_from: str,
+                         timeout: float, use_cache: bool, cache_hours: int):
+    """Same read-through cache pattern as verify_email itself, but keyed on
+    the DOMAIN, not the address -- catch-all is a property of the mail
+    server, so every address on that domain (within one batch, or across
+    separate checks over time) reuses one probe instead of repeating it.
+    Without this, a batch of addresses on the same catch-all domain hammers
+    that one server with a redundant fake-address probe per row. Returns
+    (is_catchall, was_fresh_probe) -- callers only need to pace themselves
+    (time.sleep) after a probe that actually hit the network."""
+    if use_cache:
+        row = conn.execute(
+            "SELECT is_catchall FROM email_domain_catchall WHERE domain=? AND checked_at >= datetime('now', ?)",
+            (domain, f"-{cache_hours} hours"),
+        ).fetchone()
+        if row is not None:
+            return bool(row["is_catchall"]), False
+
+    result = is_catchall(mx_host, domain, helo_name, mail_from, timeout=timeout)
+    if result is not None:
+        conn.execute(
+            """INSERT INTO email_domain_catchall (domain, is_catchall, checked_at)
+               VALUES (?, ?, datetime('now'))
+               ON CONFLICT(domain) DO UPDATE SET
+                 is_catchall=excluded.is_catchall, checked_at=excluded.checked_at""",
+            (domain, int(result)),
+        )
+        conn.commit()
+    return result, True
+
+
 def verify_email(conn, email: str, from_address: str, helo_name: str,
                   timeout: float = 10.0, use_cache: bool = True, cache_hours: int = 24 * 7):
     """The full pipeline for one address: syntax -> MX -> disposable ->
@@ -201,8 +232,11 @@ def verify_email(conn, email: str, from_address: str, helo_name: str,
 
     mx_host = mx_records[0][1]
 
-    catchall = is_catchall(mx_host, domain, helo_name, from_address, timeout=timeout)
-    time.sleep(0.3)  # a beat between probes to the same server, not back-to-back
+    catchall, catchall_was_fresh_probe = _cached_is_catchall(
+        conn, mx_host, domain, helo_name, from_address,
+        timeout=timeout, use_cache=use_cache, cache_hours=cache_hours)
+    if catchall_was_fresh_probe:
+        time.sleep(0.3)  # a beat between probes to the same server, not back-to-back (skipped on a cache hit)
 
     code, message, error = smtp_probe(mx_host, helo_name, from_address, email, timeout=timeout)
 

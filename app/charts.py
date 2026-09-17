@@ -490,6 +490,54 @@ def health_score_sparkline(series, width: int = 640, height: int = 140) -> str:
 </svg>'''
 
 
+def email_verdict_donut(valid_count: int, invalid_count: int, risky_count: int, unknown_count: int,
+                         width: int = 150, height: int = 150) -> str:
+    """Donut of every address ever checked in the email checker, split by
+    verdict -- same shape as vibe_distribution_donut, just a 4-way split
+    with the same verdict badge colors used everywhere else on that page
+    (ok/warn/bad/muted) so the chart and the table never disagree."""
+    total = valid_count + invalid_count + risky_count + unknown_count
+    cx, cy = width / 2, height / 2
+    margin = 6
+    stroke_fraction = 0.62
+    max_outer_r = min(width, height) / 2 - margin
+    r = max_outer_r / (1 + stroke_fraction / 2)
+    stroke_w = r * stroke_fraction
+    circumference = 2 * math.pi * r
+
+    if total <= 0:
+        return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">'
+                f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="currentColor" '
+                f'stroke-opacity="0.15" stroke-width="{stroke_w:.1f}"/>'
+                f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" class="donut-center-sublabel">no data</text></svg>')
+
+    segments = [
+        (valid_count, "var(--ok)", "valid"),
+        (risky_count, "var(--warn)", "risky"),
+        (invalid_count, "var(--bad)", "invalid"),
+        (unknown_count, "var(--muted)", "unknown"),
+    ]
+    arcs = []
+    cumulative = 0.0
+    for count, color, seg_label in segments:
+        if count <= 0:
+            continue
+        length = (count / total) * circumference
+        arcs.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="{color}" stroke-width="{stroke_w:.1f}" '
+            f'stroke-dasharray="{length:.2f} {circumference - length:.2f}" '
+            f'stroke-dashoffset="{-cumulative:.2f}" transform="rotate(-90 {cx} {cy})" '
+            f'data-tooltip="{count} {seg_label} ({count / total:.0%})"/>'
+        )
+        cumulative += length
+
+    return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
+  {''.join(arcs)}
+  <text x="{cx}" y="{cy - 2}" text-anchor="middle" class="donut-center-label">{total}</text>
+  <text x="{cx}" y="{cy + 15}" text-anchor="middle" class="donut-center-sublabel">checked</text>
+</svg>'''
+
+
 def vibe_distribution_donut(good_count: int, bad_count: int, ugly_count: int,
                              width: int = 150, height: int = 150) -> str:
     """Donut of how many tracked domains currently fall into each health

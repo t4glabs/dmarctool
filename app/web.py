@@ -45,7 +45,7 @@ from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action
 from app.blocklist import run_blocklist_checks
 from app.charts import (
-    disposition_donut_chart, health_score_sparkline, metric_trend_chart, pass_rate_sparkline,
+    disposition_donut_chart, email_verdict_donut, health_score_sparkline, metric_trend_chart, pass_rate_sparkline,
     provider_stacked_bar_chart, spam_rate_sparkline, vibe_distribution_donut, volume_bar_chart,
 )
 from app.compliance import flatten_spf_tree, run_compliance_checks
@@ -57,13 +57,14 @@ from app.domain_report import (
     get_report_settings, preview_domain_report, report_period_for_domain, run_report_emails,
     save_report_settings, send_report_now,
 )
-from app.listmonk import run_listmonk_content_sync
+from app.listmonk import run_listmonk_content_sync, run_listmonk_blocklist_sync
 from app.lookalike import findings_for_domain, run_lookalike_checks
 from app.mailgun import run_mailgun_checks, _suppression_watermark as _mailgun_suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
 from app.email_verifier import verify_email
+from app.known_bad import known_bad_map, known_bad_counts
 from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest, _suppression_watermark as _ses_suppression_watermark
 from app.safe_browsing import run_safe_browsing_checks
@@ -177,7 +178,7 @@ def run_all_checks(conn) -> bool:
             run_imap_ingest,  # pull new DMARC reports from the mailbox FIRST, so this sweep analyses them
             run_analysis, run_dns_checks, discover_untracked_subdomains, run_blocklist_checks,
             run_compliance_checks, run_mailgun_checks, run_mailgun_campaign_sync, run_postmaster_checks,
-            run_ses_event_ingest, run_ses_account_checks, run_listmonk_content_sync,
+            run_ses_event_ingest, run_ses_account_checks, run_listmonk_content_sync, run_listmonk_blocklist_sync,
             run_chronic_bounce_checks,  # after mailgun/ses checks above, so it sees this cycle's fresh suppressions
             run_safe_browsing_checks, run_mta_sts_checks, run_report_auth_checks,
             run_lookalike_checks, run_domain_expiry_checks, enrich_impersonation_whois,
@@ -1652,22 +1653,109 @@ async def update_settings(request: Request):
 _verifier_batch_lock = threading.Lock()
 
 
+def _filtered_email_verifications(conn, verdict: str = "all", known_bad: str = "all", q: str = ""):
+    """Every checked address matching the given filters, most recent first,
+    each row annotated with `known_bad` (list of sources from
+    app.known_bad -- SES/Mailgun suppressions, Listmonk blocklist). The
+    known_bad filter itself can't be pushed into SQL (it's a cross-table
+    lookup, not a column on this table), so it's applied in Python after the
+    verdict/text filters narrow things down."""
+    query = "SELECT * FROM email_verifications WHERE 1=1"
+    params = []
+    if verdict != "all":
+        query += " AND verdict=?"
+        params.append(verdict)
+    if q:
+        query += " AND (email LIKE ? OR reason LIKE ?)"
+        like = f"%{q}%"
+        params += [like, like]
+    query += " ORDER BY checked_at DESC"
+    rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+    kb_map = known_bad_map(conn, [r["email"] for r in rows])
+    for r in rows:
+        r["known_bad"] = kb_map.get(r["email"], [])
+    if known_bad == "yes":
+        rows = [r for r in rows if r["known_bad"]]
+    elif known_bad == "no":
+        rows = [r for r in rows if not r["known_bad"]]
+    return rows
+
+
+def _write_verification_csv(rows) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["email", "verdict", "reason", "mx_host", "is_disposable", "is_catchall",
+                      "smtp_code", "known_bad_sources", "checked_at"])
+    for r in rows:
+        writer.writerow([r["email"], r["verdict"], r["reason"], r["mx_host"] or "",
+                          bool(r["is_disposable"]), bool(r["is_catchall"]), r["smtp_code"] or "",
+                          "; ".join(r["known_bad"]), r["checked_at"]])
+    return buf.getvalue()
+
+
+def _csv_filter_suffix(verdict: str, known_bad: str) -> str:
+    bits = []
+    if verdict != "all":
+        bits.append(verdict)
+    if known_bad != "all":
+        bits.append(f"knownbad-{known_bad}")
+    return ("_" + "_".join(bits)) if bits else ""
+
+
 @app.get("/email_checker", response_class=HTMLResponse)
-def email_checker_page(request: Request, flash: str = None):
+def email_checker_page(request: Request, flash: str = None,
+                        verdict: str = "all", known_bad: str = "all", q: str = ""):
     conn = get_connection()
     settings = ensure_default_settings(conn)
     configured = bool(settings.get("email_verifier_from_address")) and bool(settings.get("email_verifier_helo_name"))
-    recent = conn.execute("SELECT * FROM email_verifications ORDER BY checked_at DESC LIMIT 25").fetchall()
+
+    filtered = _filtered_email_verifications(conn, verdict, known_bad, q)
+    display_cap = 100
+    recent = filtered[:display_cap]
+
+    verdict_counts = {"valid": 0, "invalid": 0, "risky": 0, "unknown": 0}
+    for r in conn.execute("SELECT verdict, COUNT(*) c FROM email_verifications GROUP BY verdict"):
+        verdict_counts[r["verdict"]] = r["c"]
+    total_checked = sum(verdict_counts.values())
+
+    # How many addresses that PASS a live SMTP check today are nonetheless
+    # already known-bad from suppression/blocklist history -- the exact
+    # crossover the SES-vs-fresh-probe validation surfaced earlier: a "valid"
+    # snapshot doesn't erase a real bounce/complaint history.
+    valid_emails = [r["email"] for r in conn.execute("SELECT email FROM email_verifications WHERE verdict='valid'")]
+    crossover_count = sum(1 for v in known_bad_map(conn, valid_emails).values() if v)
+
     batches = conn.execute("SELECT * FROM email_verification_batches ORDER BY id DESC LIMIT 20").fetchall()
+
     return templates.TemplateResponse(request, "email_checker.html", {
         "flash": flash,
         "configured": configured,
         "from_address": settings.get("email_verifier_from_address"),
         "helo_name": settings.get("email_verifier_helo_name"),
         "recent": recent,
+        "recent_total": len(filtered),
+        "display_cap": display_cap,
+        "filter_verdict": verdict, "filter_known_bad": known_bad, "filter_q": q,
         "batches": batches,
         "batch_running": _verifier_batch_lock.locked(),
+        "verdict_counts": verdict_counts,
+        "total_checked": total_checked,
+        "verdict_donut": email_verdict_donut(verdict_counts["valid"], verdict_counts["invalid"],
+                                              verdict_counts["risky"], verdict_counts["unknown"]),
+        "kb_counts": known_bad_counts(conn),
+        "crossover_count": crossover_count,
     })
+
+
+@app.get("/email_checker/export.csv")
+def email_checker_export(verdict: str = "all", known_bad: str = "all", q: str = ""):
+    conn = get_connection()
+    rows = _filtered_email_verifications(conn, verdict, known_bad, q)
+    suffix = _csv_filter_suffix(verdict, known_bad)
+    return Response(
+        content=_write_verification_csv(rows), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="email_checks{suffix}.csv"'},
+    )
 
 
 @app.post("/email_checker/check")
@@ -1684,7 +1772,10 @@ def email_checker_check_one(email: str = Form(...)):
         timeout=float(settings["email_verifier_timeout_seconds"]),
         use_cache=True, cache_hours=int(settings["email_verifier_cache_hours"]),
     )
+    sources = known_bad_map(conn, [email]).get((email or "").strip().lower(), [])
     flash = f"{email}: {result['verdict'].upper()} -- {result['reason']}"
+    if sources:
+        flash += f" | Also already known-bad: {'; '.join(sources)}"
     return RedirectResponse("/email_checker?flash=" + urllib.parse.quote(flash), status_code=303)
 
 
@@ -1805,13 +1896,7 @@ def email_checker_upload_batch(file: UploadFile = File(...)):
         status_code=303)
 
 
-@app.get("/email_checker/batch/{batch_id}/download.csv")
-def email_checker_download_batch(batch_id: int, verdict: str = "all"):
-    conn = get_connection()
-    batch = conn.execute("SELECT * FROM email_verification_batches WHERE id=?", (batch_id,)).fetchone()
-    if not batch:
-        raise HTTPException(status_code=404, detail="batch not found")
-
+def _filtered_batch_verifications(conn, batch_id: int, verdict: str = "all", known_bad: str = "all", q: str = ""):
     query = """SELECT v.* FROM email_verification_batch_items b
                JOIN email_verifications v ON v.email = b.email
                WHERE b.batch_id=?"""
@@ -1819,17 +1904,45 @@ def email_checker_download_batch(batch_id: int, verdict: str = "all"):
     if verdict != "all":
         query += " AND v.verdict=?"
         params.append(verdict)
+    if q:
+        query += " AND (v.email LIKE ? OR v.reason LIKE ?)"
+        like = f"%{q}%"
+        params += [like, like]
     query += " ORDER BY v.verdict, v.email"
+    rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+    kb_map = known_bad_map(conn, [r["email"] for r in rows])
+    for r in rows:
+        r["known_bad"] = kb_map.get(r["email"], [])
+    if known_bad == "yes":
+        rows = [r for r in rows if r["known_bad"]]
+    elif known_bad == "no":
+        rows = [r for r in rows if not r["known_bad"]]
+    return rows
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["email", "verdict", "reason", "mx_host", "is_disposable", "is_catchall", "smtp_code", "checked_at"])
-    for r in conn.execute(query, params):
-        writer.writerow([r["email"], r["verdict"], r["reason"], r["mx_host"] or "",
-                          bool(r["is_disposable"]), bool(r["is_catchall"]), r["smtp_code"] or "", r["checked_at"]])
 
-    suffix = f"_{verdict}" if verdict != "all" else ""
+@app.get("/email_checker/batch/{batch_id}", response_class=HTMLResponse)
+def email_checker_batch_detail(request: Request, batch_id: int,
+                                verdict: str = "all", known_bad: str = "all", q: str = ""):
+    conn = get_connection()
+    batch = conn.execute("SELECT * FROM email_verification_batches WHERE id=?", (batch_id,)).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="batch not found")
+    rows = _filtered_batch_verifications(conn, batch_id, verdict, known_bad, q)
+    return templates.TemplateResponse(request, "email_checker_batch.html", {
+        "batch": batch, "rows": rows,
+        "filter_verdict": verdict, "filter_known_bad": known_bad, "filter_q": q,
+    })
+
+
+@app.get("/email_checker/batch/{batch_id}/download.csv")
+def email_checker_download_batch(batch_id: int, verdict: str = "all", known_bad: str = "all", q: str = ""):
+    conn = get_connection()
+    batch = conn.execute("SELECT * FROM email_verification_batches WHERE id=?", (batch_id,)).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="batch not found")
+    rows = _filtered_batch_verifications(conn, batch_id, verdict, known_bad, q)
+    suffix = _csv_filter_suffix(verdict, known_bad)
     return Response(
-        content=buf.getvalue(), media_type="text/csv",
+        content=_write_verification_csv(rows), media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="email_check_batch{batch_id}{suffix}.csv"'},
     )

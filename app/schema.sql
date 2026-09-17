@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS mailgun_suppressions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mailgun_suppressions_domain ON mailgun_suppressions(domain_id, kind);
+CREATE INDEX IF NOT EXISTS idx_mailgun_suppressions_email ON mailgun_suppressions(email);
 
 -- Our own accumulated daily history, since Mailgun's stats/total endpoint only
 -- ever returns a rolling window per query -- upserted so recent days can be
@@ -390,6 +391,29 @@ CREATE TABLE IF NOT EXISTS email_verification_batch_items (
     PRIMARY KEY (batch_id, email)
 );
 
+-- Catch-all status is a property of the DOMAIN, not each address -- without
+-- this, a batch of 50 addresses on one catch-all domain re-probes that same
+-- fake-address test 50 times (wasteful, and looks like abuse to that one mail
+-- server). Cached per-domain, reused by every address on it, single checks
+-- and batches alike, until it goes stale (same cache_hours setting as
+-- email_verifications).
+CREATE TABLE IF NOT EXISTS email_domain_catchall (
+    domain      TEXT PRIMARY KEY,
+    is_catchall INTEGER NOT NULL,
+    checked_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Read-only mirror of Listmonk's own blocklist (subscribers Listmonk itself
+-- has already stopped mailing) -- never written back to Listmonk. Full
+-- replace on each sync since Listmonk's blocklist is a small, complete
+-- roster, not an event stream. One more "already known bad" source the
+-- email checker cross-references, alongside SES/Mailgun suppressions.
+CREATE TABLE IF NOT EXISTS listmonk_blocklist (
+    email     TEXT PRIMARY KEY,
+    name      TEXT,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Amazon SES bounce/complaint/delivery events, consumed from an SQS queue fed by
 -- one SNS topic that every per-domain configuration set publishes to. SES has no
 -- per-domain read API -- this is the only way to get separated stats/suppressions.
@@ -407,6 +431,7 @@ CREATE TABLE IF NOT EXISTS ses_suppressions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ses_suppressions_domain ON ses_suppressions(domain_id, kind);
+CREATE INDEX IF NOT EXISTS idx_ses_suppressions_email ON ses_suppressions(email);
 
 CREATE TABLE IF NOT EXISTS ses_event_counts (
     id                INTEGER PRIMARY KEY,

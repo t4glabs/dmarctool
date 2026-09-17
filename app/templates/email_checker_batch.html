@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Batch #{{ batch.id }} - Email checker - DMARCTool{% endblock %}
+{% block content %}
+
+<p><a href="/email_checker">&larr; Back to Email checker</a></p>
+<h1>📦 Batch #{{ batch.id }}: {{ batch.filename or '(unnamed)' }}</h1>
+<p class="muted" style="margin-top:0">
+  {{ batch.done }}/{{ batch.total }} checked &middot; status: {{ batch.status }} &middot;
+  started {{ batch.started_at }}{% if batch.finished_at %} &middot; finished {{ batch.finished_at }}{% endif %}
+</p>
+<p style="margin:0 0 1rem 0;">
+  <span class="badge ok">{{ batch.valid_count }} valid</span>
+  <span class="badge bad">{{ batch.invalid_count }} invalid</span>
+  <span class="badge warn">{{ batch.risky_count }} risky</span>
+  <span class="badge muted">{{ batch.unknown_count }} unknown</span>
+</p>
+
+<div class="section">
+  <h2 class="first">Results</h2>
+  <form method="get" action="/email_checker/batch/{{ batch.id }}" class="formrow" style="margin-bottom:0.75rem;">
+    <select name="verdict" onchange="this.form.requestSubmit()">
+      <option value="all" {{ 'selected' if filter_verdict == 'all' else '' }}>Any verdict</option>
+      <option value="valid" {{ 'selected' if filter_verdict == 'valid' else '' }}>Valid</option>
+      <option value="risky" {{ 'selected' if filter_verdict == 'risky' else '' }}>Risky</option>
+      <option value="invalid" {{ 'selected' if filter_verdict == 'invalid' else '' }}>Invalid</option>
+      <option value="unknown" {{ 'selected' if filter_verdict == 'unknown' else '' }}>Unknown</option>
+    </select>
+    <select name="known_bad" onchange="this.form.requestSubmit()">
+      <option value="all" {{ 'selected' if filter_known_bad == 'all' else '' }}>Any known-bad status</option>
+      <option value="yes" {{ 'selected' if filter_known_bad == 'yes' else '' }}>Already known-bad</option>
+      <option value="no" {{ 'selected' if filter_known_bad == 'no' else '' }}>Not known-bad anywhere</option>
+    </select>
+    <input type="search" name="q" value="{{ filter_q }}" placeholder="search email or reason...">
+    <button type="submit">Filter</button>
+    {% if filter_verdict != 'all' or filter_known_bad != 'all' or filter_q %}
+    <a href="/email_checker/batch/{{ batch.id }}">Clear filters</a>
+    {% endif %}
+  </form>
+  <p class="muted" style="margin:0 0 0.5rem 0; font-size:0.85rem;">
+    {{ rows | length }} matching address(es).
+    <a href="/email_checker/batch/{{ batch.id }}/download.csv?verdict={{ filter_verdict }}&known_bad={{ filter_known_bad }}&q={{ filter_q }}">
+      ⬇ Export this exact view as CSV</a>
+    &middot;
+    <a href="/email_checker/batch/{{ batch.id }}/download.csv?verdict=valid&known_bad=no">⬇ clean list</a>
+    &middot;
+    <a href="/email_checker/batch/{{ batch.id }}/download.csv?known_bad=yes">⬇ known-bad list</a>
+  </p>
+  {% if rows %}
+  <div class="table-wrap">
+  <table>
+    <tr><th>Email</th><th>Verdict</th><th>Reason</th><th>Known bad?</th><th>Checked</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.email }}</td>
+      <td><span class="badge {{ {'valid':'ok','invalid':'bad','risky':'warn','unknown':'muted'}[r.verdict] }}">{{ r.verdict }}</span></td>
+      <td class="muted" style="font-size:0.85rem;">{{ r.reason }}</td>
+      <td style="font-size:0.8rem;">
+        {% if r.known_bad %}<span class="badge bad" title="{{ r.known_bad | join('; ') }}">{{ r.known_bad | length }} source(s)</span>
+        {% else %}<span class="muted">--</span>{% endif %}
+      </td>
+      <td class="muted" style="font-size:0.8rem;">{{ r.checked_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Nothing matches these filters in this batch.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

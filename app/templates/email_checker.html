@@ -23,34 +23,98 @@
 
 <div class="section">
   <h2 class="first">🔍 Check one address</h2>
-  <p class="muted" style="margin-top:0">Takes a few seconds -- a real SMTP round trip, not instant.</p>
+  <p class="muted" style="margin-top:0">Takes a few seconds -- a real SMTP round trip, not instant. Also checked
+    against your own suppression/blocklist history below, not just SMTP.</p>
   <form action="/email_checker/check" method="post" class="formrow">
     <input type="email" name="email" placeholder="someone@example.com" required style="min-width:280px;">
     <button type="submit" {{ 'disabled' if not configured else '' }}>Check</button>
   </form>
 </div>
 
-{% if recent %}
 <div class="section">
-  <h2 class="first">🕘 Recently checked</h2>
-  <p class="muted" style="margin-top:0">Every address ever checked here, most recent first -- re-checking
-    something already verified recently reuses this instead of probing the mail server again (see the
-    "Email Verifier" cache setting). Results also feed every batch below.</p>
+  <h2 class="first">📊 Overview</h2>
+  <div style="display:flex; gap:2rem; flex-wrap:wrap; align-items:center;">
+    <div>{{ verdict_donut | safe }}</div>
+    <div style="min-width:220px;">
+      <p class="muted" style="margin:0 0 0.4rem 0;"><strong>{{ total_checked }}</strong> address(es) ever checked here.</p>
+      <p style="margin:0 0 0.2rem 0;"><span class="badge ok">valid</span> {{ verdict_counts.valid }}
+        &nbsp; <span class="badge warn">risky</span> {{ verdict_counts.risky }}
+        &nbsp; <span class="badge bad">invalid</span> {{ verdict_counts.invalid }}
+        &nbsp; <span class="badge muted">unknown</span> {{ verdict_counts.unknown }}</p>
+    </div>
+    <div style="min-width:260px;">
+      <p class="muted" style="margin:0 0 0.3rem 0;"><strong>Known-bad sources on file</strong> (read-only, never written back):</p>
+      <p style="margin:0;">SES suppressions: {{ kb_counts.ses }} &middot; Mailgun suppressions: {{ kb_counts.mailgun }}
+        &middot; Listmonk blocklist: {{ kb_counts.listmonk }}</p>
+      <p class="muted" style="margin:0.2rem 0 0 0; font-size:0.85rem;">
+        {% if kb_counts.listmonk_synced_at %}Listmonk blocklist last synced {{ kb_counts.listmonk_synced_at }}.
+        {% else %}Listmonk blocklist hasn't synced yet -- either it hasn't run since this feature was added, or the
+          API token in secrets.env needs the <code>subscribers:get</code> permission granted in Listmonk's own
+          Settings &gt; Users &gt; API Tokens.{% endif %}
+      </p>
+    </div>
+  </div>
+  {% if crossover_count %}
+  <div class="verdict warn" style="margin-top:1rem;">
+    ⚠️ <strong>{{ crossover_count }}</strong> address(es) that currently pass a live SMTP check are ALSO already
+    known-bad from your own suppression/blocklist history -- the mail server says "yes" today, but real delivery
+    history says otherwise. These are your strongest candidates for removal even though a fresh check alone
+    wouldn't have caught them. Filter below with Verdict=valid, Known-bad=yes to see them.
+  </div>
+  {% endif %}
+</div>
+
+<div class="section">
+  <h2 class="first">🕘 Checked addresses</h2>
+  <p class="muted" style="margin-top:0">Every address ever checked here (single checks and every batch below
+    share this same list) -- re-checking something already verified recently reuses this instead of probing the
+    mail server again (see the "Email Verifier" cache setting).</p>
+  <form method="get" action="/email_checker" class="formrow" style="margin-bottom:0.75rem;">
+    <select name="verdict" onchange="this.form.requestSubmit()">
+      <option value="all" {{ 'selected' if filter_verdict == 'all' else '' }}>Any verdict</option>
+      <option value="valid" {{ 'selected' if filter_verdict == 'valid' else '' }}>Valid</option>
+      <option value="risky" {{ 'selected' if filter_verdict == 'risky' else '' }}>Risky</option>
+      <option value="invalid" {{ 'selected' if filter_verdict == 'invalid' else '' }}>Invalid</option>
+      <option value="unknown" {{ 'selected' if filter_verdict == 'unknown' else '' }}>Unknown</option>
+    </select>
+    <select name="known_bad" onchange="this.form.requestSubmit()">
+      <option value="all" {{ 'selected' if filter_known_bad == 'all' else '' }}>Any known-bad status</option>
+      <option value="yes" {{ 'selected' if filter_known_bad == 'yes' else '' }}>Already known-bad</option>
+      <option value="no" {{ 'selected' if filter_known_bad == 'no' else '' }}>Not known-bad anywhere</option>
+    </select>
+    <input type="search" name="q" value="{{ filter_q }}" placeholder="search email or reason...">
+    <button type="submit">Filter</button>
+    {% if filter_verdict != 'all' or filter_known_bad != 'all' or filter_q %}
+    <a href="/email_checker">Clear filters</a>
+    {% endif %}
+  </form>
+  <p class="muted" style="margin:0 0 0.5rem 0; font-size:0.85rem;">
+    Showing {{ recent | length }} of {{ recent_total }} matching address(es).
+    <a href="/email_checker/export.csv?verdict={{ filter_verdict }}&known_bad={{ filter_known_bad }}&q={{ filter_q }}">
+      ⬇ Export this exact view as CSV</a>
+  </p>
+  {% if recent %}
   <div class="table-wrap">
   <table>
-    <tr><th>Email</th><th>Verdict</th><th>Reason</th><th>Checked</th></tr>
+    <tr><th>Email</th><th>Verdict</th><th>Reason</th><th>Known bad?</th><th>Checked</th></tr>
     {% for r in recent %}
     <tr>
       <td>{{ r.email }}</td>
       <td><span class="badge {{ {'valid':'ok','invalid':'bad','risky':'warn','unknown':'muted'}[r.verdict] }}">{{ r.verdict }}</span></td>
       <td class="muted" style="font-size:0.85rem;">{{ r.reason }}</td>
+      <td style="font-size:0.8rem;">
+        {% if r.known_bad %}<span class="badge bad" title="{{ r.known_bad | join('; ') }}">{{ r.known_bad | length }} source(s)</span>
+        {% else %}<span class="muted">--</span>{% endif %}
+      </td>
       <td class="muted" style="font-size:0.8rem;">{{ r.checked_at }}</td>
     </tr>
     {% endfor %}
   </table>
   </div>
+  {% else %}
+  <p class="muted">Nothing matches these filters yet.</p>
+  {% endif %}
 </div>
-{% endif %}
 
 <div class="section">
   <h2 class="first">📤 Check a list (CSV or plain list)</h2>
@@ -69,12 +133,14 @@
 {% if batches %}
 <div class="section">
   <h2 class="first">📦 Batches</h2>
+  <p class="muted" style="margin-top:0">Click a batch to see its full result table and filter/export just that
+    upload -- every batch stays browsable here, not just the summary counts below.</p>
   <div class="table-wrap">
   <table>
     <tr><th>File</th><th>Progress</th><th>Valid</th><th>Invalid</th><th>Risky</th><th>Unknown</th><th>Status</th><th>Download</th></tr>
     {% for b in batches %}
     <tr>
-      <td>{{ b.filename or '(unnamed)' }}</td>
+      <td><a href="/email_checker/batch/{{ b.id }}">{{ b.filename or '(unnamed)' }}</a></td>
       <td>{{ b.done }}/{{ b.total }}</td>
       <td><span class="badge ok">{{ b.valid_count }}</span></td>
       <td><span class="badge bad">{{ b.invalid_count }}</span></td>
@@ -82,9 +148,11 @@
       <td><span class="badge muted">{{ b.unknown_count }}</span></td>
       <td class="muted" style="font-size:0.85rem;">{{ b.status }}</td>
       <td style="font-size:0.8rem;">
-        <a href="/email_checker/batch/{{ b.id }}/download.csv?verdict=valid" class="muted">valid</a> ·
+        <a href="/email_checker/batch/{{ b.id }}/download.csv?verdict=valid&known_bad=no" class="muted"
+           title="valid AND not already known-bad anywhere -- safest to keep sending to">clean</a> ·
+        <a href="/email_checker/batch/{{ b.id }}/download.csv?known_bad=yes" class="muted"
+           title="known-bad from suppression/blocklist history, regardless of what today's SMTP check says">known-bad</a> ·
         <a href="/email_checker/batch/{{ b.id }}/download.csv?verdict=invalid" class="muted">invalid</a> ·
-        <a href="/email_checker/batch/{{ b.id }}/download.csv?verdict=risky" class="muted">risky</a> ·
         <a href="/email_checker/batch/{{ b.id }}/download.csv" class="muted">all</a>
       </td>
     </tr>

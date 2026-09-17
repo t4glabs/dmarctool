@@ -221,6 +221,71 @@ def run_listmonk_content_sync(conn, verbose: bool = True) -> None:
     conn.commit()
 
 
+def fetch_blocklisted_subscribers(timeout: float = 20.0):
+    """[{"email":..., "name":...}, ...] for every subscriber Listmonk itself
+    has already marked blocklisted -- read-only, no write is ever made back
+    to Listmonk. Requires the existing API token to have the `subscribers:get`
+    permission in Listmonk's own admin UI (Settings -> Users -> API Tokens) --
+    the token this project already uses for campaigns doesn't have that scope
+    by default, so this fails clearly with a permission-denied error until
+    it's granted there."""
+    url, auth = _client()
+    if not url:
+        return [], "missing LISTMONK_URL/LISTMONK_API_USERNAME/LISTMONK_API_TOKEN"
+
+    out = []
+    page = 1
+    per_page = 100
+    query = urllib.parse.quote("subscribers.status='blocklisted'")
+    while True:
+        req = urllib.request.Request(
+            f"{url}/api/subscribers?query={query}&page={page}&per_page={per_page}",
+            headers={"Authorization": auth},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            if e.code == 403:
+                return out, ("permission denied -- grant 'subscribers:get' to this API token in "
+                             "Listmonk's Settings > Users > API Tokens")
+            return out, f"HTTP {e.code}: {detail[:200]}"
+        except (urllib.error.URLError, json.JSONDecodeError) as e:
+            return out, str(e)
+
+        results = body.get("data", {}).get("results", [])
+        for s in results:
+            if s.get("email"):
+                out.append({"email": s["email"], "name": s.get("name")})
+        total = body.get("data", {}).get("total", len(out))
+        if len(out) >= total or not results:
+            break
+        page += 1
+    return out, None
+
+
+def run_listmonk_blocklist_sync(conn, verbose: bool = True) -> None:
+    """Read-only mirror of Listmonk's own blocklist into listmonk_blocklist,
+    one more "already known bad" source the email checker cross-references
+    alongside SES/Mailgun suppressions. Full replace each run -- Listmonk's
+    blocklist is a small, complete roster, not an event stream, so there's no
+    watermark to track (same shape as re-fetching a static list)."""
+    subs, err = fetch_blocklisted_subscribers()
+    if err:
+        if verbose:
+            print(f"[listmonk] could not sync blocklist: {err}")
+        return
+    conn.execute("DELETE FROM listmonk_blocklist")
+    conn.executemany(
+        "INSERT INTO listmonk_blocklist (email, name, synced_at) VALUES (?, ?, datetime('now'))",
+        [(s["email"].strip().lower(), s.get("name")) for s in subs if s.get("email")],
+    )
+    conn.commit()
+    if verbose:
+        print(f"[listmonk] synced {len(subs)} blocklisted subscriber(s)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill and score newsletter body content from Listmonk")
     parser.parse_args()
