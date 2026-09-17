@@ -20,6 +20,7 @@ import shutil
 import tempfile
 import threading
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 from pathlib import Path
 
@@ -62,6 +63,7 @@ from app.mailgun import run_mailgun_checks, _suppression_watermark as _mailgun_s
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
+from app.email_verifier import verify_email
 from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest, _suppression_watermark as _ses_suppression_watermark
 from app.safe_browsing import run_safe_browsing_checks
@@ -1639,3 +1641,195 @@ async def update_settings(request: Request):
         conn.execute("UPDATE settings SET value=? WHERE key=?", (value, key))
     conn.commit()
     return RedirectResponse("/settings?flash=Settings saved.", status_code=303)
+
+
+# --- Self-hosted email verifier (app/email_verifier.py) ---------------------
+# Only one batch runs at a time -- SMTP probing is real network work against
+# other people's mail servers, and letting several batches hammer things
+# concurrently is both wasteful and the kind of behavior that gets an IP
+# rate-limited/blocked. A single email check is exempt (it's one probe,
+# already bounded by its own timeout).
+_verifier_batch_lock = threading.Lock()
+
+
+@app.get("/email_checker", response_class=HTMLResponse)
+def email_checker_page(request: Request, flash: str = None):
+    conn = get_connection()
+    settings = ensure_default_settings(conn)
+    configured = bool(settings.get("email_verifier_from_address")) and bool(settings.get("email_verifier_helo_name"))
+    recent = conn.execute("SELECT * FROM email_verifications ORDER BY checked_at DESC LIMIT 25").fetchall()
+    batches = conn.execute("SELECT * FROM email_verification_batches ORDER BY id DESC LIMIT 20").fetchall()
+    return templates.TemplateResponse(request, "email_checker.html", {
+        "flash": flash,
+        "configured": configured,
+        "from_address": settings.get("email_verifier_from_address"),
+        "helo_name": settings.get("email_verifier_helo_name"),
+        "recent": recent,
+        "batches": batches,
+        "batch_running": _verifier_batch_lock.locked(),
+    })
+
+
+@app.post("/email_checker/check")
+def email_checker_check_one(email: str = Form(...)):
+    conn = get_connection()
+    settings = ensure_default_settings(conn)
+    if not settings.get("email_verifier_from_address") or not settings.get("email_verifier_helo_name"):
+        return RedirectResponse(
+            "/email_checker?flash=" + urllib.parse.quote(
+                "Set a from-address and HELO name in Settings (📧 Email Verifier) before checking anything."),
+            status_code=303)
+    result = verify_email(
+        conn, email, settings["email_verifier_from_address"], settings["email_verifier_helo_name"],
+        timeout=float(settings["email_verifier_timeout_seconds"]),
+        use_cache=True, cache_hours=int(settings["email_verifier_cache_hours"]),
+    )
+    flash = f"{email}: {result['verdict'].upper()} -- {result['reason']}"
+    return RedirectResponse("/email_checker?flash=" + urllib.parse.quote(flash), status_code=303)
+
+
+def _run_verification_batch(batch_id: int) -> None:
+    if not _verifier_batch_lock.acquire(blocking=False):
+        return
+    try:
+        conn = get_connection()
+        settings = ensure_default_settings(conn)
+        from_addr = settings["email_verifier_from_address"]
+        helo = settings["email_verifier_helo_name"]
+        timeout = float(settings["email_verifier_timeout_seconds"])
+        cache_hours = int(settings["email_verifier_cache_hours"])
+        max_workers = max(1, int(settings["email_verifier_max_workers"]))
+
+        emails = [r["email"] for r in conn.execute(
+            "SELECT email FROM email_verification_batch_items WHERE batch_id=?", (batch_id,)
+        ).fetchall()]
+
+        counts = {"valid": 0, "invalid": 0, "risky": 0, "unknown": 0}
+        done = 0
+        progress_lock = threading.Lock()
+
+        def _one(addr):
+            # Each worker thread needs its OWN sqlite connection -- a
+            # connection from db.py's get_connection() isn't safe to share
+            # across threads (no check_same_thread=False).
+            c = get_connection()
+            return verify_email(c, addr, from_addr, helo, timeout=timeout, use_cache=True, cache_hours=cache_hours)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_one, e): e for e in emails}
+            for fut in as_completed(futures):
+                try:
+                    verdict = fut.result().get("verdict", "unknown")
+                except Exception:
+                    verdict = "unknown"
+                with progress_lock:
+                    done += 1
+                    counts[verdict] = counts.get(verdict, 0) + 1
+                    conn.execute(
+                        """UPDATE email_verification_batches
+                           SET done=?, valid_count=?, invalid_count=?, risky_count=?, unknown_count=?
+                           WHERE id=?""",
+                        (done, counts["valid"], counts["invalid"], counts["risky"], counts["unknown"], batch_id),
+                    )
+                    conn.commit()
+
+        conn.execute(
+            "UPDATE email_verification_batches SET status='done', finished_at=datetime('now') WHERE id=?",
+            (batch_id,),
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[email_checker] batch {batch_id} failed: {e}")
+        try:
+            c2 = get_connection()
+            c2.execute("UPDATE email_verification_batches SET status='error' WHERE id=?", (batch_id,))
+            c2.commit()
+        except Exception:
+            pass
+    finally:
+        _verifier_batch_lock.release()
+
+
+@app.post("/email_checker/batch")
+def email_checker_upload_batch(file: UploadFile = File(...)):
+    conn = get_connection()
+    settings = ensure_default_settings(conn)
+    if not settings.get("email_verifier_from_address") or not settings.get("email_verifier_helo_name"):
+        return RedirectResponse(
+            "/email_checker?flash=" + urllib.parse.quote(
+                "Set a from-address and HELO name in Settings (📧 Email Verifier) before checking anything."),
+            status_code=303)
+    if _verifier_batch_lock.locked():
+        return RedirectResponse(
+            "/email_checker?flash=" + urllib.parse.quote(
+                "A batch is already running -- wait for it to finish before starting another."),
+            status_code=303)
+
+    raw = file.file.read().decode(errors="replace")
+    # Accept either a plain list (one address per line) or a CSV with an
+    # "email" column -- auto-detect rather than forcing one format on you.
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    emails = []
+    if lines and "," in lines[0] and "email" in lines[0].lower():
+        reader = csv.DictReader(lines)
+        col = next((c for c in reader.fieldnames if c.strip().lower() == "email"), reader.fieldnames[0])
+        for row in reader:
+            v = (row.get(col) or "").strip()
+            if v:
+                emails.append(v)
+    else:
+        for l in lines:
+            v = l.split(",")[0].strip().strip('"')
+            if v and v.lower() != "email":
+                emails.append(v)
+    emails = list(dict.fromkeys(emails))  # de-dupe, preserve order
+
+    if not emails:
+        return RedirectResponse(
+            "/email_checker?flash=" + urllib.parse.quote("No email addresses found in that file."), status_code=303)
+
+    cur = conn.execute("INSERT INTO email_verification_batches (filename, total) VALUES (?, ?)",
+                       (file.filename, len(emails)))
+    batch_id = cur.lastrowid
+    conn.executemany(
+        "INSERT OR IGNORE INTO email_verification_batch_items (batch_id, email) VALUES (?, ?)",
+        [(batch_id, e) for e in emails],
+    )
+    conn.commit()
+
+    threading.Thread(target=_run_verification_batch, args=(batch_id,), daemon=True).start()
+    return RedirectResponse(
+        "/email_checker?flash=" + urllib.parse.quote(
+            f"Checking {len(emails)} address(es) in the background (a few seconds each) -- reload this page "
+            f"to see progress."),
+        status_code=303)
+
+
+@app.get("/email_checker/batch/{batch_id}/download.csv")
+def email_checker_download_batch(batch_id: int, verdict: str = "all"):
+    conn = get_connection()
+    batch = conn.execute("SELECT * FROM email_verification_batches WHERE id=?", (batch_id,)).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="batch not found")
+
+    query = """SELECT v.* FROM email_verification_batch_items b
+               JOIN email_verifications v ON v.email = b.email
+               WHERE b.batch_id=?"""
+    params = [batch_id]
+    if verdict != "all":
+        query += " AND v.verdict=?"
+        params.append(verdict)
+    query += " ORDER BY v.verdict, v.email"
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["email", "verdict", "reason", "mx_host", "is_disposable", "is_catchall", "smtp_code", "checked_at"])
+    for r in conn.execute(query, params):
+        writer.writerow([r["email"], r["verdict"], r["reason"], r["mx_host"] or "",
+                          bool(r["is_disposable"]), bool(r["is_catchall"]), r["smtp_code"] or "", r["checked_at"]])
+
+    suffix = f"_{verdict}" if verdict != "all" else ""
+    return Response(
+        content=buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="email_check_batch{batch_id}{suffix}.csv"'},
+    )

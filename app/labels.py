@@ -477,6 +477,31 @@ SETTINGS_META = {
         "help": "A genuinely temporary problem (mailbox full, greylisting) should clear up quickly. An address still bouncing 'temporarily' after this many days, with no successful delivery in between, gets flagged as effectively dead.",
         "example": "90 means an address still failing after 90 days gets flagged, even with only one recorded bounce.",
     },
+    "email_verifier_from_address": {
+        "label": "Email checker -- MAIL FROM address",
+        "help": "The Email checker (sidebar) probes a mail server with a real SMTP conversation before it can tell you whether an address exists. This is the sender address it presents while doing that -- use a real address on a domain you control. It doesn't need to be deliverable itself, but some mail servers reject an obviously fake one outright, so a real domain works better than a placeholder.",
+        "example": "verify@yourdomain.org",
+    },
+    "email_verifier_helo_name": {
+        "label": "Email checker -- HELO/EHLO hostname",
+        "help": "The hostname the Email checker announces itself as at the start of that same conversation. Doesn't need to actually resolve to this machine -- just needs to look like a real hostname, not a placeholder.",
+        "example": "mail.yourdomain.org",
+    },
+    "email_verifier_timeout_seconds": {
+        "label": "Email checker -- SMTP timeout (seconds)",
+        "help": "How long to wait for a mail server to respond before giving up on one address and calling it 'unknown'.",
+        "example": "10 means give up after 10 seconds of no response.",
+    },
+    "email_verifier_max_workers": {
+        "label": "Email checker -- addresses checked at once (CSV batches)",
+        "help": "How many addresses to probe in parallel during a CSV batch upload. Higher is faster but hits more mail servers at once -- keep this modest so it doesn't look like abuse to any one provider.",
+        "example": "5 means up to 5 addresses are being probed simultaneously.",
+    },
+    "email_verifier_cache_hours": {
+        "label": "Email checker -- don't re-check within (hours)",
+        "help": "An address checked within this many hours reuses the cached result instead of probing the mail server again -- makes repeat CSV uploads (the same list, cleaned a little more each time) fast and doesn't hammer the same servers repeatedly.",
+        "example": "168 means 7 days -- re-uploading the same list within a week reuses prior results.",
+    },
     "ses_stats_window_days": {
         "label": "SES bounce/complaint rate lookback window",
         "help": "How many days of DMARCTool's own accumulated SES event counts to sum when computing the rate shown (SES itself has no on-demand stats API -- this is built entirely from events we've captured).",
@@ -661,6 +686,10 @@ SETTINGS_GROUPS = [
     ]),
     ("🧹 List cleanup", [
         "chronic_transient_min_occurrences", "chronic_transient_min_days",
+    ]),
+    ("📧 Email Verifier", [
+        "email_verifier_from_address", "email_verifier_helo_name", "email_verifier_timeout_seconds",
+        "email_verifier_max_workers", "email_verifier_cache_hours",
     ]),
     ("🛡️ Google Safe Browsing", [
         "safe_browsing_recheck_hours",

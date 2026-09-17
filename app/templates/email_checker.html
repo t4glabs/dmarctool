@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Email checker - DMARCTool{% endblock %}
+{% block content %}
+
+<h1>📧 Email checker</h1>
+<p class="muted">
+  Self-hosted, no subscription, no third-party API -- checks syntax, MX records, known disposable/throwaway
+  providers, and then a real SMTP conversation with the mail server itself (connect, say hello, ask "would you
+  accept mail for this address?", then disconnect -- no message is ever actually sent). Same pipeline every
+  commercial verifier runs. It rules out "this address can't possibly work" and confirms "the mail server says
+  yes right now" -- it can't promise zero future bounces (a full mailbox is a temporary state, some servers
+  accept everything and only bounce later, and a result can genuinely change week to week), but it catches the
+  large majority of dead addresses before you ever send to them.
+</p>
+
+{% if not configured %}
+<div class="verdict bad">
+  ⚠️ Not set up yet. Go to <a href="/settings#email-verifier-from-address">Settings</a> and set a
+  <strong>from-address</strong> and <strong>HELO name</strong> (a real domain you control) under "📧 Email
+  Verifier" -- the mail servers you're checking need something plausible to see in the conversation.
+</div>
+{% endif %}
+
+<div class="section">
+  <h2 class="first">🔍 Check one address</h2>
+  <p class="muted" style="margin-top:0">Takes a few seconds -- a real SMTP round trip, not instant.</p>
+  <form action="/email_checker/check" method="post" class="formrow">
+    <input type="email" name="email" placeholder="someone@example.com" required style="min-width:280px;">
+    <button type="submit" {{ 'disabled' if not configured else '' }}>Check</button>
+  </form>
+</div>
+
+{% if recent %}
+<div class="section">
+  <h2 class="first">🕘 Recently checked</h2>
+  <p class="muted" style="margin-top:0">Every address ever checked here, most recent first -- re-checking
+    something already verified recently reuses this instead of probing the mail server again (see the
+    "Email Verifier" cache setting). Results also feed every batch below.</p>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Email</th><th>Verdict</th><th>Reason</th><th>Checked</th></tr>
+    {% for r in recent %}
+    <tr>
+      <td>{{ r.email }}</td>
+      <td><span class="badge {{ {'valid':'ok','invalid':'bad','risky':'warn','unknown':'muted'}[r.verdict] }}">{{ r.verdict }}</span></td>
+      <td class="muted" style="font-size:0.85rem;">{{ r.reason }}</td>
+      <td class="muted" style="font-size:0.8rem;">{{ r.checked_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="section">
+  <h2 class="first">📤 Check a list (CSV or plain list)</h2>
+  <p class="muted" style="margin-top:0">
+    Upload a CSV with an "email" column, or a plain text file with one address per line -- e.g. your Listmonk
+    export, or a suppressions CSV you've already downloaded from a domain page. Runs in the background (a few
+    seconds per address, so a few hundred can take a while); reload this page to see progress.
+    {% if batch_running %}<strong>A batch is currently running.</strong>{% endif %}
+  </p>
+  <form action="/email_checker/batch" method="post" enctype="multipart/form-data" class="formrow">
+    <input type="file" name="file" required accept=".csv,.txt">
+    <button type="submit" {{ 'disabled' if not configured or batch_running else '' }}>Upload &amp; check</button>
+  </form>
+</div>
+
+{% if batches %}
+<div class="section">
+  <h2 class="first">📦 Batches</h2>
+  <div class="table-wrap">
+  <table>
+    <tr><th>File</th><th>Progress</th><th>Valid</th><th>Invalid</th><th>Risky</th><th>Unknown</th><th>Status</th><th>Download</th></tr>
+    {% for b in batches %}
+    <tr>
+      <td>{{ b.filename or '(unnamed)' }}</td>
+      <td>{{ b.done }}/{{ b.total }}</td>
+      <td><span class="badge ok">{{ b.valid_count }}</span></td>
+      <td><span class="badge bad">{{ b.invalid_count }}</span></td>
+      <td><span class="badge warn">{{ b.risky_count }}</span></td>
+      <td><span class="badge muted">{{ b.unknown_count }}</span></td>
+      <td class="muted" style="font-size:0.85rem;">{{ b.status }}</td>
+      <td style="font-size:0.8rem;">
+        <a href="/email_checker/batch/{{ b.id }}/download.csv?verdict=valid" class="muted">valid</a> ·
+        <a href="/email_checker/batch/{{ b.id }}/download.csv?verdict=invalid" class="muted">invalid</a> ·
+        <a href="/email_checker/batch/{{ b.id }}/download.csv?verdict=risky" class="muted">risky</a> ·
+        <a href="/email_checker/batch/{{ b.id }}/download.csv" class="muted">all</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

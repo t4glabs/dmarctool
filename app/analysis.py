@@ -70,6 +70,11 @@ DEFAULT_SETTINGS = {
     "postmaster_missing_recent_days": "30",  # how far back to look for that Gmail-reported volume
     "chronic_transient_min_occurrences": "3",  # SES only: flag a "transient" bounce address once it's failed this many separate sends without ever succeeding
     "chronic_transient_min_days": "90",        # flag a "transient" bounce address once it's been failing this many days straight without ever succeeding
+    "email_verifier_from_address": "",   # MAIL FROM used for the SMTP probe -- must be set to a real domain you control before the verifier will run at all
+    "email_verifier_helo_name": "",       # HELO/EHLO hostname used for the SMTP probe -- a real-looking hostname, doesn't need to resolve
+    "email_verifier_timeout_seconds": "10",   # per-command SMTP timeout
+    "email_verifier_max_workers": "5",         # how many addresses to probe at once during a CSV batch
+    "email_verifier_cache_hours": "168",       # don't re-probe an address checked within this many hours (default 7 days)
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
     "ses_bounce_rate_watch": "0.02",       # bounce rate (of delivered) that triggers an early "watch" flag
     "ses_bounce_rate_warn": "0.05",       # bounce rate (of delivered) that triggers a flag

@@ -349,6 +349,47 @@ CREATE TABLE IF NOT EXISTS subscriber_review_watermarks (
     reviewed_at TEXT NOT NULL
 );
 
+-- Self-hosted email verifier (app/email_verifier.py) -- a read-through cache
+-- keyed on the address, so re-checking something already verified recently
+-- is instant and doesn't hit the network again. Not tied to any one domain
+-- (an address can appear across many lists), so keyed on email alone.
+CREATE TABLE IF NOT EXISTS email_verifications (
+    email         TEXT PRIMARY KEY,
+    verdict       TEXT NOT NULL,   -- 'valid'|'invalid'|'risky'|'unknown'
+    reason        TEXT,
+    mx_host       TEXT,
+    is_disposable INTEGER NOT NULL DEFAULT 0,
+    is_catchall   INTEGER NOT NULL DEFAULT 0,
+    smtp_code     INTEGER,
+    checked_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- One row per CSV batch upload -- progress + summary counts, so the page can
+-- show "342/1200 checked" while a background thread works through it, and
+-- offer separate downloads (valid/invalid/risky) scoped to just this batch.
+CREATE TABLE IF NOT EXISTS email_verification_batches (
+    id            INTEGER PRIMARY KEY,
+    filename      TEXT,
+    total         INTEGER NOT NULL DEFAULT 0,
+    done          INTEGER NOT NULL DEFAULT 0,
+    valid_count   INTEGER NOT NULL DEFAULT 0,
+    invalid_count INTEGER NOT NULL DEFAULT 0,
+    risky_count   INTEGER NOT NULL DEFAULT 0,
+    unknown_count INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'running',  -- 'running'|'done'|'error'
+    started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at   TEXT
+);
+
+-- Which emails belong to which batch -- the verdict/reason data itself lives
+-- in email_verifications (shared cache), this just links membership so a
+-- batch's own results (and downloads) can be scoped to just its rows.
+CREATE TABLE IF NOT EXISTS email_verification_batch_items (
+    batch_id  INTEGER NOT NULL REFERENCES email_verification_batches(id),
+    email     TEXT NOT NULL,
+    PRIMARY KEY (batch_id, email)
+);
+
 -- Amazon SES bounce/complaint/delivery events, consumed from an SQS queue fed by
 -- one SNS topic that every per-domain configuration set publishes to. SES has no
 -- per-domain read API -- this is the only way to get separated stats/suppressions.
