@@ -322,12 +322,13 @@ CREATE TABLE IF NOT EXISTS postmaster_daily_stats (
 
 CREATE INDEX IF NOT EXISTS idx_postmaster_daily_stats_domain ON postmaster_daily_stats(domain_id, day);
 
--- Cached Site Verification API token per domain (app/site_verification.py) --
--- the exact DNS TXT value Google expects to add this domain to Postmaster
--- Tools. Same value every time for a given domain, so cached rather than
--- re-fetched on every check cycle. verified_at is set once our own
--- attempt_verify() call succeeds (independent of Postmaster's own
--- list_verified_domains, which only reflects it on its next poll).
+-- Cached Postmaster Tools verification token per domain
+-- (get_domain_verification_token in app/postmaster.py) -- the exact DNS TXT
+-- value Google expects to add this domain to Postmaster Tools. Same value
+-- every time for a given domain, so cached rather than re-fetched on every
+-- check cycle. verified_at is set once our own verify_domain() call
+-- succeeds (independent of Postmaster's own list_verified_domains, which
+-- only reflects it on its next poll).
 CREATE TABLE IF NOT EXISTS postmaster_verification_tokens (
     domain_id   INTEGER PRIMARY KEY REFERENCES domains(id),
     token       TEXT NOT NULL,

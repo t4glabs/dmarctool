@@ -114,6 +114,61 @@ def list_verified_domains(access_token):
     return names, None
 
 
+# --- Registering a new domain, end to end -----------------------------------
+# Proving DNS ownership of a domain (e.g. via the generic, cross-product
+# Google Site Verification API) is NOT the same as Postmaster Tools tracking
+# it -- confirmed the hard way 2026-09-17: a domain can have its ownership
+# fully verified and STILL never appear in list_verified_domains() above,
+# because Postmaster keeps its own separate domain registry. create() below
+# is the missing step that actually registers a domain in THAT registry;
+# verify() then checks Postmaster's own verification state, which (usefully)
+# reuses whatever cross-product ownership proof the account already holds --
+# in the confirmed case, verify() succeeded immediately with zero new DNS
+# record, because ownership had already been proven earlier. get_verification_
+# token() is the fallback for when it hasn't: the real, domain-specific TXT
+# value to hand the user. All three are native Postmaster Tools v2 endpoints
+# (Developer Preview per Google's own discovery doc), using the SAME
+# postmaster.domain scope this file has always requested -- no extra OAuth
+# scope needed for any of this.
+def create_domain(access_token, domain_name: str):
+    """Registers `domain_name` in this Postmaster Tools account's domain
+    registry (unverified). Returns (ok: bool, error). Idempotent: Google
+    returns 409 ALREADY_EXISTS if it's already registered, which is treated
+    as success, not an error."""
+    data, err = _post(f"{API_BASE}/domains", {"domainId": domain_name}, access_token)
+    if err:
+        if "409" in err or "ALREADY_EXISTS" in err:
+            return True, None
+        return False, err
+    return True, None
+
+
+def verify_domain(access_token, domain_name: str, method: str = "TXT"):
+    """Attempt to move `domain_name` from UNVERIFIED to VERIFIED. Returns
+    (verified: bool, error). Reuses whatever DNS-ownership proof the account
+    already holds for this exact domain -- if that proof already exists (from
+    an earlier Postmaster or Search-Console-style verification), this
+    succeeds with no new DNS record required. A verification failure because
+    no proof exists yet is the ordinary, expected case -- reported as
+    (False, None), not an error; safe to call every cycle until it succeeds."""
+    data, err = _post(f"{API_BASE}/domains/{domain_name}:verify", {"verificationMethod": method}, access_token)
+    if err:
+        return False, None
+    return True, None
+
+
+def get_domain_verification_token(access_token, domain_name: str, method: str = "TXT"):
+    """(token, error) -- the exact DNS TXT record VALUE Postmaster Tools
+    itself expects for `domain_name` (Postmaster's own token endpoint, not the
+    generic Site Verification API -- same underlying convention, but this is
+    the one actually tied to this domain's registration here). Stable per
+    domain; safe to cache."""
+    data, err = _get(f"{API_BASE}/domains/{domain_name}/verificationToken?verificationMethod={method}", access_token)
+    if err:
+        return None, err
+    return data.get("token"), None
+
+
 def match_tracked_domains(conn, pm_domains):
     """Same dynamic root-or-subdomain matching used for Mailgun."""
     tracked = conn.execute("SELECT id, name FROM domains").fetchall()
@@ -231,7 +286,8 @@ def _fetch_all(domain, access_token, window_days):
     return {"stats": (stats, stats_err), "compliance": (compliance, compliance_err), "daily": (daily, daily_err)}
 
 
-def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recent_days: int, verbose: bool) -> None:
+def _check_missing_domains(conn, access_token, verified_names: set, min_volume: int, recent_days: int,
+                            verbose: bool) -> None:
     """Tracked domains with real, recent Gmail-reported volume (per DMARC
     aggregate reports already ingested -- no extra network call needed to
     find candidates) that are NOT verified on this Postmaster Tools account,
@@ -239,13 +295,22 @@ def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recen
     to every check in this file. Reminder only above a real volume bar -- a
     domain barely touching Gmail isn't worth registering.
 
-    Where possible, also fetches the exact DNS TXT verification token and
-    attempts to complete verification automatically (app/site_verification.py)
-    -- so getting a domain into Postmaster Tools can happen with zero visits
-    to postmaster.google.com. Degrades gracefully (a plain "add it manually"
-    reminder) if that scope hasn't been granted yet."""
-    from app.site_verification import attempt_verify, get_verification_token  # local: avoids a circular import
+    `verified_names` MUST be the raw set of verified domain-name strings
+    (pm_domains from list_verified_domains), checked by EXACT name -- not
+    match_tracked_domains()'s domain_id attribution, which deliberately
+    folds a verified subdomain into whichever tracked ANCESTOR domain it
+    matches first (the right behaviour for attributing traffic stats when
+    only the apex is tracked, but wrong here: it caused a real, confirmed
+    bug where ats.aikyamjobs.org's own verification was invisible to this
+    check because match_tracked_domains() had already attributed the name
+    "ats.aikyamjobs.org" to the APEX domain's id instead of its own).
 
+    Also attempts the fix automatically via create_domain()+verify_domain()
+    (native Postmaster Tools endpoints -- see the comment above create_domain
+    for why both steps are needed) -- so getting a domain into Postmaster
+    Tools can happen with zero visits to postmaster.google.com. Falls back to
+    handing over the exact DNS TXT record (get_domain_verification_token)
+    when ownership isn't already established some other way."""
     recent_cutoff = int(datetime.datetime.utcnow().timestamp()) - recent_days * 86400
     rows = conn.execute(
         """SELECT d.id as domain_id, d.name as domain_name, SUM(rr.count) as vol
@@ -258,25 +323,35 @@ def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recen
         (recent_cutoff, min_volume),
     ).fetchall()
 
-    flagged_ids = set()
+    # Only domains genuinely still unresolved after this round belong in the
+    # "don't touch" set below -- one that just got auto-verified must NOT be
+    # protected from the dismiss step, or its old open reminder would linger
+    # forever alongside the explicit 'done' update just below.
+    still_missing_ids = set()
     for row in rows:
         domain_id, domain_name, vol = row["domain_id"], row["domain_name"], row["vol"]
-        if domain_id in matched_domain_ids:
-            continue
-        flagged_ids.add(domain_id)
+        if domain_name in verified_names:
+            continue  # already verified (by its own exact name) as of the list fetched earlier this run
 
-        # The record may already be live from a previous cycle -- try to
-        # finish the job before explaining anything.
-        verified, _ = attempt_verify(domain_name)
+        created, create_err = create_domain(access_token, domain_name)
+        verified = verify_domain(access_token, domain_name)[0] if created else False
+
         if verified:
             conn.execute(
                 "UPDATE postmaster_verification_tokens SET verified_at=datetime('now') WHERE domain_id=?",
                 (domain_id,),
             )
+            conn.execute(
+                """UPDATE action_items SET status='done', resolved_at=datetime('now')
+                   WHERE domain_id=? AND category='postmaster_domain_missing' AND status='open'""",
+                (domain_id,),
+            )
             if verbose:
-                print(f"[postmaster] {domain_name}: verification completed automatically -- "
-                      f"will show as verified once Postmaster's own domain list next refreshes")
+                print(f"[postmaster] {domain_name}: registered and verified automatically -- will show as "
+                      f"verified once Postmaster's own domain list next refreshes")
             continue  # don't raise a reminder for something that just got fixed
+
+        still_missing_ids.add(domain_id)
 
         cached = conn.execute(
             "SELECT token FROM postmaster_verification_tokens WHERE domain_id=?", (domain_id,)
@@ -284,7 +359,7 @@ def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recen
         if cached:
             token, token_err = cached["token"], None
         else:
-            token, token_err = get_verification_token(domain_name)
+            token, token_err = get_domain_verification_token(access_token, domain_name)
             if token:
                 conn.execute(
                     "INSERT INTO postmaster_verification_tokens (domain_id, token) VALUES (?,?)",
@@ -296,8 +371,8 @@ def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recen
             f"tool checks automatically every cycle and completes verification for you -- no need to visit "
             f"postmaster.google.com at all."
         ) if token else (
-            f"Couldn't fetch the exact verification record yet ({token_err or 'no reason given'}). Add this "
-            f"domain manually at postmaster.google.com in the meantime."
+            f"Couldn't register/fetch the verification record yet ({create_err or token_err or 'no reason given'}). "
+            f"Add this domain manually at postmaster.google.com in the meantime."
         )
 
         upsert_system_action(
@@ -309,13 +384,13 @@ def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recen
             f"every check in this tool. {record_note}",
         )
 
-    if flagged_ids:
-        placeholders = ",".join("?" * len(flagged_ids))
+    if still_missing_ids:
+        placeholders = ",".join("?" * len(still_missing_ids))
         conn.execute(
             f"""UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                 WHERE category='postmaster_domain_missing' AND status='open'
                   AND domain_id NOT IN ({placeholders})""",
-            tuple(flagged_ids),
+            tuple(still_missing_ids),
         )
     else:
         conn.execute(
@@ -323,7 +398,7 @@ def _check_missing_domains(conn, matched_domain_ids: set, min_volume: int, recen
                WHERE category='postmaster_domain_missing' AND status='open'"""
         )
     if verbose:
-        print(f"[postmaster] {len(flagged_ids)} domain(s) flagged as missing from Postmaster Tools "
+        print(f"[postmaster] {len(still_missing_ids)} domain(s) still missing from Postmaster Tools "
               f"(>= {min_volume} Gmail msg(s) in last {recent_days}d)")
 
 
@@ -354,7 +429,7 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
     # domain list just fetched above), so it runs every cycle regardless of
     # the per-domain staleness gate below.
     _check_missing_domains(
-        conn, {domain_id for domain_id, _ in matches.values()},
+        conn, access_token, set(pm_domains),
         min_volume=int(settings["postmaster_missing_min_volume"]),
         recent_days=int(settings["postmaster_missing_recent_days"]),
         verbose=verbose,

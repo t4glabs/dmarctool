@@ -11,12 +11,12 @@ Uses a loopback HTTP server on 127.0.0.1 (RFC 8252) to catch the redirect,
 matching the "Desktop app" OAuth client type -- no redirect URI needs to be
 pre-registered in Google Cloud Console.
 
-Re-run this whenever SCOPES below changes (e.g. the siteverification scope
-added 2026-09-17) -- an existing refresh token only ever carries whatever was
-granted on the consent screen at the time it was issued; editing this list
-doesn't retroactively add a scope to a token minted before the edit.
-`prompt=consent` below forces Google to reissue a refresh token even on
-re-auth, and _append_secret() safely replaces the old one in secrets.env.
+Re-run this whenever SCOPES below changes -- an existing refresh token only
+ever carries whatever was granted on the consent screen at the time it was
+issued; editing this list doesn't retroactively add a scope to a token
+minted before the edit. `prompt=consent` below forces Google to reissue a
+refresh token even on re-auth, and _append_secret() safely replaces the old
+one in secrets.env.
 """
 
 import json
@@ -29,9 +29,13 @@ from app.config import SECRETS_PATH, get_secret
 
 SCOPES = [
     "https://www.googleapis.com/auth/postmaster.traffic.readonly",
+    # Also covers registering/verifying a domain (postmaster.py's
+    # create_domain/verify_domain/get_domain_verification_token) -- Postmaster
+    # Tools v2 has its own native domain-registration endpoints, so the
+    # separate `siteverification.verify_only` scope briefly added here
+    # 2026-09-17 turned out to be unnecessary and was removed again the same
+    # day once that was confirmed live.
     "https://www.googleapis.com/auth/postmaster.domain",
-    # Lets app/site_verification.py fetch a domain's DNS verification TXT
-    "https://www.googleapis.com/auth/siteverification.verify_only",
 ]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
