@@ -221,21 +221,21 @@ def run_listmonk_content_sync(conn, verbose: bool = True) -> None:
     conn.commit()
 
 
-def fetch_blocklisted_subscribers(timeout: float = 20.0):
+def fetch_blocklisted_subscribers(timeout: float = 30.0):
     """[{"email":..., "name":...}, ...] for every subscriber Listmonk itself
     has already marked blocklisted -- read-only, no write is ever made back
-    to Listmonk. Requires the existing API token to have the `subscribers:get`
-    permission in Listmonk's own admin UI (Settings -> Users -> API Tokens) --
-    the token this project already uses for campaigns doesn't have that scope
-    by default, so this fails clearly with a permission-denied error until
-    it's granted there."""
+    to Listmonk. Requires the existing API token to have both `subscribers:get`
+    and `subscribers:sql_query` permissions in Listmonk's own admin UI
+    (Settings -> Users -> API Tokens) -- the latter is what lets the `query=`
+    param below (a server-side filter, not raw write access) run at all;
+    without it Listmonk returns a clean 403 rather than silently ignoring it."""
     url, auth = _client()
     if not url:
         return [], "missing LISTMONK_URL/LISTMONK_API_USERNAME/LISTMONK_API_TOKEN"
 
     out = []
     page = 1
-    per_page = 100
+    per_page = 200
     query = urllib.parse.quote("subscribers.status='blocklisted'")
     while True:
         req = urllib.request.Request(
@@ -248,8 +248,8 @@ def fetch_blocklisted_subscribers(timeout: float = 20.0):
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")
             if e.code == 403:
-                return out, ("permission denied -- grant 'subscribers:get' to this API token in "
-                             "Listmonk's Settings > Users > API Tokens")
+                return out, ("permission denied -- grant 'subscribers:get' and 'subscribers:sql_query' to "
+                             "this API token in Listmonk's Settings > Users > API Tokens")
             return out, f"HTTP {e.code}: {detail[:200]}"
         except (urllib.error.URLError, json.JSONDecodeError) as e:
             return out, str(e)

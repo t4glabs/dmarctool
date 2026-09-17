@@ -49,8 +49,8 @@
       <p class="muted" style="margin:0.2rem 0 0 0; font-size:0.85rem;">
         {% if kb_counts.listmonk_synced_at %}Listmonk blocklist last synced {{ kb_counts.listmonk_synced_at }}.
         {% else %}Listmonk blocklist hasn't synced yet -- either it hasn't run since this feature was added, or the
-          API token in secrets.env needs the <code>subscribers:get</code> permission granted in Listmonk's own
-          Settings &gt; Users &gt; API Tokens.{% endif %}
+          API token in secrets.env needs the <code>subscribers:get</code> and <code>subscribers:sql_query</code>
+          permissions granted in Listmonk's own Settings &gt; Users &gt; API Tokens.{% endif %}
       </p>
     </div>
   </div>
