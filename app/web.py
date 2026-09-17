@@ -11,6 +11,7 @@ after each ingest.
 """
 
 import csv
+import email.utils
 import io
 import json as _json
 import re
@@ -56,11 +57,12 @@ from app.domain_report import (
 )
 from app.listmonk import run_listmonk_content_sync
 from app.lookalike import findings_for_domain, run_lookalike_checks
-from app.mailgun import run_mailgun_checks
+from app.mailgun import run_mailgun_checks, _suppression_watermark as _mailgun_suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.postmaster import run_postmaster_checks
+from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
 from app.ses_account import run_ses_account_checks
-from app.ses_events import run_ses_event_ingest
+from app.ses_events import run_ses_event_ingest, _suppression_watermark as _ses_suppression_watermark
 from app.safe_browsing import run_safe_browsing_checks
 from app.source_classification import classify_sources, caught_impersonation, enrich_impersonation_whois
 from app.source_view import shared_cause_verdict, source_action_guide, source_overview
@@ -173,6 +175,7 @@ def run_all_checks(conn) -> bool:
             run_analysis, run_dns_checks, discover_untracked_subdomains, run_blocklist_checks,
             run_compliance_checks, run_mailgun_checks, run_mailgun_campaign_sync, run_postmaster_checks,
             run_ses_event_ingest, run_ses_account_checks, run_listmonk_content_sync,
+            run_chronic_bounce_checks,  # after mailgun/ses checks above, so it sees this cycle's fresh suppressions
             run_safe_browsing_checks, run_mta_sts_checks, run_report_auth_checks,
             run_lookalike_checks, run_domain_expiry_checks, enrich_impersonation_whois,
         ):
@@ -888,6 +891,17 @@ def domain_detail(request: Request, name: str, flash: str = None):
     })
 
 
+def _clean_email(raw: str) -> str:
+    """Bare address only -- some stored suppression rows carry a full
+    'Display Name <email@x.com>' string (and sometimes a MIME-encoded display
+    name on top of that), straight from whatever the original send's To:
+    header contained. Left as-is, that's what shows up in a suppression
+    export -- confusing to paste into Listmonk, and not actually the address
+    that needs removing. email.utils.parseaddr handles both plain addresses
+    and the decorated form uniformly."""
+    return email.utils.parseaddr(raw or "")[1] or raw
+
+
 @app.get("/domain/{name}/suppressions.csv")
 def download_suppressions(name: str):
     conn = get_connection()
@@ -906,7 +920,7 @@ def download_suppressions(name: str):
         (domain_id,),
     ):
         category = categorize_bounce(r["reason"], None) if r["kind"] == "bounce" else ""
-        writer.writerow(["mailgun", r["mailgun_domain"], r["email"], r["kind"], "", category,
+        writer.writerow(["mailgun", r["mailgun_domain"], _clean_email(r["email"]), r["kind"], "", category,
                           r["reason"] or "", r["first_seen_at"], r["last_checked_at"]])
 
     for r in conn.execute(
@@ -915,13 +929,79 @@ def download_suppressions(name: str):
         (domain_id,),
     ):
         category = categorize_bounce(r["reason"], r["bounce_type"]) if r["kind"] == "bounce" else ""
-        writer.writerow(["ses", r["configuration_set"], r["email"], r["kind"], r["bounce_type"] or "", category,
+        writer.writerow(["ses", r["configuration_set"], _clean_email(r["email"]), r["kind"], r["bounce_type"] or "", category,
                           r["reason"] or "", r["first_seen_at"], r["last_seen_at"]])
 
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{name}_suppressions.csv"'},
+    )
+
+
+@app.get("/domain/{name}/suppressions_new.csv")
+def download_new_suppressions(name: str):
+    """Only what's genuinely new since the last time each source's "new
+    suppressions" reminder was marked done/dismissed -- NOT the full
+    historical list every time, which is what made repeated exports to
+    whoever manages this domain's list look identical send after send
+    ("this is already blocklisted, we know") even though most of it had
+    already been handled weeks or months earlier. Also always includes the
+    CURRENT chronic-transient-bounce list (an ongoing state, not a discrete
+    event -- there's no "new since" for it; the point is it's still
+    unresolved), clearly labelled as its own kind."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    domain_id = domain["id"]
+    settings = ensure_default_settings(conn)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["source", "source_domain", "email", "kind", "bounce_type", "category", "reason", "first_seen", "last_seen"])
+
+    mailgun_domains = [r["mailgun_domain"] for r in conn.execute(
+        "SELECT DISTINCT mailgun_domain FROM mailgun_suppressions WHERE domain_id=?", (domain_id,))]
+    mailgun_watermarks = {md: _mailgun_suppression_watermark(conn, domain_id, md) for md in mailgun_domains}
+    for r in conn.execute(
+        """SELECT mailgun_domain, email, kind, reason, first_seen_at, last_checked_at
+           FROM mailgun_suppressions WHERE domain_id=? ORDER BY kind, email""",
+        (domain_id,),
+    ):
+        watermark = mailgun_watermarks.get(r["mailgun_domain"])
+        if watermark and r["first_seen_at"] <= watermark:
+            continue
+        category = categorize_bounce(r["reason"], None) if r["kind"] == "bounce" else ""
+        writer.writerow(["mailgun", r["mailgun_domain"], _clean_email(r["email"]), r["kind"], "", category,
+                          r["reason"] or "", r["first_seen_at"], r["last_checked_at"]])
+
+    config_sets = [r["configuration_set"] for r in conn.execute(
+        "SELECT DISTINCT configuration_set FROM ses_suppressions WHERE domain_id=?", (domain_id,))]
+    ses_watermarks = {cs: _ses_suppression_watermark(conn, domain_id, cs) for cs in config_sets}
+    for r in conn.execute(
+        """SELECT configuration_set, email, kind, bounce_type, reason, first_seen_at, last_seen_at
+           FROM ses_suppressions WHERE domain_id=? ORDER BY kind, email""",
+        (domain_id,),
+    ):
+        watermark = ses_watermarks.get(r["configuration_set"])
+        if watermark and r["first_seen_at"] <= watermark:
+            continue
+        category = categorize_bounce(r["reason"], r["bounce_type"]) if r["kind"] == "bounce" else ""
+        writer.writerow(["ses", r["configuration_set"], _clean_email(r["email"]), r["kind"], r["bounce_type"] or "", category,
+                          r["reason"] or "", r["first_seen_at"], r["last_seen_at"]])
+
+    min_occ = int(settings["chronic_transient_min_occurrences"])
+    min_days = int(settings["chronic_transient_min_days"])
+    for f in chronic_transient_bounces(conn, domain_id, min_occ, min_days):
+        writer.writerow([f["source"].lower(), "", _clean_email(f["email"]), "chronic_transient", "", f["category"],
+                          f"failing {min_days}+ days or {min_occ}+ sends, never resolved",
+                          f["first_seen"], f["last_seen"]])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}_suppressions_new.csv"'},
     )
 
 
@@ -947,7 +1027,7 @@ def download_bounce_category(name: str, category: str):
         (domain_id,),
     ):
         if categorize_bounce(r["reason"], None) == category:
-            writer.writerow(["mailgun", r["mailgun_domain"], r["email"], "", r["reason"] or "",
+            writer.writerow(["mailgun", r["mailgun_domain"], _clean_email(r["email"]), "", r["reason"] or "",
                               r["first_seen_at"], r["last_checked_at"]])
 
     for r in conn.execute(
@@ -956,7 +1036,7 @@ def download_bounce_category(name: str, category: str):
         (domain_id,),
     ):
         if categorize_bounce(r["reason"], r["bounce_type"]) == category:
-            writer.writerow(["ses", r["configuration_set"], r["email"], r["bounce_type"] or "", r["reason"] or "",
+            writer.writerow(["ses", r["configuration_set"], _clean_email(r["email"]), r["bounce_type"] or "", r["reason"] or "",
                               r["first_seen_at"], r["last_seen_at"]])
 
     safe_category = re.sub(r"[^A-Za-z0-9]+", "_", category).strip("_")

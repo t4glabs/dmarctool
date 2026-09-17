@@ -68,6 +68,8 @@ DEFAULT_SETTINGS = {
     "postmaster_stats_window_days": "30", # lookback window for the SPAM_RATE / delivery-error metrics
     "postmaster_missing_min_volume": "50",   # don't flag a domain as missing from Postmaster until Gmail's reported at least this much volume for it -- a domain barely touching Gmail isn't worth registering
     "postmaster_missing_recent_days": "30",  # how far back to look for that Gmail-reported volume
+    "chronic_transient_min_occurrences": "3",  # SES only: flag a "transient" bounce address once it's failed this many separate sends without ever succeeding
+    "chronic_transient_min_days": "90",        # flag a "transient" bounce address once it's been failing this many days straight without ever succeeding
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
     "ses_bounce_rate_watch": "0.02",       # bounce rate (of delivered) that triggers an early "watch" flag
     "ses_bounce_rate_warn": "0.05",       # bounce rate (of delivered) that triggers a flag

@@ -251,6 +251,27 @@ def _upsert_campaign_recipients(conn, domain_id, config_set, campaign_id, kind, 
         )
 
 
+def _suppression_watermark(conn, domain_id, config_set):
+    """The cutoff for what counts as a NEW suppression for this config set --
+    same idea and reasoning as mailgun.py's own _suppression_watermark
+    (mirrored here for parity, and so the scoped 'new suppressions' CSV export
+    can filter SES the same way it filters Mailgun): the later of (a) when we
+    first started tracking this config set's list, and (b) the last time the
+    ses_new_suppressions item for it was marked done/dismissed -- the user's
+    own 'I've reviewed and pruned up to here' line."""
+    base = conn.execute(
+        "SELECT MIN(first_seen_at) m FROM ses_suppressions WHERE configuration_set=?",
+        (config_set,),
+    ).fetchone()["m"]
+    ack = conn.execute(
+        """SELECT MAX(resolved_at) m FROM action_items
+           WHERE domain_id=? AND category='ses_new_suppressions' AND ref_key=? AND status IN ('done','dismissed')""",
+        (domain_id, config_set),
+    ).fetchone()["m"]
+    candidates = [x for x in (base, ack) if x]
+    return max(candidates) if candidates else None
+
+
 def _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id, recipients):
     """Records which specific newsletter caused which specific bounce, with
     the raw diagnostic text kept for app.bounce_reasons to categorize on
@@ -475,7 +496,17 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
                 conn, domain_id, "ses_new_suppressions", config_set,
                 f"{domain_name}: new SES suppressions ({config_set})",
                 f"{new['bounce']} new bounce(s), {new['complaint']} new complaint(s) -- "
-                f"worth pruning these addresses from Listmonk too.",
+                f"worth pruning these addresses from Listmonk too. Download the \"new only\" suppressions CSV "
+                f"on this domain's page to get exactly these, not the whole history again.",
+            )
+        else:
+            # Parity fix: this never auto-cleared before (unlike the Mailgun
+            # equivalent), so once raised it sat 'open' forever regardless of
+            # whether anything was actually still new.
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='ses_new_suppressions' AND ref_key=? AND status='open'""",
+                (config_set,),
             )
 
         rejected_row = conn.execute(

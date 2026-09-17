@@ -754,7 +754,14 @@
         reason and dates -- one CSV, ready to cross-check against your Listmonk subscriber list instead of digging
         through the Mailgun/SES consoles by hand.
       </p>
-      <a href="/domain/{{ domain.name }}/suppressions.csv"><button type="button">⬇️ Download CSV</button></a>
+      <div class="formrow" style="margin-top:0.6rem;">
+        <a href="/domain/{{ domain.name }}/suppressions_new.csv" title="Only what's new since you last marked the &quot;new suppressions&quot; reminder(s) done, plus the current chronic-transient-bounce list -- the one to actually send whoever manages this domain's Listmonk/Ghost, so they stop seeing the same already-handled addresses every time.">
+          <button type="button">⬇️ Download NEW only (send this one)</button>
+        </a>
+        <a href="/domain/{{ domain.name }}/suppressions.csv" title="The complete history, every address ever captured -- for a full audit, not for a routine cleanup export.">
+          <button type="button" class="small">⬇️ Download full history</button>
+        </a>
+      </div>
     </div>
     {% endif %}
 

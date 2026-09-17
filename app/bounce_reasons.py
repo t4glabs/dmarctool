@@ -103,6 +103,25 @@ _PHRASE_CATEGORIES = [
 ]
 
 
+# Categories that mean the address is ALREADY, definitively dead -- the
+# "permanent bounce / user doesn't exist" bucket the operator already prunes
+# by hand. app.chronic_bounces deliberately excludes these: its whole purpose
+# is catching the addresses that DON'T fall in this bucket -- ones stuck in a
+# "temporary" state that, in practice, never resolves.
+PERMANENT_CATEGORIES = {
+    "No such user / invalid address",
+    "No such domain",
+    "Bad address syntax",
+    "Mailbox has moved, no forwarding address",
+    "Mailbox disabled/unavailable",
+    "Other permanent failure (see raw reason)",
+    "Suppressed pre-emptively by SES (not a real mailbox bounce)",
+    "Suppressed pre-emptively by SES (address-quality check)",
+    "Already suppressed by Mailgun (remove from your sending list, not a fresh bounce)",
+    "Already suppressed by Mailgun (recipient unsubscribed)",
+}
+
+
 def categorize_bounce(reason: str, bounce_type: str = None) -> str:
     """Plain-language category for a raw bounce diagnostic string. Never
     discards the raw text -- callers should show this alongside it, not

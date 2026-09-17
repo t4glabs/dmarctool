@@ -128,8 +128,11 @@ _OPERATOR_ONLY_CATEGORIES = {
     # lines in the email.
     # postmaster_domain_missing is Aikyam's own Postmaster Tools account admin
     # (registering a domain there) -- a beneficiary org has no access to that
-    # account and can't act on it either way.
-    "rua_unauthorized", "ses_event_backlog", "postmaster_domain_missing",
+    # account and can't act on it either way. chronic_transient_bounce is the
+    # same routine list-hygiene chore as mailgun/ses_new_suppressions (see
+    # _list_hygiene) -- Aikyam's own cleanup workflow, not a "problem with
+    # your website".
+    "rua_unauthorized", "ses_event_backlog", "postmaster_domain_missing", "chronic_transient_bounce",
 }
 
 # Categories that are real and worth telling a beneficiary about, but never

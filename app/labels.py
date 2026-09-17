@@ -22,6 +22,7 @@ CATEGORY_LABELS = {
     "mailgun_new_suppressions": "New Mailgun suppressions",
     "postmaster_compliance": "Gmail Postmaster compliance",
     "postmaster_domain_missing": "Not added to Postmaster Tools",
+    "chronic_transient_bounce": "Chronic transient bounces",
     "ses_reputation_watch": "SES bounce/complaint rate trending up",
     "ses_reputation": "SES bounce/complaint rate",
     "ses_new_suppressions": "New SES suppressions",
@@ -61,6 +62,7 @@ CATEGORY_PRIORITY_ORDER = [
     "ses_reputation_watch",
     "mailgun_new_suppressions",
     "ses_new_suppressions",
+    "chronic_transient_bounce",
     "ses_account_health",
     "ses_identity_unverified",
     "postmaster_compliance",
@@ -111,6 +113,7 @@ CATEGORY_HELP = {
     "mailgun_new_suppressions": "Mailgun automatically suppressed new addresses (bounced or complained) since the last check -- these won't receive mail from you again unless removed from Mailgun's suppression list, and are worth pruning from your Listmonk list too.",
     "postmaster_compliance": "Google's own verdict (from Postmaster Tools) on one of its published sender requirements for this domain -- this is Gmail telling you directly what's wrong, not an inference from DMARC reports.",
     "postmaster_domain_missing": "Gmail reported seeing real, meaningful mail volume for this domain, but it isn't verified on this Postmaster Tools account -- so its actual Gmail spam rate and compliance verdicts are invisible to every check that depends on Postmaster (unlike DMARC reports, which every domain gets regardless).",
+    "chronic_transient_bounce": "A 'temporary' bounce (mailbox full, greylisted, a brief server error) is supposed to be self-healing -- Mailgun/SES keep retrying and never add it to their own suppression list as permanent. Some addresses never actually recover: the same inbox stays full for months, or a filter rejects every send indefinitely. Neither ESP's own suppression handling ever notices this, because each bounce looks fine in isolation -- it's only wrong in aggregate, over time.",
     "ses_reputation_watch": "Amazon SES's own bounce or complaint rate for this domain has crossed the earlier \"watch\" threshold -- not yet at the danger line, but trending the wrong way.",
     "ses_reputation": "Amazon SES's own bounce or complaint rate for this domain crossed the warning threshold, based on real bounce/complaint events from its dedicated configuration set -- worth checking list quality before sending more.",
     "ses_new_suppressions": "SES recorded new bounces or complaints since the last check for this domain's configuration set -- these addresses are effectively dead ends; worth pruning from Listmonk too.",
@@ -171,6 +174,7 @@ CATEGORY_REMEDIATION = {
     "spf_missing": "Publish an SPF TXT record at your domain's apex (not a subdomain) listing everything that sends mail as you -- e.g. \"v=spf1 include:_spf.google.com include:mailgun.org ~all\" adjusted for whichever of Google Workspace/SES/Mailgun/etc. you actually use. Each provider's own setup docs give you the exact include: value to add. See the Gmail sender requirements table above once it's published to confirm it's being read correctly.",
     "dkim_missing": "Turn on DKIM signing in whichever service sends as this domain (Google Workspace: Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email; SES: Identities -> this domain -> DKIM; Mailgun: Domain settings -> DNS records), then publish the CNAME/TXT record it gives you. This is usually a one-time setup per sending service, not something that needs redoing per campaign.",
     "postmaster_domain_missing": "This tool registers and attempts to verify the domain in Postmaster Tools automatically each cycle -- if that already succeeded (reusing ownership proof the account already held), no DNS change is needed at all and this clears itself on the next refresh. If a DNS TXT record is shown in the detail above, add it exactly as shown at your DNS host; the tool then completes verification for you on the next check, with no need to open postmaster.google.com.",
+    "chronic_transient_bounce": "Download the suppressions CSV on this domain's page -- these addresses are now included in it alongside the permanent bounces you already prune. Remove them from Listmonk/Ghost the same way. Leave them alone in Mailgun/SES's own suppression handling; this is only about your own subscriber list.",
     "untracked_sending_subdomain": "Check with whoever manages sending for this domain to confirm whether this subdomain is actually in use. If it is: make sure its DMARC record has a rua= reporting address (see the detail above for whether it's missing), then just let DMARCTool ingest reports for it -- adding a subdomain works exactly like any other domain, no special setup needed. If it's not in use / was a leftover from something abandoned, no action needed beyond knowing it's there.",
     "domain_expiring_soon": "Renew the domain now, at whichever registrar it's registered with (see the detail above for which one) -- most registrars let you renew any time before expiry, even years in advance. If auto-renew is available and the card on file is current, turning it on avoids this happening again.",
 }
@@ -463,6 +467,16 @@ SETTINGS_META = {
         "help": "How many days of Gmail-reported mail (from DMARC reports) to add up when deciding whether a domain sends enough to be worth registering in Postmaster Tools.",
         "example": "30 means it looks at the last 30 days of Gmail-reported volume.",
     },
+    "chronic_transient_min_occurrences": {
+        "label": "Sends before a 'temporary' bounce counts as chronic (SES)",
+        "help": "SES only (Mailgun doesn't keep long-term per-send bounce history). An address that keeps bouncing 'temporarily' across this many separate newsletters, without ever succeeding, gets flagged as effectively dead.",
+        "example": "3 means an address that has bounced temporarily on 3 or more different sends gets flagged.",
+    },
+    "chronic_transient_min_days": {
+        "label": "Days before a 'temporary' bounce counts as chronic",
+        "help": "A genuinely temporary problem (mailbox full, greylisting) should clear up quickly. An address still bouncing 'temporarily' after this many days, with no successful delivery in between, gets flagged as effectively dead.",
+        "example": "90 means an address still failing after 90 days gets flagged, even with only one recorded bounce.",
+    },
     "ses_stats_window_days": {
         "label": "SES bounce/complaint rate lookback window",
         "help": "How many days of DMARCTool's own accumulated SES event counts to sum when computing the rate shown (SES itself has no on-demand stats API -- this is built entirely from events we've captured).",
@@ -644,6 +658,9 @@ SETTINGS_GROUPS = [
     ("📊 Volume-spike detection", [
         "volume_spike_recent_days", "volume_spike_baseline_days",
         "volume_spike_min_baseline_avg", "volume_spike_multiplier",
+    ]),
+    ("🧹 List cleanup", [
+        "chronic_transient_min_occurrences", "chronic_transient_min_days",
     ]),
     ("🛡️ Google Safe Browsing", [
         "safe_browsing_recheck_hours",

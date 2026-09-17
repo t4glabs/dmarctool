@@ -538,8 +538,10 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
                 conn, domain_id, "mailgun_new_suppressions", mailgun_domain,
                 f"{domain_name}: new Mailgun suppressions ({mailgun_domain})",
                 f"{new_bounces} address(es) bounced and {new_complaints} complained{since} -- these won't "
-                f"receive mail from Mailgun anymore. Prune them from Listmonk/Ghost too, then mark this done. "
-                f"(Leave them on Mailgun's own suppression list -- that list is what protects your reputation.)",
+                f"receive mail from Mailgun anymore. Download the \"new only\" suppressions CSV on this domain's "
+                f"page to get exactly these (not the whole history again), prune them from Listmonk/Ghost, then "
+                f"mark this done. (Leave them on Mailgun's own suppression list -- that list is what protects "
+                f"your reputation.)",
             )
         else:
             # Nothing new since the watermark -> clear any lingering item so the
