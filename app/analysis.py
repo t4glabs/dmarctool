@@ -42,6 +42,7 @@ DEFAULT_SETTINGS = {
     "min_days_stable": "14",           # days at current p/pct required before ramping
     "rolling_window_days": "21",       # analysis window, capped by days at current policy
     "min_volume_for_recommendation": "50",  # total msgs in window needed to trust the rate
+    "health_score_min_volume": "50",   # below this many msgs/attempts in the 30d window, a component (pass/bounce/complaint rate) is "not enough data" rather than a real score -- otherwise a quiet domain with zero DMARC volume scores as if every message failed, or one stray bounce with no other traffic scores as a 100% bounce rate
     "ramp_steps": "10,25,50,100",      # pct ramp ladder
     "new_sender_window_days": "14",    # a sender first seen within this window is "new"
     "high_volume_fail_threshold": "20",  # msgs in window to flag a failing sender
@@ -1756,9 +1757,19 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     if already:
         return
 
+    min_volume = int(settings["health_score_min_volume"])
+
     now_epoch = int(datetime.datetime.utcnow().timestamp())
     window_start_epoch = now_epoch - 30 * 86400
-    _, _, pass_rate = domain_window_stats(conn, domain_id, window_start_epoch, now_epoch)
+    dmarc_total, _, pass_rate_raw = domain_window_stats(conn, domain_id, window_start_epoch, now_epoch)
+    # domain_window_stats returns 0.0 (not None) when the window has ZERO
+    # DMARC report volume -- indistinguishable, to a naive caller, from "every
+    # message failed". A domain that's gone quiet (no DMARC reports arriving,
+    # nothing being sent) would otherwise score as if it were failing 100% of
+    # its mail, at this metric's heaviest weight below. Below the trust floor,
+    # treat it as "not enough data" instead, same floor already used for
+    # ramp recommendations (min_volume_for_recommendation).
+    pass_rate = pass_rate_raw if dmarc_total >= min_volume else None
 
     pm_row = conn.execute(
         "SELECT spam_rate FROM postmaster_stats WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1",
@@ -1789,8 +1800,15 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     # `accepted`; SES's is delivered+bounced. Complaints stay over delivered,
     # since a complaint requires the message to have arrived.
     combined_attempted = (mg_row["accepted"] or 0) + (ses_row["delivered"] or 0) + (ses_row["bounced"] or 0)
-    bounce_rate = min(combined_bounced / combined_attempted, 1.0) if combined_attempted else None
-    complaint_rate = combined_complained / combined_delivered if combined_delivered else None
+    # Same low-volume trap as pass_rate above, one level worse: one stray
+    # bounce with zero other traffic (a real case seen live -- 1 bounced,
+    # 0 delivered) computes as a mathematically correct but meaningless
+    # 100% bounce rate. Require real volume before trusting either ratio,
+    # matching mailgun.py's own min_volume_for_rate guard on the same idea.
+    bounce_rate = (min(combined_bounced / combined_attempted, 1.0)
+                   if combined_attempted >= min_volume else None)
+    complaint_rate = (combined_complained / combined_delivered
+                       if combined_delivered >= min_volume else None)
 
     policy_p = policy_pct = None
     run = current_policy_run(conn, domain_id)

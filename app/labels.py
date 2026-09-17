@@ -362,6 +362,11 @@ SETTINGS_META = {
         "help": "Small domains sometimes send very few emails in a given window -- a 100% (or 0%) pass rate on 2 emails doesn't mean much. Below this many messages, we say 'not enough data' instead of guessing.",
         "example": "50 means we want to see at least 50 emails in the window before making a recommendation.",
     },
+    "health_score_min_volume": {
+        "label": "Minimum volume to trust the health score",
+        "help": "Below this many messages/attempts in the last 30 days, a signal (DMARC pass rate, or bounce/complaint rate) counts as 'not enough data' instead of a real score. Without this, a quiet domain with no recent DMARC reports would look like it's failing 100% of its mail, and a single stray bounce with nothing else sent would look like a 100% bounce rate.",
+        "example": "50 means we want to see at least 50 messages/attempts before trusting that particular rate.",
+    },
     "ramp_steps": {
         "label": "Enforcement ladder (percent steps)",
         "help": "The sequence of enforcement percentages you move through over time, from lightest to full enforcement.",
@@ -650,7 +655,7 @@ SETTINGS_META = {
 SETTINGS_GROUPS = [
     ("📈 DMARC ramp-up & recommendations", [
         "min_pass_rate", "low_pass_rate", "min_days_stable", "rolling_window_days",
-        "min_volume_for_recommendation", "ramp_steps",
+        "min_volume_for_recommendation", "health_score_min_volume", "ramp_steps",
     ]),
     ("📡 Sender monitoring & data freshness", [
         "new_sender_window_days", "high_volume_fail_threshold", "high_fail_rate_threshold",
