@@ -1170,7 +1170,15 @@
       <p class="muted" style="font-size:0.85rem;">+{{ engagement.inactive|length - 20 }} more -- download the CSV above to see everyone.</p>
       {% endif %}
       {% elif engagement.reviewed_at %}
-      <p class="muted">Nothing new since your last review -- {{ engagement.inactive_all|length }} still on the full list if you want to revisit it.</p>
+      <p class="muted">Nothing new since your last review -- {{ engagement.inactive_all|length }} still on the full list if you want to revisit it. For reference, a few from that full list (already reviewed, not new):</p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Email</th><th>Newsletters received</th><th>First received</th><th>Last received</th></tr>
+        {% for s in engagement.inactive_all[:5] %}
+        <tr><td>{{ s.email }}</td><td>{{ s.received }}</td><td>{{ s.first_received }}</td><td>{{ s.last_received }}</td></tr>
+        {% endfor %}
+      </table>
+      </div>
       {% else %}
       <p class="muted">No one has crossed {{ engagement.threshold }} received newsletters with zero opens yet.</p>
       {% endif %}
