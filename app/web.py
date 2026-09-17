@@ -764,10 +764,22 @@ def domain_detail(request: Request, name: str, flash: str = None):
     mailgun_newsletter_campaigns = recent_mailgun_campaigns(conn, domain_id, limit=10, settings=settings)
     engagement = subscriber_engagement_summary(conn, domain_id)
     bounce_categories = [
-        {"category": category, "count": n,
-         "download_url": f"/domain/{name}/bounce_category.csv?" + urllib.parse.urlencode({"category": category})}
+        {"category": category, "count": n, "chronic": False,
+         "download_url_new": f"/domain/{name}/bounce_category.csv?" + urllib.parse.urlencode({"category": category, "new": "true"}),
+         "download_url_full": f"/domain/{name}/bounce_category.csv?" + urllib.parse.urlencode({"category": category})}
         for category, n in bounce_category_breakdown(conn, domain_id)
     ]
+    chronic_transient = chronic_transient_bounces(
+        conn, domain_id, int(settings["chronic_transient_min_occurrences"]), int(settings["chronic_transient_min_days"]))
+    if chronic_transient:
+        # No new/full split here (unlike the categories above) -- this is an
+        # ongoing state list (everything currently past the threshold), not
+        # an event stream with a meaningful "since last time" cutoff.
+        bounce_categories.append({
+            "category": "Chronic transient (temporary bounce that never resolved)",
+            "count": len(chronic_transient), "chronic": True,
+            "download_url_full": f"/domain/{name}/chronic_transient.csv",
+        })
     display_names = display_name_summary(conn, domain_id)
     cadence = sending_cadence(conn, domain_id)
 
@@ -1006,11 +1018,17 @@ def download_new_suppressions(name: str):
 
 
 @app.get("/domain/{name}/bounce_category.csv")
-def download_bounce_category(name: str, category: str):
+def download_bounce_category(name: str, category: str, new: bool = False):
     """One plain-language bounce category (see the "Bounce reasons" table),
     combined across Mailgun and SES -- same underlying data and
     categorize_bounce() call as download_suppressions() above, just
-    pre-filtered to one category instead of the full combined list."""
+    pre-filtered to one category instead of the full combined list.
+
+    `new=true` additionally applies the same per-source date-watermark as
+    suppressions_new.csv -- useful when you're confident about ONE specific
+    category (e.g. only "No such user / invalid address", skipping anything
+    fuzzier) and only want what's new in it, rather than either the full
+    mixed "new" export or this category's entire history."""
     conn = get_connection()
     domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
     if not domain:
@@ -1021,29 +1039,73 @@ def download_bounce_category(name: str, category: str):
     writer = csv.writer(buf)
     writer.writerow(["source", "source_domain", "email", "bounce_type", "reason", "first_seen", "last_seen"])
 
+    mailgun_watermarks = {}
+    ses_watermarks = {}
+    if new:
+        mailgun_watermarks = {r["mailgun_domain"]: _mailgun_suppression_watermark(conn, domain_id, r["mailgun_domain"])
+                              for r in conn.execute("SELECT DISTINCT mailgun_domain FROM mailgun_suppressions WHERE domain_id=?", (domain_id,))}
+        ses_watermarks = {r["configuration_set"]: _ses_suppression_watermark(conn, domain_id, r["configuration_set"])
+                          for r in conn.execute("SELECT DISTINCT configuration_set FROM ses_suppressions WHERE domain_id=?", (domain_id,))}
+
     for r in conn.execute(
         """SELECT mailgun_domain, email, reason, first_seen_at, last_checked_at
            FROM mailgun_suppressions WHERE domain_id=? AND kind='bounce' ORDER BY email""",
         (domain_id,),
     ):
-        if categorize_bounce(r["reason"], None) == category:
-            writer.writerow(["mailgun", r["mailgun_domain"], _clean_email(r["email"]), "", r["reason"] or "",
-                              r["first_seen_at"], r["last_checked_at"]])
+        if categorize_bounce(r["reason"], None) != category:
+            continue
+        watermark = mailgun_watermarks.get(r["mailgun_domain"])
+        if watermark and r["first_seen_at"] <= watermark:
+            continue
+        writer.writerow(["mailgun", r["mailgun_domain"], _clean_email(r["email"]), "", r["reason"] or "",
+                          r["first_seen_at"], r["last_checked_at"]])
 
     for r in conn.execute(
         """SELECT configuration_set, email, bounce_type, reason, first_seen_at, last_seen_at
            FROM ses_suppressions WHERE domain_id=? AND kind='bounce' ORDER BY email""",
         (domain_id,),
     ):
-        if categorize_bounce(r["reason"], r["bounce_type"]) == category:
-            writer.writerow(["ses", r["configuration_set"], _clean_email(r["email"]), r["bounce_type"] or "", r["reason"] or "",
-                              r["first_seen_at"], r["last_seen_at"]])
+        if categorize_bounce(r["reason"], r["bounce_type"]) != category:
+            continue
+        watermark = ses_watermarks.get(r["configuration_set"])
+        if watermark and r["first_seen_at"] <= watermark:
+            continue
+        writer.writerow(["ses", r["configuration_set"], _clean_email(r["email"]), r["bounce_type"] or "", r["reason"] or "",
+                          r["first_seen_at"], r["last_seen_at"]])
 
     safe_category = re.sub(r"[^A-Za-z0-9]+", "_", category).strip("_")
+    suffix = "_new" if new else ""
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{name}_{safe_category}_bounces.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="{name}_{safe_category}_bounces{suffix}.csv"'},
+    )
+
+
+@app.get("/domain/{name}/chronic_transient.csv")
+def download_chronic_transient(name: str):
+    """Just the chronic-transient-bounce list on its own (see
+    chronic_transient_bounces()) -- no new/full split, since this is an
+    ongoing state list (everything currently past the threshold), not an
+    event stream with a meaningful "since last time" cutoff."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    settings = ensure_default_settings(conn)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["source", "email", "category", "first_seen", "last_seen"])
+    min_occ = int(settings["chronic_transient_min_occurrences"])
+    min_days = int(settings["chronic_transient_min_days"])
+    for f in chronic_transient_bounces(conn, domain["id"], min_occ, min_days):
+        writer.writerow([f["source"].lower(), _clean_email(f["email"]), f["category"], f["first_seen"], f["last_seen"]])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}_chronic_transient_bounces.csv"'},
     )
 
 

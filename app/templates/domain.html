@@ -755,8 +755,8 @@
         through the Mailgun/SES consoles by hand.
       </p>
       <div class="formrow" style="margin-top:0.6rem;">
-        <a href="/domain/{{ domain.name }}/suppressions_new.csv" title="Only what's new since you last marked the &quot;new suppressions&quot; reminder(s) done, plus the current chronic-transient-bounce list -- the one to actually send whoever manages this domain's Listmonk/Ghost, so they stop seeing the same already-handled addresses every time.">
-          <button type="button">⬇️ Download NEW only (send this one)</button>
+        <a href="/domain/{{ domain.name }}/suppressions_new.csv" title="Only what's new since you last marked the &quot;new suppressions&quot; reminder(s) done, plus the current chronic-transient-bounce list -- so whoever manages this domain's Listmonk/Ghost stops seeing the same already-handled addresses every time.">
+          <button type="button">⬇️ Download NEW only</button>
         </a>
         <a href="/domain/{{ domain.name }}/suppressions.csv" title="The complete history, every address ever captured -- for a full audit, not for a routine cleanup export.">
           <button type="button" class="small">⬇️ Download full history</button>
@@ -780,7 +780,15 @@
         <tr>
           <td>{{ b.category }}</td>
           <td>{{ b.count }}</td>
-          <td><a href="{{ b.download_url }}" class="muted" style="font-size:0.85rem;">⬇ CSV</a></td>
+          <td style="font-size:0.85rem;">
+            {% if b.chronic %}
+            <a href="{{ b.download_url_full }}" class="muted" title="The current list -- there's no 'new since last time' for an ongoing state like this.">⬇ CSV</a>
+            {% else %}
+            <a href="{{ b.download_url_new }}" class="muted" title="Only this category's addresses that are new since you last reviewed suppressions for this domain.">⬇ new</a>
+            <span class="muted">·</span>
+            <a href="{{ b.download_url_full }}" class="muted" title="This category's entire history, for an audit.">full</a>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </table>
