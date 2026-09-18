@@ -162,6 +162,18 @@ a { color: var(--accent); }
 .badge.muted { color: var(--muted); background: var(--grey-100); }
 .row { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.86rem; margin: 0.3rem 0; }
 .row .label { color: var(--muted); }
+.stat-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.7rem 0; }
+.stat-cell {
+  flex: 1 1 90px; text-align: center; padding: 0.5rem 0.4rem; border-radius: var(--radius-sm);
+  background: var(--grey-100);
+}
+.stat-cell .stat-pct { font-size: 1.05rem; font-weight: 700; }
+.stat-cell .stat-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.02em; color: var(--muted); margin-top: 0.15rem; }
+.stat-cell .stat-count { font-size: 0.78rem; color: var(--muted); margin-top: 0.1rem; }
+.stat-cell.ok .stat-pct { color: var(--ok); }
+.stat-cell.warn .stat-pct { color: var(--warn); }
+.stat-cell.bad .stat-pct { color: var(--bad); }
+.stat-cell.muted .stat-pct { color: var(--muted); }
 .rec {
   font-size: 0.88rem; margin-top: 0.6rem; padding: 0.7rem 0.9rem; border-radius: var(--radius);
   background: var(--accent-bg); border: 1px solid var(--accent);

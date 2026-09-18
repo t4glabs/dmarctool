@@ -1702,6 +1702,44 @@ def _csv_filter_suffix(verdict: str, known_bad: str) -> str:
     return ("_" + "_".join(bits)) if bits else ""
 
 
+def _batch_breakdown(conn, batch_id: int) -> dict:
+    """Per-batch result mix in the same 5-way shape commercial verifiers show
+    (ok / catch-all / disposable / unknown / invalid), rather than just this
+    project's 4-tier verdict -- catch-all and disposable both collapse into
+    'risky' at the verdict level, but they're genuinely different situations
+    (a domain that can't be individually verified vs. a throwaway signup),
+    and is_catchall/is_disposable were already separate columns, just never
+    surfaced this way before. Anything 'risky' for neither reason (mailbox
+    full, greylisted) falls into risky_other so the six numbers still sum to
+    the batch total. Also reports how many of this batch's addresses are
+    already known-bad from suppression/blocklist history, independent of
+    what today's SMTP check said (see app.known_bad)."""
+    # Mutually exclusive by design -- is_catchall/is_disposable are recorded
+    # on a row regardless of its verdict (e.g. a no-MX domain that also
+    # happens to be in the disposable list still verdicts 'invalid', not
+    # 'risky'), so gating each of these on verdict='risky' first is what
+    # keeps the six buckets summing to exactly the batch total instead of
+    # double-counting a row into both its real verdict and 'disposable'.
+    row = conn.execute(
+        """SELECT
+             SUM(CASE WHEN v.verdict='valid' THEN 1 ELSE 0 END) as ok,
+             SUM(CASE WHEN v.verdict='risky' AND v.is_catchall THEN 1 ELSE 0 END) as catch_all,
+             SUM(CASE WHEN v.verdict='risky' AND v.is_disposable AND NOT v.is_catchall THEN 1 ELSE 0 END) as disposable,
+             SUM(CASE WHEN v.verdict='risky' AND NOT v.is_catchall AND NOT v.is_disposable THEN 1 ELSE 0 END) as risky_other,
+             SUM(CASE WHEN v.verdict='invalid' THEN 1 ELSE 0 END) as invalid,
+             SUM(CASE WHEN v.verdict='unknown' THEN 1 ELSE 0 END) as unknown,
+             COUNT(*) as total
+           FROM email_verification_batch_items b JOIN email_verifications v ON v.email = b.email
+           WHERE b.batch_id=?""",
+        (batch_id,),
+    ).fetchone()
+    out = {k: (row[k] or 0) for k in ("ok", "catch_all", "disposable", "risky_other", "invalid", "unknown", "total")}
+    emails = [r["email"] for r in conn.execute(
+        "SELECT email FROM email_verification_batch_items WHERE batch_id=?", (batch_id,))]
+    out["known_bad"] = sum(1 for v in known_bad_map(conn, emails).values() if v)
+    return out
+
+
 @app.get("/email_checker", response_class=HTMLResponse)
 def email_checker_page(request: Request, flash: str = None,
                         verdict: str = "all", known_bad: str = "all", q: str = ""):
@@ -1725,7 +1763,8 @@ def email_checker_page(request: Request, flash: str = None,
     valid_emails = [r["email"] for r in conn.execute("SELECT email FROM email_verifications WHERE verdict='valid'")]
     crossover_count = sum(1 for v in known_bad_map(conn, valid_emails).values() if v)
 
-    batches = conn.execute("SELECT * FROM email_verification_batches ORDER BY id DESC LIMIT 20").fetchall()
+    batches = conn.execute("SELECT * FROM email_verification_batches ORDER BY id DESC LIMIT 50").fetchall()
+    batches = [dict(b, breakdown=_batch_breakdown(conn, b["id"])) for b in batches]
 
     return templates.TemplateResponse(request, "email_checker.html", {
         "flash": flash,
@@ -1929,7 +1968,7 @@ def email_checker_batch_detail(request: Request, batch_id: int,
         raise HTTPException(status_code=404, detail="batch not found")
     rows = _filtered_batch_verifications(conn, batch_id, verdict, known_bad, q)
     return templates.TemplateResponse(request, "email_checker_batch.html", {
-        "batch": batch, "rows": rows,
+        "batch": batch, "rows": rows, "breakdown": _batch_breakdown(conn, batch_id),
         "filter_verdict": verdict, "filter_known_bad": known_bad, "filter_q": q,
     })
 
@@ -1946,3 +1985,23 @@ def email_checker_download_batch(batch_id: int, verdict: str = "all", known_bad:
         content=_write_verification_csv(rows), media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="email_check_batch{batch_id}{suffix}.csv"'},
     )
+
+
+@app.post("/email_checker/batch/{batch_id}/delete")
+def email_checker_delete_batch(batch_id: int):
+    # Only removes this batch's grouping/summary -- the underlying
+    # email_verifications rows stay in the shared cache (reusable, and still
+    # visible/exportable from the main "Checked addresses" list), matching
+    # how batches were already treated as disposable groupings elsewhere in
+    # this feature (see dmarctool_email_verifier.md's test-batch cleanup).
+    conn = get_connection()
+    if _verifier_batch_lock.locked():
+        batch = conn.execute("SELECT status FROM email_verification_batches WHERE id=?", (batch_id,)).fetchone()
+        if batch and batch["status"] == "running":
+            return RedirectResponse(
+                "/email_checker?flash=" + urllib.parse.quote("Can't remove a batch that's still running."),
+                status_code=303)
+    conn.execute("DELETE FROM email_verification_batch_items WHERE batch_id=?", (batch_id,))
+    conn.execute("DELETE FROM email_verification_batches WHERE id=?", (batch_id,))
+    conn.commit()
+    return RedirectResponse("/email_checker?flash=" + urllib.parse.quote("Batch removed."), status_code=303)
