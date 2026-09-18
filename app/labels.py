@@ -499,13 +499,18 @@ SETTINGS_META = {
     },
     "email_verifier_max_workers": {
         "label": "Email checker -- addresses checked at once (CSV batches)",
-        "help": "How many addresses to probe in parallel during a CSV batch upload. Higher is faster but hits more mail servers at once -- keep this modest so it doesn't look like abuse to any one provider.",
-        "example": "5 means up to 5 addresses are being probed simultaneously.",
+        "help": "How many addresses to probe in parallel during a CSV batch upload. Higher is faster but hits more mail servers at once -- keep this modest. A burst of connections can trigger real throttling from your own network/ISP, not just look like abuse to the mail provider being checked (seen live: a heavy test session started timing out even a plain connection to Gmail).",
+        "example": "3 means up to 3 addresses are being probed simultaneously. Lower this further if you notice a cluster of 'unknown' results appearing together -- that pattern points at throttling, not real bad addresses.",
     },
     "email_verifier_cache_hours": {
         "label": "Email checker -- don't re-check within (hours)",
         "help": "An address checked within this many hours reuses the cached result instead of probing the mail server again -- makes repeat CSV uploads (the same list, cleaned a little more each time) fast and doesn't hammer the same servers repeatedly.",
         "example": "168 means 7 days -- re-uploading the same list within a week reuses prior results.",
+    },
+    "email_verifier_max_batch_rows": {
+        "label": "Email checker -- max addresses per upload",
+        "help": "A CSV/list upload with more addresses than this is refused outright, with a message telling you the limit -- a safety ceiling so an accidental huge upload (e.g. a teammate with dashboard access, or the wrong file) can't tie up the checker or your network for hours without you deciding that's actually what you want. Raise it here first if you deliberately intend to check a bigger list.",
+        "example": "2000 means anything over 2,000 addresses in one upload is rejected until you raise this.",
     },
     "ses_stats_window_days": {
         "label": "SES bounce/complaint rate lookback window",
@@ -694,7 +699,7 @@ SETTINGS_GROUPS = [
     ]),
     ("📧 Email Verifier", [
         "email_verifier_from_address", "email_verifier_helo_name", "email_verifier_timeout_seconds",
-        "email_verifier_max_workers", "email_verifier_cache_hours",
+        "email_verifier_max_workers", "email_verifier_cache_hours", "email_verifier_max_batch_rows",
     ]),
     ("🛡️ Google Safe Browsing", [
         "safe_browsing_recheck_hours",

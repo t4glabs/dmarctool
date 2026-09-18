@@ -1771,6 +1771,8 @@ def email_checker_page(request: Request, flash: str = None,
         "configured": configured,
         "from_address": settings.get("email_verifier_from_address"),
         "helo_name": settings.get("email_verifier_helo_name"),
+        "max_batch_rows": settings.get("email_verifier_max_batch_rows"),
+        "max_workers": settings.get("email_verifier_max_workers"),
         "recent": recent,
         "recent_total": len(filtered),
         "display_cap": display_cap,
@@ -1917,6 +1919,20 @@ def email_checker_upload_batch(file: UploadFile = File(...)):
     if not emails:
         return RedirectResponse(
             "/email_checker?flash=" + urllib.parse.quote("No email addresses found in that file."), status_code=303)
+
+    # Refuse outright rather than silently truncating -- a safety ceiling
+    # against an accidental huge upload (wrong file, or a teammate with
+    # dashboard access not realizing a big list ties up the checker and this
+    # network's outbound mail-server connections for hours). Silently
+    # checking only the first N would be more confusing, not less.
+    max_rows = int(settings["email_verifier_max_batch_rows"])
+    if len(emails) > max_rows:
+        return RedirectResponse(
+            "/email_checker?flash=" + urllib.parse.quote(
+                f"That file has {len(emails)} addresses, which is over the current safety limit of {max_rows} "
+                f"per upload. Raise 'Email checker -- max addresses per upload' in Settings if you deliberately "
+                f"want to check a list this big."),
+            status_code=303)
 
     cur = conn.execute("INSERT INTO email_verification_batches (filename, total) VALUES (?, ?)",
                        (file.filename, len(emails)))

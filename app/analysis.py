@@ -74,8 +74,9 @@ DEFAULT_SETTINGS = {
     "email_verifier_from_address": "",   # MAIL FROM used for the SMTP probe -- must be set to a real domain you control before the verifier will run at all
     "email_verifier_helo_name": "",       # HELO/EHLO hostname used for the SMTP probe -- a real-looking hostname, doesn't need to resolve
     "email_verifier_timeout_seconds": "10",   # per-command SMTP timeout
-    "email_verifier_max_workers": "5",         # how many addresses to probe at once during a CSV batch
+    "email_verifier_max_workers": "3",         # how many addresses to probe at once during a CSV batch -- kept modest since a burst of connections can trigger real ISP/receiver throttling (confirmed live 2026-09-18), not just look like abuse to one provider
     "email_verifier_cache_hours": "168",       # don't re-probe an address checked within this many hours (default 7 days)
+    "email_verifier_max_batch_rows": "2000",   # refuse a CSV/list upload bigger than this outright -- a safety ceiling against an accidental huge upload (e.g. a teammate with dashboard access not realizing the implications), not a hard technical limit; raise it deliberately in Settings if a bigger real run is actually intended
     "ses_stats_window_days": "30",        # lookback window for SES bounce/complaint rate (from our own accumulated counts)
     "ses_bounce_rate_watch": "0.02",       # bounce rate (of delivered) that triggers an early "watch" flag
     "ses_bounce_rate_warn": "0.05",       # bounce rate (of delivered) that triggers a flag

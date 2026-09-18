@@ -32,7 +32,10 @@
       <p class="muted" style="margin-top:0">
         Upload a CSV with an "email" column, or a plain text file with one address per line -- e.g. your Listmonk
         export, or a suppressions CSV you've already downloaded from a domain page. Runs in the background (a few
-        seconds per address, so a few hundred can take a while); reload this page to see progress.
+        seconds per address, checking {{ max_workers }} at once, so a few hundred can take a while); reload this
+        page to see progress. Capped at <strong>{{ max_batch_rows }} addresses per upload</strong> as a safety
+        limit -- larger files are refused outright rather than silently trimmed (raise it in Settings if you
+        mean to check a bigger list).
         {% if batch_running %}<strong>A batch is currently running.</strong>{% endif %}
       </p>
       <form action="/email_checker/batch" method="post" enctype="multipart/form-data" class="formrow">
