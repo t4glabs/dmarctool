@@ -104,6 +104,19 @@ def mx_lookup(domain: str, timeout: float = 5.0):
     return records
 
 
+def _resolve_ipv4(host: str) -> str:
+    """The literal IPv4 address for `host`, or `host` itself if it has no A
+    record at all (rare for a real MX host). Connecting with a literal
+    address instead of the hostname makes getaddrinfo return exactly one
+    result, so smtplib's connect() can't fall back through anything else --
+    see smtp_probe's docstring for why that fallback is the actual problem
+    being avoided here, not just an optimization."""
+    try:
+        return socket.getaddrinfo(host, 25, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+    except socket.gaierror:
+        return host
+
+
 def smtp_probe(mx_host: str, helo_name: str, mail_from: str, rcpt_to: str, timeout: float = 10.0):
     """The actual "does this mailbox exist" check. Opens a real SMTP
     connection, walks EHLO -> MAIL FROM -> RCPT TO, reads the response code,
@@ -111,10 +124,23 @@ def smtp_probe(mx_host: str, helo_name: str, mail_from: str, rcpt_to: str, timeo
     content is ever transmitted; nothing is actually sent to anyone.
     Returns (code: int|None, message: str, error: str|None). code is the
     RCPT TO response code (the one that matters); None with a filled `error`
-    means the probe itself couldn't complete."""
+    means the probe itself couldn't complete.
+
+    Connects to a literal IPv4 address, not the hostname -- confirmed live
+    that this network's IPv6 route to at least Google's mail servers is a
+    silent black hole (a direct connect attempt burns the ENTIRE timeout
+    before failing, rather than refusing quickly). Handing smtplib a
+    hostname lets its connect() -> socket.create_connection() try every
+    address getaddrinfo returns, IPv6 first, each with its OWN full timeout,
+    before ever reaching a working IPv4 address -- measured live at 2-4x the
+    configured timeout per probe (dual-stack MX hosts with multiple A/AAAA
+    records), and this function runs TWICE per address checked (once for
+    the catch-all probe, once for the real one). At real batch volume that
+    turns a "10 second timeout" into 40-80+ seconds per address -- resolving
+    to IPv4 ourselves first makes the timeout mean what it says."""
     try:
         smtp = smtplib.SMTP(timeout=timeout)
-        smtp.connect(mx_host, 25)
+        smtp.connect(_resolve_ipv4(mx_host), 25)
         smtp.ehlo(helo_name)
         smtp.mail(mail_from)
         code, message = smtp.rcpt(rcpt_to)
