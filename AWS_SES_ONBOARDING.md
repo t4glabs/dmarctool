@@ -49,6 +49,13 @@ naming rule loosely instead of mechanically, and broke it.
      own consistency, DMARCTool doesn't care about this name)
    - Event types to enable (matches every other domain): **Bounce, Complaint, Delivery, Reject, Open,
      Click**
+   - **Watch out for "Delivery" vs "Delivery Delay"** -- they're separate checkboxes right next to each
+     other in the console, and only plain "Delivery" is what `EVENT_TO_COUNTER` in `ses_events.py`
+     actually counts (`"delivery": "delivered"`). "Delivery Delay" and "Rendering Failure" are different
+     SES notification types the code doesn't use at all -- this already happened once for real
+     (`aikyam-space` was set up with Delivery Delay + Rendering Failure checked but plain Delivery
+     unchecked, so it would never have counted a single delivered message). Double check the exact box
+     labeled "Delivery" is ticked, not just something starting with "Delivery".
 
 4. **Set the configuration set as the identity's default**, so mail actually sent through this
    identity gets tagged with it automatically (SES console -> Identities -> your identity ->
