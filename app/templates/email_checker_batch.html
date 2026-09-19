@@ -8,11 +8,16 @@
   {{ batch.done }}/{{ batch.total }} checked &middot; status: {{ batch.status }} &middot;
   started {{ batch.started_at }}{% if batch.finished_at %} &middot; finished {{ batch.finished_at }}{% endif %}
 </p>
+{# Computed live from the current cache (app.known_bad-style breakdown), not the
+   batch's own stored valid_count/invalid_count/etc columns -- those are a
+   snapshot from when the batch finished and go stale the moment any of its
+   addresses gets re-checked later (cache expiry, or a manual re-check) and
+   comes back with a different verdict, exactly as happened here. #}
 <p style="margin:0 0 1rem 0;">
-  <span class="badge ok">{{ batch.valid_count }} valid</span>
-  <span class="badge bad">{{ batch.invalid_count }} invalid</span>
-  <span class="badge warn">{{ batch.risky_count }} risky</span>
-  <span class="badge muted">{{ batch.unknown_count }} unknown</span>
+  <span class="badge ok">{{ breakdown.ok }} valid</span>
+  <span class="badge bad">{{ breakdown.invalid }} invalid</span>
+  <span class="badge warn">{{ breakdown.catch_all + breakdown.disposable + breakdown.risky_other }} risky</span>
+  <span class="badge muted">{{ breakdown.unknown }} unknown</span>
 </p>
 
 <div class="section">
