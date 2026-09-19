@@ -44,6 +44,8 @@ Per-newsletter engagement (opens/clicks/bounces/complaints/rejects, per-campaign
 
 See `MANUAL.md` for the plain-language usage guide (what to click, what the terms mean, troubleshooting) — that's the doc to point the user to, not this file.
 
+See `AWS_SES_ONBOARDING.md` before onboarding any new domain/identity into AWS SES — the shared SNS topic + SQS queue architecture, the exact configuration-set naming convention `ses_events.py` depends on, and the AWS console steps (event destination, default configuration set). Getting the naming wrong silently drops that domain's events with no error.
+
 ## Working style for this project
 
 - Build incrementally, validate each piece against real ingested data before moving on — don't batch multiple features into one delivery.
