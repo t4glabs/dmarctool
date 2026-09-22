@@ -1120,6 +1120,101 @@ def check_volume_spike(conn, domain_id: int, domain_name: str, settings: dict) -
     }]
 
 
+def check_no_report_history(conn, domain_id: int, domain_name: str) -> list:
+    """For a domain that has NEVER had a single DMARC report ingested,
+    every other check in this pipeline is silent: check_staleness
+    explicitly returns [] for it (staleness only makes sense once there's
+    been at least one report), and everything else here requires report
+    data to run at all. Left as-is, that domain's page just stays blank
+    forever, with no way to tell "genuinely has no custom email" from
+    "something's wrong with report delivery" from "correctly configured,
+    just hasn't sent anything yet." Live DNS only (MX/SPF/DMARC) -- no
+    report data needed, so this works even for a domain that will never
+    generate one."""
+    import subprocess
+    from app.dns_check import dig_txt, parse_dmarc_tags
+    from app.email_verifier import mx_lookup
+
+    mx = mx_lookup(domain_name)
+    if mx is None:
+        return []  # DNS lookup itself failed -- try again next run, not a real answer
+
+    spf_txt = None
+    try:
+        out = subprocess.run(
+            ["dig", "+short", "+time=3", "+tries=2", "TXT", domain_name],
+            capture_output=True, text=True, timeout=5.0, check=False,
+        )
+        if out.returncode == 0:
+            spf_txt = next((line.strip() for line in out.stdout.splitlines() if "v=spf1" in line), None)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+    dmarc_records = dig_txt(domain_name)
+    dmarc_txt = next((r for r in (dmarc_records or []) if r.strip().lower().startswith("v=dmarc1")), None)
+    dmarc_tags = parse_dmarc_tags(dmarc_txt) if dmarc_txt else {}
+
+    if not mx:
+        return [{
+            "category": "no_report_history", "ref_key": None,
+            "title": f"{domain_name}: no custom email set up (no MX record) -- that's why there's no DMARC data",
+            "detail": (f"This domain has no MX record at all, so it doesn't send or receive mail as itself -- "
+                       f"likely just a website. This isn't a broken setup; there was never going to be any DMARC "
+                       f"data here. Still worth a locked-down SPF (`v=spf1 -all`) and DMARC (`v=DMARC1; "
+                       f"p=reject;`) record purely to block anyone spoofing your name in email, since nobody "
+                       f"legitimate ever sends from this domain anyway -- costs nothing, there's no real mail to "
+                       f"accidentally break."),
+        }]
+
+    if not spf_txt and not dmarc_tags:
+        return [{
+            "category": "no_report_history", "ref_key": None,
+            "title": f"{domain_name}: sends/receives real mail but has NO SPF or DMARC protection at all",
+            "detail": (f"This domain has an MX record (it does handle real mail) but no SPF and no DMARC record. "
+                       f"Anyone can spoof mail claiming to be from this domain with no resistance, and you'd have "
+                       f"zero visibility into it happening. Worth setting up SPF and a DMARC record (start at "
+                       f"p=none to just monitor first) before anything else on this domain."),
+        }]
+
+    if spf_txt and not dmarc_tags:
+        return [{
+            "category": "no_report_history", "ref_key": None,
+            "title": f"{domain_name}: has SPF but no DMARC record",
+            "detail": (f"SPF alone only checks the invisible envelope-from address -- most inboxes judge the "
+                       f"visible From: header instead, which SPF alone doesn't cover. A DMARC record ties the two "
+                       f"together, and it's also the only way to get the reports this tool reads at all. Worth "
+                       f"adding one (start at p=none to just monitor, no risk of blocking real mail)."),
+        }]
+
+    if dmarc_tags and not spf_txt:
+        return [{
+            "category": "no_report_history", "ref_key": None,
+            "title": f"{domain_name}: has a DMARC record but no SPF -- it has nothing to enforce yet",
+            "detail": (f"A DMARC record exists (p={dmarc_tags.get('p', '?')}), but with no SPF record there's no "
+                       f"authentication mechanism for it to actually evaluate for most mail -- meaning it's "
+                       f"unlikely to pass reliably even once real mail starts flowing, regardless of the DMARC "
+                       f"record being present. Add an SPF record first."),
+        }]
+
+    if dmarc_tags.get("rua"):
+        return [{
+            "category": "no_report_history", "ref_key": None,
+            "title": f"{domain_name}: MX/SPF/DMARC are all correctly set up -- no reports yet just means no mail volume",
+            "detail": (f"MX, SPF, and a DMARC record (p={dmarc_tags.get('p', '?')}) with a real reports address "
+                       f"are all in place. The lack of data here is almost certainly because this domain simply "
+                       f"isn't sending any real mail for a receiver to report on, not a broken setup -- this "
+                       f"starts populating on its own the moment real mail goes out."),
+        }]
+
+    return [{
+        "category": "no_report_history", "ref_key": None,
+        "title": f"{domain_name}: has a DMARC record, but no rua= reports address -- reports were never going to arrive",
+        "detail": (f"A DMARC record exists (p={dmarc_tags.get('p', '?')}) but has no rua= tag, so no receiver has "
+                   f"anywhere to send aggregate reports even if they wanted to. Add a rua= address matching "
+                   f"whichever mailbox this tool ingests from."),
+    }]
+
+
 def check_dkim_alignment_gap(conn, domain_id: int, domain_name: str, settings: dict, window_end_epoch: int) -> list:
     """DMARC only requires ONE of SPF or DKIM to align-pass -- a domain can
     show a perfectly healthy overall pass rate while DKIM never aligns at
@@ -1917,6 +2012,8 @@ def run_analysis(conn, verbose: bool = True) -> None:
             findings += check_volume_spike(conn, domain_id, domain_name, settings)
             findings += detect_borrowed_sending_identity(conn, domain_id, domain_name, settings)
             findings += check_dkim_alignment_gap(conn, domain_id, domain_name, settings, latest_report_end)
+        else:
+            findings += check_no_report_history(conn, domain_id, domain_name)
         findings += check_staleness(conn, domain_id, domain_name, settings, wall_now)
 
         for f in findings:
@@ -1940,7 +2037,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
                         "UPDATE action_items SET status='dismissed', resolved_at=datetime('now') WHERE id=?",
                         (item["id"],),
                     )
-        for category in ("data_stale", "volume_spike", "dkim_alignment_gap"):
+        for category in ("data_stale", "volume_spike", "dkim_alignment_gap", "no_report_history"):
             if not any(f["category"] == category for f in findings):
                 conn.execute(
                     """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')

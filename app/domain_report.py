@@ -118,7 +118,7 @@ _PROBLEM_STORY = {
 # schedule"), not an internal Aikyam/DMARCTool workflow signal.
 _OPERATOR_ONLY_CATEGORIES = {
     "ramp_recommendation", "data_stale", "untracked_sending_subdomain",
-    "volume_spike",
+    "volume_spike", "no_report_history",
     # rua_unauthorized is Aikyam's own report-collection housekeeping (whether
     # the collecting domain consents to receive reports) -- reports still
     # arrive, the beneficiary can't act on it, and it's not about their mail's
