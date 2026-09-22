@@ -54,6 +54,9 @@ DEFAULT_SETTINGS = {
     "compliance_recheck_hours": "24",   # PTR/SPF/DKIM change far less often than blocklist status
     "spf_lookup_warn_threshold": "8",   # warn before hitting SPF's hard 10-DNS-lookup limit (RFC 7208)
     "dkim_min_bits": "1024",            # Gmail's hard minimum RSA DKIM key length (2048 recommended)
+    "dkim_alignment_min_volume": "20",  # total msgs in the window needed to trust the DKIM-alignment rate -- lower than most volume floors since this is a pure DB query, not an external lookup, so there's no cost to checking even a modest-volume domain
+    "dkim_alignment_window_days": "30", # lookback window for the DKIM-alignment rate
+    "dkim_alignment_min_rate": "0.5",   # below this fraction of mail having DKIM actually align (not just SPF), flag it -- DMARC only needs one of the two, so a domain can look perfectly healthy while having zero DKIM redundancy
     "mailgun_recheck_hours": "6",        # don't re-poll the Mailgun API more often than this
     "mailgun_stats_window_days": "30",   # lookback window for Mailgun delivered/bounced/complained stats
     "mailgun_events_window_days": "7",   # lookback window for the per-sender-identity breakdown (event-log pull, kept shorter than the stats window since it's heavier per domain)
@@ -1117,6 +1120,57 @@ def check_volume_spike(conn, domain_id: int, domain_name: str, settings: dict) -
     }]
 
 
+def check_dkim_alignment_gap(conn, domain_id: int, domain_name: str, settings: dict, window_end_epoch: int) -> list:
+    """DMARC only requires ONE of SPF or DKIM to align-pass -- a domain can
+    show a perfectly healthy overall pass rate while DKIM never aligns at
+    all, quietly passing on SPF alone the entire time. That's a real
+    redundancy gap: if SPF ever breaks (a mailing-list rewrite, a forwarder,
+    an SPF record change, a dropped include), that domain's mail fails
+    DMARC outright with nothing to fall back on. Nothing else in this tool
+    measures DKIM ALIGNMENT itself -- dkim_weak_key (compliance.py) only
+    checks key strength for a selector already known to align, and only for
+    selectors that are exact/subdomain matches of the tracked domain, so it
+    never even sees this. This reads report_records.dkim_result directly --
+    the receiving mail server's OWN alignment verdict from the DMARC
+    aggregate report, not an inference DMARCTool is making itself. Common
+    real cause: outbound mail is signed by a provider's own default/shared
+    key (e.g. Google Workspace's automatic per-tenant DKIM, which signs as
+    *.gappssmtp.com and never aligns with your domain) instead of a custom
+    key published under your own DNS."""
+    min_volume = int(settings["dkim_alignment_min_volume"])
+    window_days = int(settings["dkim_alignment_window_days"])
+    min_rate = float(settings["dkim_alignment_min_rate"])
+    window_start = window_end_epoch - window_days * 86400
+
+    row = conn.execute(
+        """SELECT SUM(rr.count) as total, SUM(CASE WHEN rr.dkim_result='pass' THEN rr.count ELSE 0 END) as dkim_pass
+           FROM report_records rr JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND r.date_begin >= ? AND r.date_end <= ?""",
+        (domain_id, window_start, window_end_epoch),
+    ).fetchone()
+    total = row["total"] or 0
+    dkim_pass = row["dkim_pass"] or 0
+    if total < min_volume:
+        return []
+
+    rate = dkim_pass / total
+    if rate >= min_rate:
+        return []
+
+    return [{
+        "category": "dkim_alignment_gap", "ref_key": None,
+        "title": f"{domain_name}: DKIM aligns on only {rate:.0%} of mail -- relying almost entirely on SPF",
+        "detail": (f"{dkim_pass} of {total} messages over the last {window_days}d had DKIM actually align, per "
+                   f"the receiving mail server's own verdict. DMARC only needs one of SPF or DKIM to align, so "
+                   f"this domain still passes overall -- but with DKIM barely working, there's no fallback if "
+                   f"SPF ever breaks (a mailing-list rewrite, a forwarder, an SPF record change). Often caused by "
+                   f"outbound mail being signed with a provider's own default key (e.g. Google Workspace's "
+                   f"automatic per-tenant DKIM, which doesn't align with your domain) instead of a custom key "
+                   f"published under your own DNS -- see the Authentication tab for which senders/selectors are "
+                   f"actually in use."),
+    }]
+
+
 def domain_window_stats(conn, domain_id: int, window_start: int, window_end: int):
     row = conn.execute(
         """SELECT SUM(rr.count) as total, SUM(CASE WHEN rr.dkim_result='pass' OR rr.spf_result='pass' THEN rr.count ELSE 0 END) as passed
@@ -1862,6 +1916,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
             findings += flag_new_and_failing_senders(conn, domain_id, domain_name, settings, now_day)
             findings += check_volume_spike(conn, domain_id, domain_name, settings)
             findings += detect_borrowed_sending_identity(conn, domain_id, domain_name, settings)
+            findings += check_dkim_alignment_gap(conn, domain_id, domain_name, settings, latest_report_end)
         findings += check_staleness(conn, domain_id, domain_name, settings, wall_now)
 
         for f in findings:
@@ -1885,7 +1940,7 @@ def run_analysis(conn, verbose: bool = True) -> None:
                         "UPDATE action_items SET status='dismissed', resolved_at=datetime('now') WHERE id=?",
                         (item["id"],),
                     )
-        for category in ("data_stale", "volume_spike"):
+        for category in ("data_stale", "volume_spike", "dkim_alignment_gap"):
             if not any(f["category"] == category for f in findings):
                 conn.execute(
                     """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')

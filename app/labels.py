@@ -18,6 +18,7 @@ CATEGORY_LABELS = {
     "rua_unauthorized": "Report address not authorized",
     "lookalike_domain": "Look-alike domain registered",
     "dkim_weak_key": "Weak DKIM key",
+    "dkim_alignment_gap": "DKIM rarely/never aligns",
     "mailgun_reputation": "Mailgun bounce/complaint rate",
     "mailgun_new_suppressions": "New Mailgun suppressions",
     "postmaster_compliance": "Gmail Postmaster compliance",
@@ -73,6 +74,7 @@ CATEGORY_PRIORITY_ORDER = [
     "ptr_issue",
     "spf_lookup_limit",
     "rua_unauthorized",
+    "dkim_alignment_gap",
     "dkim_weak_key",
     "mta_sts_broken",
     "volume_spike",
@@ -109,6 +111,7 @@ CATEGORY_HELP = {
     "ptr_issue": "Gmail requires a sending IP's reverse DNS (PTR) to resolve to a hostname that in turn resolves back to that same IP. Missing or mismatched PTR records are one of Gmail's explicit sender requirements.",
     "spf_lookup_limit": "SPF allows at most 10 DNS lookups per check (RFC 7208). Going over silently breaks SPF for that domain -- receivers treat it as a hard failure with no warning.",
     "dkim_weak_key": "Gmail requires DKIM keys of at least 1024 bits (2048 recommended) for mail sent to personal Gmail accounts.",
+    "dkim_alignment_gap": "DMARC only needs one of SPF or DKIM to align-pass, so a domain can look perfectly healthy while DKIM barely ever aligns -- meaning there's no fallback if SPF ever breaks. Usually caused by mail being signed with a mailbox provider's own default key (e.g. Google Workspace's automatic per-tenant DKIM) instead of a custom key published under your own domain.",
     "mailgun_reputation": "Mailgun's reported bounce or complaint rate for this domain crossed the warning threshold -- worth checking your list quality before sending more. Note: this only reflects providers that feed complaints back to Mailgun (e.g. Yahoo) -- Gmail generally doesn't, so a low number here doesn't mean Gmail recipients are happy too.",
     "mailgun_new_suppressions": "Mailgun automatically suppressed new addresses (bounced or complained) since the last check -- these won't receive mail from you again unless removed from Mailgun's suppression list, and are worth pruning from your Listmonk list too.",
     "postmaster_compliance": "Google's own verdict (from Postmaster Tools) on one of its published sender requirements for this domain -- this is Gmail telling you directly what's wrong, not an inference from DMARC reports.",
@@ -149,6 +152,7 @@ CATEGORY_REMEDIATION = {
     "ptr_issue": "If this is your own dedicated IP (not a shared ESP pool), add or fix its reverse DNS (PTR) record via your hosting/cloud provider's control panel -- for AWS EC2/SES dedicated IPs this means opening an AWS Support case to set a custom PTR. Shared ESP pool IPs (SES, Mailgun) already have this managed for you; this only needs action if it's your own infrastructure. See the PTR/rDNS column under Known senders (Senders tab) for which IP this is.",
     "spf_lookup_limit": "Reduce nested `include:` mechanisms in your SPF record -- remove ESP includes you no longer use, or replace static IP ranges with direct ip4:/ip6: entries instead of an include. See the Gmail sender requirements table in the Authentication tab for the current lookup count.",
     "dkim_weak_key": "Regenerate this DKIM key at 2048-bit: in Google Workspace, Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email. For Mailgun/SES-hosted keys, use that provider's domain/DKIM settings to rotate the key. See the Gmail sender requirements table in the Authentication tab for exactly which selector and signing domain this is.",
+    "dkim_alignment_gap": "Set up custom DKIM signing (aligned to your own domain) for whichever service is actually sending this mail: Google Workspace -> Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email; Mailgun/SES -> that provider's domain/DKIM settings. Publish the CNAME/TXT record it gives you under your own DNS. This is usually a one-time setup per sending service.",
     "mailgun_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of exactly which addresses recently bounced or complained, prune them from your Listmonk subscriber list, and review your opt-in practices and sending frequency before your next campaign.",
     "mailgun_new_suppressions": "These addresses are now suppressed in Mailgun and won't receive mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list (with reasons and dates) and remove them from your Listmonk list too.",
     "ses_reputation_watch": "No urgent action yet -- but check the \"Download suppressions\" CSV for this configuration set to see if a pattern is forming, and consider slowing send frequency until the rate settles back down.",
@@ -422,6 +426,21 @@ SETTINGS_META = {
         "help": "Gmail's published minimum for RSA DKIM keys sent to personal Gmail accounts. Keys below this get flagged as weak.",
         "example": "1024 is Gmail's hard minimum; Google recommends 2048 if your provider supports it.",
     },
+    "dkim_alignment_min_volume": {
+        "label": "DKIM alignment check -- minimum mail volume",
+        "help": "Below this many messages in the window, we don't have enough data to trust the DKIM-alignment rate.",
+        "example": "20 means we want at least 20 messages before judging whether DKIM is aligning.",
+    },
+    "dkim_alignment_window_days": {
+        "label": "DKIM alignment check -- lookback window (days)",
+        "help": "How many days of recent reports to look at when measuring what fraction of mail has DKIM actually aligning.",
+        "example": "30 means the last month of reports.",
+    },
+    "dkim_alignment_min_rate": {
+        "label": "DKIM alignment check -- minimum acceptable rate",
+        "help": "Below this fraction of mail having DKIM actually align (the receiver's own verdict, not just SPF), flag it -- DMARC only needs one of SPF or DKIM to pass, so a domain can look healthy overall while having no DKIM fallback at all.",
+        "example": "0.5 means flag it if less than half your mail has DKIM aligning.",
+    },
     "mailgun_recheck_hours": {
         "label": "Minimum gap between Mailgun API polls",
         "help": "How often we re-fetch stats and suppression lists from Mailgun's API. Kept longer than the local DNS checks since it's a real API call against your account.",
@@ -671,6 +690,7 @@ SETTINGS_GROUPS = [
     ]),
     ("🔐 Authentication compliance (SPF/DKIM)", [
         "compliance_recheck_hours", "spf_lookup_warn_threshold", "dkim_min_bits",
+        "dkim_alignment_min_volume", "dkim_alignment_window_days", "dkim_alignment_min_rate",
     ]),
     ("📨 Mailgun", [
         "mailgun_recheck_hours", "mailgun_stats_window_days", "mailgun_events_window_days",
