@@ -100,6 +100,13 @@ _PROBLEM_STORY = {
                           "some mail systems to finish checking, which can let a few of your genuine emails be doubted"),
     "dkim_weak_key": ("the digital signature that vouches for your emails was weaker than today's mail systems "
                        "expect (or was missing), which can make some of them trust your mail less"),
+    # Added 2026-09-23 -- was silently dropped from every report until now
+    # (see AWS_SES_ONBOARDING-adjacent Chapter 2 note): a new check existed on
+    # the dashboard for weeks with no matching story here, which the project's
+    # own stated rule says should never happen.
+    "dkim_alignment_gap": ("one of the two checks that prove your emails really came from you almost never "
+                            "actually confirms it, so you're currently relying entirely on the other one -- with "
+                            "no backup if that one ever has a problem"),
     "mta_sts_broken": ("the extra protection that keeps email sent *to* your organization from being quietly "
                         "intercepted had stopped working the way it should"),
     "campaign_compliance_issue": ("one of your newsletters was missing some of the formatting mailbox providers "
@@ -163,7 +170,7 @@ _URGENT_STILL_OPEN_CATEGORIES = {
     # complex to check, DKIM signature weak/missing) undermine the proof that
     # mail is genuinely theirs. A non-technical reader shouldn't sit alone on
     # any of these.
-    "lookalike_domain", "spf_lookup_limit", "dkim_weak_key",
+    "lookalike_domain", "spf_lookup_limit", "dkim_weak_key", "dkim_alignment_gap",
 }
 
 # Gmail/Postmaster's own calibration points, reused from the same thresholds
@@ -192,6 +199,7 @@ _TIP_LIBRARY = {
     "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can -- if it lapses, your website and all your email stop working right away, and someone else could register it.",
     "spf_lookup_limit": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "dkim_weak_key": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "dkim_alignment_gap": "This one needs a setting turned on with whichever service actually sends your mail (Google Workspace, Mailgun, etc) -- aikyam can help set this up.",
     "mta_sts_broken": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
     "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link -- most newsletter tools have a single setting for this.",
     "display_name_inconsistent": "Keep your newsletter's \"from\" name consistent and clearly recognisable as your organization across every email you send.",
@@ -1204,6 +1212,7 @@ _WHY_IT_MATTERS = {
     "domain_expiring_soon": "If a domain lapses, your website and every email address on it stop working the same day.",
     "spf_lookup_limit": "This is part of what proves an email really came from you, so it's worth keeping it working cleanly.",
     "dkim_weak_key": "This is the signature a funder's mail system uses to confirm your message is genuinely yours.",
+    "dkim_alignment_gap": "Right now you have only one way to prove an email is genuinely yours, not two -- if that one has a problem, there's nothing to fall back on.",
     "mta_sts_broken": "It's what stops someone quietly reading or tampering with email sent to your organization.",
     "campaign_compliance_issue": "Mailbox providers increasingly expect this from newsletter senders, and missing it can push your mail toward spam.",
     "display_name_inconsistent": "A consistent \"from\" name is part of how readers decide an email is really you and worth opening.",

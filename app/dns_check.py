@@ -258,12 +258,29 @@ def discover_untracked_subdomains(conn, verbose: bool = True) -> None:
                 (item["id"],),
             )
 
+    # Once the operator has seen and acknowledged (done/dismissed) a candidate,
+    # don't raise it again just because it's still neither a tracked domain nor
+    # a covered sender -- those are the ONLY two conditions the dismiss loop
+    # above clears on, so without this, marking an item done only clears that
+    # one row: upsert_system_action's own dedup only matches an OPEN item, so
+    # the very next run (still "untracked", still "uncovered") inserts a brand
+    # new one for the identical subdomain. Confirmed live: the same subdomain
+    # got raised, marked done, and re-raised again the same day, twice, on two
+    # real domains (aikyamjobs.org, arpo.in) -- exactly this loop.
+    already_acknowledged = {
+        (row["domain_id"], row["ref_key"])
+        for row in conn.execute(
+            "SELECT domain_id, ref_key FROM action_items "
+            "WHERE category='untracked_sending_subdomain' AND status IN ('done', 'dismissed')"
+        )
+    }
     candidates = [
         (domain["id"], domain["name"], f"{prefix}.{domain['name']}")
         for domain in domains
         for prefix in SENDING_SUBDOMAIN_PREFIXES
         if f"{prefix}.{domain['name']}" not in tracked
         and not _covered(f"{prefix}.{domain['name']}", domain["id"])
+        and (domain["id"], f"{prefix}.{domain['name']}") not in already_acknowledged
     ]
     if not candidates:
         conn.commit()
