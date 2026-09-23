@@ -185,9 +185,14 @@ BAD_SPAM_RATE = 0.003    # existing "this is a real problem" threshold
 # to whatever's actually open/at-risk for THIS domain rather than a static
 # list everyone gets regardless of their situation.
 _TIP_LIBRARY = {
-    "mailgun_reputation": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
-    "ses_reputation": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
-    "ses_reputation_watch": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
+    # Was: "remove any addresses that keep bouncing from your own list" --
+    # ambiguous about WHICH list and whether the reader even has access to
+    # it. A live Jev clarity check (2026-09-23) put it at only 52%
+    # actionable for a non-technical reader. Clarified that aikyam already
+    # handles this on the sending side.
+    "mailgun_reputation": "aikyam already stops sending to these addresses going forward, so this isn't something you need to act on. If you also keep your own separate list of supporters somewhere (a spreadsheet, another tool), it's worth removing them there too so your own numbers stay accurate.",
+    "ses_reputation": "aikyam already stops sending to these addresses going forward, so this isn't something you need to act on. If you also keep your own separate list of supporters somewhere (a spreadsheet, another tool), it's worth removing them there too so your own numbers stay accurate.",
+    "ses_reputation_watch": "aikyam already stops sending to these addresses going forward, so this isn't something you need to act on. If you also keep your own separate list of supporters somewhere (a spreadsheet, another tool), it's worth removing them there too so your own numbers stay accurate.",
     # Was: "ask whoever manages your sending platform (Ghost/Mailgun) to look
     # into why..." -- a live Jev tip-quality check (2026-09-23) scored this
     # the second-worst of a sample audit (clarity 0.65/2, only 35% actionable
