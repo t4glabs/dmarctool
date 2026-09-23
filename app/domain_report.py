@@ -188,19 +188,32 @@ _TIP_LIBRARY = {
     "mailgun_reputation": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
     "ses_reputation": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
     "ses_reputation_watch": "Keep an eye on your bounce and spam-complaint numbers over the next few weeks, and remove any addresses that keep bouncing from your own list.",
-    "blocklist": "If this happens again, ask whoever manages your sending platform (Ghost/Mailgun) to look into why one of your sending computers landed on a spam list.",
+    # Was: "ask whoever manages your sending platform (Ghost/Mailgun) to look
+    # into why..." -- a live Jev tip-quality check (2026-09-23) scored this
+    # the second-worst of a sample audit (clarity 0.65/2, only 35% actionable
+    # for a non-technical reader): it never says WHO to ask or what exactly to
+    # ask them. Aikyam already handles delisting directly (see the operator
+    # remediation text for this category), so the reader-facing tip should say
+    # that plainly, not assign them a vague research task.
+    "blocklist": "This isn't something you need to sort out yourself -- aikyam is already working on getting this cleared. If it happens again and again, let aikyam know so we can look into why.",
     "safe_browsing_flagged": "Check your website for anything that looks out of place, since this sometimes happens after a plugin or theme gets compromised.",
     "display_name_issue": "Keep your newsletter's \"from\" name consistent and clearly recognizable as your organization across every email you send.",
     "content_spam_risk": "Before your next newsletter, read the subject line and body out loud. If it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
     "subject_spam_risk": "Before your next newsletter, read the subject line out loud. If it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
-    "spf_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
-    "dns_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
-    "dkim_missing": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    # This shared tip (spf_missing/dns_missing/dkim_missing/spf_lookup_limit/
+    # dkim_weak_key/mta_sts_broken) was: "This one needs a small change to
+    # your website's DNS settings..." -- a live Jev quality check (2026-09-23)
+    # scored it the WORST of a sample audit (clarity 0.14/2, confidence 0.79):
+    # "DNS settings" is itself jargon this report's own rules say to avoid,
+    # and it didn't clearly say the reader doesn't need to act.
+    "spf_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
+    "dns_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
+    "dkim_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can -- if it lapses, your website and all your email stop working right away, and someone else could register it.",
-    "spf_lookup_limit": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
-    "dkim_weak_key": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "spf_lookup_limit": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
+    "dkim_weak_key": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "dkim_alignment_gap": "This one needs a setting turned on with whichever service actually sends your mail (Google Workspace, Mailgun, etc) -- aikyam can help set this up.",
-    "mta_sts_broken": "This one needs a small change to your website's DNS settings. aikyam can make this change for you if you're not comfortable doing it yourself.",
+    "mta_sts_broken": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link -- most newsletter tools have a single setting for this.",
     "display_name_inconsistent": "Keep your newsletter's \"from\" name consistent and clearly recognisable as your organization across every email you send.",
 }
@@ -1110,7 +1123,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
                                 exclude_categories=still_open_categories)
 
     total, passed, rate = domain_window_stats(conn, domain_id, start_epoch, end_epoch)
-    _, _, prev_rate = domain_window_stats(conn, domain_id, prev_start_epoch, start_epoch)
+    prev_total, _, prev_rate = domain_window_stats(conn, domain_id, prev_start_epoch, start_epoch)
     if total:
         deliverability = f"Out of every 100 emails sent using your website's name, about {round(rate * 100)} arrived safely."
         if prev_rate:
@@ -1121,6 +1134,20 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
                 deliverability += f" That's a bit lower than last time (about {prev_pct} out of 100). We're looking into why."
             else:
                 deliverability += " That's about the same as last time."
+        # Actual reach, not just the rate -- a live Jev impact check
+        # (2026-09-23, score 1.24/2, 72% "add it") found the report never
+        # states real volume, only a percentage. A percentage alone can't
+        # show growth (99/100 reads the same whether that's 50 emails or
+        # 5,000), which for a nonprofit's real reach is itself a meaningful,
+        # motivating fact. Gated on a real volume floor on BOTH sides so a
+        # tiny prior period (e.g. 2 emails) doesn't produce a misleading "10x
+        # growth" claim.
+        if prev_total and prev_total >= 20 and total >= 20:
+            growth = (total - prev_total) / prev_total
+            if growth > 0.15:
+                deliverability += f" You also sent more email this time -- about {total}, up from about {prev_total} last time."
+            elif growth < -0.15:
+                deliverability += f" You sent less email this time -- about {total}, down from about {prev_total} last time."
     else:
         deliverability = "We didn't get enough information about your emails this time to say how they're doing. Nothing to worry about, we'll know more next time."
 
