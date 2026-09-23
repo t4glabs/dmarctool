@@ -28,6 +28,7 @@ no new dependency.
 
 import argparse
 import datetime
+import re
 
 from app.analysis import (cached_whois_org, current_policy_run, domain_window_stats, ensure_default_settings,
                            epoch_day, guess_sender_identity, recent_campaigns, sending_cadence)
@@ -47,7 +48,15 @@ DEFAULT_INTERVAL_DAYS = 30
 # ses_new_suppressions are handled separately (they need a real per-report
 # count baked into the sentence, not a static phrase).
 _PROBLEM_STORY = {
-    "dns_drift": "the settings that protect your website's name in emails weren't set up the way they should have been",
+    # Was: "the settings that protect your website's name in emails weren't set
+    # up the way they should have been" -- flagged by a live Jev quality check
+    # (2026-09-23) as the vaguest line in the report (concreteness 0.62/2,
+    # confidence only 0.36): it never actually says what was wrong. Rewritten
+    # to name that the setting's CURRENT value differs from the expected one,
+    # without using the underlying jargon term.
+    "dns_drift": ("the protective setting that decides what happens to a fake email pretending to be you is "
+                   "currently different from what we expect it to say -- either something changed it, or it's "
+                   "drifted out of sync with what we're tracking"),
     "dns_policy_weakened": ("your protection against fake emails using your name got weaker recently, not just "
                              "out of date on our end -- someone or something actually changed a setting on your "
                              "website's domain"),
@@ -128,10 +137,12 @@ _OPERATOR_ONLY_CATEGORIES = {
     # lines in the email.
     # postmaster_domain_missing is Aikyam's own Postmaster Tools account admin
     # (registering a domain there) -- a beneficiary org has no access to that
-    # account and can't act on it either way. chronic_transient_bounce is the
-    # same routine list-hygiene chore as mailgun/ses_new_suppressions (see
-    # _list_hygiene) -- Aikyam's own cleanup workflow, not a "problem with
-    # your website".
+    # account and can't act on it either way. chronic_transient_bounce stays
+    # excluded HERE (the still-open/resolved pipeline -- it's not a "problem
+    # with your website" in that framing) but IS surfaced separately, folded
+    # into _list_hygiene's own count, same routine chore as mailgun/ses
+    # suppressions (added 2026-09-23 after a live Jev audit found a real
+    # 220-address cleanup was invisible in every report).
     "rua_unauthorized", "ses_event_backlog", "postmaster_domain_missing", "chronic_transient_bounce",
 }
 
@@ -806,11 +817,44 @@ _POSTMASTER_REQUIREMENT_STORY = {
 }
 
 
+def _chronic_bounce_count_in_period(conn, domain_id: int, start_str: str, end_str: str) -> int:
+    """Best available count of addresses flagged as chronically failing and
+    reviewed during this period -- parsed from the action item's own title,
+    since (unlike mailgun/ses suppressions) chronic-transient results aren't
+    stored as individual timestamped rows, see app.chronic_bounces. Takes the
+    most recently resolved item in the window rather than summing every one,
+    so re-flagging the same still-unpruned addresses across multiple checks
+    before they're actually removed doesn't get double-counted."""
+    row = conn.execute(
+        """SELECT title FROM action_items
+           WHERE domain_id=? AND category='chronic_transient_bounce' AND status IN ('done','dismissed')
+             AND resolved_at BETWEEN ? AND ?
+           ORDER BY resolved_at DESC LIMIT 1""",
+        (domain_id, start_str, end_str),
+    ).fetchone()
+    if not row:
+        return 0
+    m = re.search(r"(\d+) address", row["title"])
+    return int(m.group(1)) if m else 0
+
+
 def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
     """Addresses that stopped accepting mail in this window, across both
     Mailgun and SES, as one plain story. Its own section (see _resolved_items
     for why) -- routine housekeeping, framed as such rather than as a
-    problem or a fix."""
+    problem or a fix.
+
+    Chronic-transient cleanups (app.chronic_bounces -- addresses stuck
+    "temporarily" failing for months without ever formally bouncing) are
+    folded in as a second sentence, not the same _suppression_story() wording
+    -- unlike a real Mailgun/SES suppression, DMARCTool doesn't automatically
+    stop sending to these, it only flags them for the operator to prune, so
+    claiming they're "automatically skipped" would overclaim. Was entirely
+    absent from every report until a live Jev quality check (2026-09-23)
+    scored a real 220-address cleanup on pattic.org as more report-worthy
+    (significance 2.55/3) than the single-address suppression line that WAS
+    already shown (1.3/3) -- the bigger, more significant real event was
+    invisible while the smaller one was included."""
     emails = []
     for table in ("mailgun_suppressions", "ses_suppressions"):
         emails += [x["email"] for x in conn.execute(
@@ -818,9 +862,22 @@ def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
                 ORDER BY first_seen_at""",
             (domain_id, start_str, end_str),
         ).fetchall()]
-    if not emails:
+
+    chronic_count = _chronic_bounce_count_in_period(conn, domain_id, start_str, end_str)
+
+    if not emails and not chronic_count:
         return None
-    return _suppression_story(len(emails), emails)
+
+    parts = []
+    if emails:
+        parts.append(_suppression_story(len(emails), emails))
+    if chronic_count:
+        parts.append(
+            f"We also found {chronic_count} email address{'es' if chronic_count != 1 else ''} that had been "
+            f"quietly failing to receive your mail for months without ever fully bouncing (a full inbox that "
+            f"never clears, for example) -- worth removing from your own list too, same as the ones above."
+        )
+    return " ".join(parts)
 
 
 def _postmaster_story(conn, domain_id: int):
@@ -1069,7 +1126,8 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     )
 
     headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end))
-    whats_working = _whats_working(conn, domain_id, still_open_categories, rate, total, period_end)
+    whats_working = _whats_working(conn, domain_id, still_open_categories, rate, total, period_end,
+                                    start_str, end_str)
     health_trend = _health_trend(conn, domain_id, period_start)
     health_timeline = _health_timeline(conn, domain_id)
     list_hygiene = _list_hygiene(conn, domain_id, start_str, end_str)
@@ -1238,7 +1296,36 @@ def _health_trend(conn, domain_id: int, period_start):
             f"exactly what you want between updates.")
 
 
-def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total, now: datetime.datetime) -> list:
+def _coverage_expansion_note(conn, domain_id: int, start_str: str, end_str: str):
+    """A reassuring 'we're being thorough' note when a subdomain quietly
+    sending mail under this organization's name got noticed and brought
+    under watch this period. untracked_sending_subdomain stays operator-only
+    for the still-open/resolved pipeline (see _OPERATOR_ONLY_CATEGORIES --
+    "found something to add to our own monitoring" isn't a problem with the
+    reader's mail), but the discovery itself is real, positive, and was
+    completely absent from every report until a live Jev audit (2026-09-23)
+    scored it 80% worth-including (significance 2.07/3)."""
+    rows = conn.execute(
+        """SELECT DISTINCT ref_key FROM action_items
+           WHERE domain_id=? AND category='untracked_sending_subdomain' AND ref_key IS NOT NULL
+             AND created_at BETWEEN ? AND ?""",
+        (domain_id, start_str, end_str),
+    ).fetchall()
+    subdomains = [r["ref_key"] for r in rows]
+    if not subdomains:
+        return None
+    if len(subdomains) == 1:
+        return (f"We noticed your organization was also sending mail from an additional address "
+                f"({subdomains[0]}) that we weren't watching yet, and we've started keeping an eye on it too.")
+    shown = subdomains[:3]
+    names = ", ".join(shown)
+    more = f", and {len(subdomains) - 3} more" if len(subdomains) > 3 else ""
+    return (f"We noticed your organization was also sending mail from {len(subdomains)} additional addresses "
+            f"({names}{more}) that we weren't watching yet, and we've started keeping an eye on them too.")
+
+
+def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total, now: datetime.datetime,
+                    start_str: str = None, end_str: str = None) -> list:
     """The report's opening section: the things that are demonstrably going
     RIGHT for this domain, each stated as a fact plus what it buys them.
 
@@ -1317,6 +1404,12 @@ def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total
                     f"Your domain name is paid up until {exp['expires_at']}, so your website and every email "
                     f"address on it keep working. We're watching the date and will remind you in good time."
                 )
+
+    # 4. Coverage expansion -- see _coverage_expansion_note.
+    if start_str and end_str:
+        note = _coverage_expansion_note(conn, domain_id, start_str, end_str)
+        if note:
+            working.append(note)
 
     return working
 
