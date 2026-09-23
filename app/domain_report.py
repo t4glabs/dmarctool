@@ -422,11 +422,19 @@ def _suppression_story(count: int, sample_emails=None) -> str:
     return base
 
 
-def _explain_policy_for_owner(p: str, pct) -> str:
+def _explain_policy_for_owner(p: str, pct, unchanged_since_before_period: bool = False) -> str:
     """The DMARC policy, in plain language with no DMARC/policy/percent words
     at all -- a locked-door analogy instead. Goes a level further than
     app.labels.explain_policy(), which is aimed at an operator, not a
-    complete non-technical reader."""
+    complete non-technical reader.
+
+    `unchanged_since_before_period`: this exact percentage was already true
+    before this reporting period even started (same observed_from-vs-period
+    signal used for the streak lines in _whats_working) -- rather than
+    silently repeat the identical explanation, say so directly. A live Jev
+    check (2026-09-23, Jev findings Chapter 2) on this exact paragraph with
+    an unchanged number scored 1.95/2 boredom risk at 93% confidence, split
+    evenly between "needs variation" and "becomes filler"."""
     if not p:
         return ("We haven't yet turned on the protection that stops people from faking your website's "
                 "name in emails. That's the next thing we're setting up for you.")
@@ -438,9 +446,12 @@ def _explain_policy_for_owner(p: str, pct) -> str:
     verb = "sent straight to spam instead of the inbox" if p == "quarantine" else "blocked completely, never even arriving"
     if pct >= 100:
         return f"Every email we catch pretending to be from you now gets {verb}."
-    return (f"Think of it like a lock we're gradually tightening: right now, about {pct} out of every 100 "
+    base = (f"Think of it like a lock we're gradually tightening: right now, about {pct} out of every 100 "
             f"suspicious emails pretending to be you get {verb}, and we're keeping a close eye on the rest "
             f"before turning the lock up further. That way we never accidentally block your own real mail.")
+    if unchanged_since_before_period:
+        base += " Same level as last time -- still watching before raising it further."
+    return base
 
 
 # Aikyam's own default CC on every domain's report -- so Aikyam always has
@@ -1157,7 +1168,12 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         deliverability = "We didn't get enough information about your emails this time to say how they're doing. Nothing to worry about, we'll know more next time."
 
     policy_run = current_policy_run(conn, domain_id)
-    protection = _explain_policy_for_owner(policy_run["p"] if policy_run else None, policy_run["pct"] if policy_run else None)
+    policy_unchanged = bool(
+        policy_run and policy_run["observed_from"]
+        and datetime.datetime.utcfromtimestamp(policy_run["observed_from"]) < period_start
+    )
+    protection = _explain_policy_for_owner(policy_run["p"] if policy_run else None,
+                                            policy_run["pct"] if policy_run else None, policy_unchanged)
 
     newsletter = _newsletter_reach(
         conn, domain_id, domain_name,
@@ -1165,7 +1181,8 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         (period_start - (period_end - period_start)).date().isoformat(),
     )
 
-    headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end))
+    headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end),
+                                  period_start)
     whats_working = _whats_working(conn, domain_id, still_open_categories, rate, total, period_end,
                                     start_str, end_str)
     health_trend = _health_trend(conn, domain_id, period_start)
@@ -1365,6 +1382,40 @@ def _coverage_expansion_note(conn, domain_id: int, start_str: str, end_str: str)
             f"({names}{more}) that we weren't watching yet, and we've started keeping an eye on them too.")
 
 
+def _pass_rate_streak_days(conn, domain_id: int) -> int:
+    """Consecutive most-recent days (from domain_health_snapshots, one row
+    per day) with pass_rate >= 0.98 -- stops at the first day that breaks
+    the streak (a lower rate, a missing/null rate, or a real gap in the
+    snapshot history). Tolerates gaps of up to 3 days between snapshots
+    (not just exactly 1) -- this runs on a laptop that sleeps, per
+    dmarctool_imap_timeout_hang/dmarctool_ses_backlog, so a snapshot day
+    getting skipped here and there is normal background-job behavior, not
+    evidence anything was actually wrong on the missing day. Confirmed live:
+    real domains had a genuine 30+ day run of >=98% snapshots broken into a
+    3-day "streak" purely by single-day gaps every 2-3 days, well before
+    this tolerance was added."""
+    rows = conn.execute(
+        "SELECT snapshot_date, pass_rate FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC",
+        (domain_id,),
+    ).fetchall()
+    if not rows:
+        return 0
+    most_recent_date = datetime.date.fromisoformat(rows[0]["snapshot_date"])
+    earliest_qualifying_date = None
+    prev_date = None
+    for r in rows:
+        d = datetime.date.fromisoformat(r["snapshot_date"])
+        if prev_date is not None and (prev_date - d).days > 3:
+            break
+        if r["pass_rate"] is None or r["pass_rate"] < 0.98:
+            break
+        earliest_qualifying_date = d
+        prev_date = d
+    if earliest_qualifying_date is None:
+        return 0
+    return (most_recent_date - earliest_qualifying_date).days + 1
+
+
 def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total, now: datetime.datetime,
                     start_str: str = None, end_str: str = None) -> list:
     """The report's opening section: the things that are demonstrably going
@@ -1387,24 +1438,65 @@ def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total
     with no data yet), and the templates then omit the heading entirely.
     """
     working = []
+    period_start = datetime.datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S") if start_str else None
 
     # 1. Impersonation protection. The single most valuable thing this tool
     #    does for them, and the one with the most concrete stake.
+    #
+    #    Streak framing (added 2026-09-23, Jev findings Chapter 2 -- see the
+    #    "Jev findings & improvements" artifact): a live audit of real
+    #    report-to-report content found EVERY whats_working line repeating
+    #    verbatim in 100% of domains across both real send cycles, scored
+    #    ~2/2 boredom risk at 93-99% confidence by Jev, the most decisive
+    #    result across two audit rounds. The report's own rules still want
+    #    ongoing reassurance ("What the report must make them feel: safe"),
+    #    so deleting the fact isn't right either -- referencing how LONG it's
+    #    held true does both: shorter than the full explanation, and reads as
+    #    a genuine track record rather than a repeated assertion. Streak
+    #    length comes from policy_history's own observed_from for the
+    #    CURRENT run, not a guess -- if that run started before this
+    #    reporting period began, it was already true coming in, i.e. a real
+    #    repeat, not new news.
     policy_run = current_policy_run(conn, domain_id)
     protection_broken = still_open_categories & {
         "dns_policy_weakened", "dns_missing", "dns_drift", "spf_missing", "dkim_missing",
     }
     if policy_run and policy_run["p"] and policy_run["p"] != "none" and not protection_broken:
-        working.append(
-            "The protection that stops anyone sending email pretending to be your organization is switched on "
-            "and working. If someone tried to email your donors using your name, mailbox providers would "
-            "catch it rather than deliver it."
-        )
+        streak_months = None
+        if period_start and policy_run["observed_from"]:
+            started = datetime.datetime.utcfromtimestamp(policy_run["observed_from"])
+            if started < period_start:
+                # Measured as of THIS report's own period_end (`now`), not
+                # wall-clock utcnow() -- utcnow() would silently give the
+                # wrong answer when reconstructing a past report (e.g. for
+                # this exact audit), since it always reflects today regardless
+                # of which period is being rendered.
+                streak_months = (now - started).days // 30
+        # >=1 month, not >=2 -- this tool has only ~2 months of real history
+        # total (launched 2026-07-27), so requiring 2 would almost never fire
+        # yet on real data. Revisit upward once more history accumulates.
+        if streak_months and streak_months >= 1:
+            unit = "month" if streak_months == 1 else "months"
+            working.append(
+                f"The protection that stops anyone sending email pretending to be your organization has now "
+                f"been working steadily for {streak_months} {unit} in a row."
+            )
+        else:
+            working.append(
+                "The protection that stops anyone sending email pretending to be your organization is switched on "
+                "and working. If someone tried to email your donors using your name, mailbox providers would "
+                "catch it rather than deliver it."
+            )
 
     # 2. Their own mail being recognised as genuinely theirs. Deliberately
     #    framed as recognition/trust, not arrival -- the deliverability
     #    section further down already gives the arrival number, and repeating
     #    it here would just read as the same fact twice.
+    #
+    #    Same streak treatment as #1, but from domain_health_snapshots
+    #    continuity (there's no single "run started" field for this the way
+    #    policy_history has one) -- consecutive most-recent daily snapshots
+    #    at >=98% pass, stopping at the first gap or lower day.
     auth_broken = still_open_categories & {
         "failure_investigation", "borrowed_sending_identity", "ptr_issue",
         # Reputation problems belong here too. On a live domain this claim
@@ -1414,10 +1506,21 @@ def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total
         "mailgun_reputation", "ses_reputation", "ses_reputation_watch", "ses_rejected",
     }
     if total and total >= 50 and rate is not None and rate >= 0.98 and not auth_broken:
-        working.append(
-            "Your own emails are being recognised as genuinely yours, so the messages you send to funders and "
-            "supporters arrive looking trustworthy rather than suspicious."
-        )
+        streak_days = _pass_rate_streak_days(conn, domain_id)
+        # >=30 days, not >=60 -- same reasoning as the policy streak above:
+        # this tool has only ~2 months of real snapshot history total.
+        if streak_days >= 30:
+            streak_months = streak_days // 30
+            unit = "month" if streak_months == 1 else "months"
+            working.append(
+                f"Your own emails have been recognised as genuinely yours for {streak_months} {unit} running "
+                f"now, so the messages you send to funders and supporters keep arriving looking trustworthy."
+            )
+        else:
+            working.append(
+                "Your own emails are being recognised as genuinely yours, so the messages you send to funders and "
+                "supporters arrive looking trustworthy rather than suspicious."
+            )
 
     # 3. Registration paid up. Unglamorous, but it's the one failure that
     #    takes the website and every email address down at the same moment,
@@ -1440,7 +1543,15 @@ def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total
             except (TypeError, ValueError):
                 warn_days = 30
             comfortable = warn_days * 2
-            if days_left is not None and days_left > comfortable:
+            # Beyond THAT, drop the "we're watching the date" reassurance too
+            # -- a domain renewed years out doesn't need the same tail
+            # sentence every single month (Jev: 62% "needs_variation" on this
+            # exact line). Just the date fact, which is real and different
+            # per domain, stays.
+            very_comfortable = warn_days * 4
+            if days_left is not None and days_left > very_comfortable:
+                working.append(f"Your domain name is paid up until {exp['expires_at']}.")
+            elif days_left is not None and days_left > comfortable:
                 working.append(
                     f"Your domain name is paid up until {exp['expires_at']}, so your website and every email "
                     f"address on it keep working. We're watching the date and will remind you in good time."
@@ -1455,7 +1566,23 @@ def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total
     return working
 
 
-def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_warning):
+# Jev findings Chapter 2 (2026-09-23): of every repeated line audited, this
+# exact headline scored the single most decisive result -- 75% "becomes
+# filler" at 63% confidence, the only pattern that leaned toward "just
+# drop/vary it" rather than "keep the fact, vary the words". There's no
+# clean "streak" for a boolean all-clear the way there is for #1/#2 in
+# _whats_working (nothing to measure a duration of), so this rotates
+# through equivalent, equally accurate phrasings instead -- deterministic
+# per reporting period (not random), so re-rendering the same period's
+# preview twice shows the same line both times.
+_ALL_CLEAR_PHRASES = [
+    "Nothing on your domain needs your attention this time.",
+    "Everything checked out fine on your domain this time -- nothing for you to do.",
+    "No action needed from you this time -- your domain looked healthy throughout.",
+]
+
+
+def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_warning, period_start=None):
     """One short, factual line orienting the reader before the detail: is
     there something here they need to know about, or not.
 
@@ -1470,7 +1597,9 @@ def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_war
     if still_open_categories & _URGENT_STILL_OPEN_CATEGORIES or risk_warning:
         return "There's one thing on this update we want to flag for you, and it's explained below."
     if still_open_categories:
-        return "Nothing on your domain needs your attention this time."
+        if period_start is not None:
+            return _ALL_CLEAR_PHRASES[period_start.month % len(_ALL_CLEAR_PHRASES)]
+        return _ALL_CLEAR_PHRASES[0]
     return None
 
 
