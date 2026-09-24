@@ -103,7 +103,7 @@ DEFAULT_SETTINGS = {
     "domain_expiry_recheck_hours": "24",   # registration expiry dates change at most once a year; daily is plenty
     "lookalike_enabled": "1",              # watch for domains registered to look like yours
     "lookalike_recheck_hours": "168",      # weekly -- ~530 DNS lookups per pass, no need to run it often
-    "domain_expiry_warn_days": "30",       # flag + include in the email report once expiry is this close
+    "domain_expiry_warn_days": "60",       # flag + include in the email report once expiry is this close -- 2 months, not 1: reports go out roughly monthly, so a 1-month warning risks the last warning before expiry landing on a missed/delayed cycle
     # Master switch for actually SENDING the plain-language owner reports.
     # Off by default and deliberately separate from each domain's own
     # `enabled` flag: those say "this org has opted in", this says "we're

@@ -1522,40 +1522,18 @@ def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total
                 "supporters arrive looking trustworthy rather than suspicious."
             )
 
-    # 3. Registration paid up. Unglamorous, but it's the one failure that
-    #    takes the website and every email address down at the same moment,
-    #    and the one thing on this list only they can act on.
-    if "domain_expiring_soon" not in still_open_categories:
-        exp = conn.execute(
-            "SELECT expires_at FROM domain_expiry_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1",
-            (domain_id,),
-        ).fetchone()
-        if exp and exp["expires_at"]:
-            days_left = days_until(exp["expires_at"])
-            # Needs real headroom, not just "hasn't tripped the warning yet".
-            # At 38 days out (one live domain, today) "your domain is paid up"
-            # is technically true and practically misleading -- renewal is a
-            # month away. Twice the warning threshold means this only ever
-            # reads as genuine good news, and a domain in the gap between the
-            # two simply doesn't get the line.
-            try:
-                warn_days = int(ensure_default_settings(conn).get("domain_expiry_warn_days", 30))
-            except (TypeError, ValueError):
-                warn_days = 30
-            comfortable = warn_days * 2
-            # Beyond THAT, drop the "we're watching the date" reassurance too
-            # -- a domain renewed years out doesn't need the same tail
-            # sentence every single month (Jev: 62% "needs_variation" on this
-            # exact line). Just the date fact, which is real and different
-            # per domain, stays.
-            very_comfortable = warn_days * 4
-            if days_left is not None and days_left > very_comfortable:
-                working.append(f"Your domain name is paid up until {exp['expires_at']}.")
-            elif days_left is not None and days_left > comfortable:
-                working.append(
-                    f"Your domain name is paid up until {exp['expires_at']}, so your website and every email "
-                    f"address on it keep working. We're watching the date and will remind you in good time."
-                )
+    # 3. Registration paid up -- deliberately NOT mentioned here anymore
+    # (removed 2026-09-24, user's own instruction: "you dont have to tell
+    # domain expiry every time in every report"). This used to show a
+    # reassurance line in every report while a domain was comfortably far
+    # from expiry -- exactly the kind of repeated-every-cycle content
+    # Jev findings Chapter 2 already flagged (62% "needs_variation"). Rather
+    # than tune the wording further, the user wanted it silent until it's
+    # actually relevant: domain_expiring_soon (see _URGENT_STILL_OPEN_CATEGORIES
+    # and _PROBLEM_STORY) already covers that, now gated at
+    # domain_expiry_warn_days=60 (2 months, not 1 -- the user's own reasoning:
+    # reports go out roughly monthly, so a 1-month warning risks the very
+    # last warning before expiry landing on a missed/delayed cycle).
 
     # 4. Coverage expansion -- see _coverage_expansion_note.
     if start_str and end_str:

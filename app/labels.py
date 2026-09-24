@@ -642,8 +642,8 @@ SETTINGS_META = {
     },
     "domain_expiry_warn_days": {
         "label": "Days before expiry to start warning",
-        "help": "Once a domain's registration is this many days (or fewer) from expiring, it gets flagged as an action item here and mentioned in that domain's email report.",
-        "example": "30 means you (and the domain's report recipient) get warned once expiry is a month away.",
+        "help": "Once a domain's registration is this many days (or fewer) from expiring, it gets flagged as an action item here and mentioned in that domain's email report. Kept at 2 months rather than 1, since reports go out roughly monthly -- a 1-month warning risks the very last warning before expiry landing on a missed or delayed report cycle.",
+        "example": "60 means you (and the domain's report recipient) get warned once expiry is about 2 months away.",
     },
     "access_log_retention_days": {
         "label": "How long to keep the access log",
