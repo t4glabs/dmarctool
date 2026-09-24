@@ -171,6 +171,15 @@ _URGENT_STILL_OPEN_CATEGORIES = {
     # mail is genuinely theirs. A non-technical reader shouldn't sit alone on
     # any of these.
     "lookalike_domain", "spf_lookup_limit", "dkim_weak_key", "dkim_alignment_gap",
+    # Added 2026-09-24 (Chapter 14, jev/DECISIONS_LOG.md), a real asymmetry
+    # found auditing spf_missing's rollout against this same list: having NO
+    # SPF record at all is a strictly WORSE state than spf_lookup_limit's
+    # "SPF exists but is too complex", yet only the milder sibling was urgent.
+    # borrowed_sending_identity was never added either despite the exact same
+    # "undermines the proof mail is genuinely theirs" reasoning -- and
+    # Chapter 11 confirmed real, sustained (144/156-day) cases exist. Both
+    # added for consistency with the reasoning already applied above.
+    "spf_missing", "borrowed_sending_identity",
 }
 
 # Gmail/Postmaster's own calibration points, reused from the same thresholds

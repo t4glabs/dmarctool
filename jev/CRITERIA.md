@@ -72,6 +72,16 @@ actually do?
 **Options:** `concrete_next_step` / `vague_needs_specifics` / `not_applicable_this_is_status_not_advice`
 **Ties back to:** CONTEXT.md "Vague-and-alarming language" and "Filler tips."
 
+**Known limitation, found in Chapter 14:** this tool's own established, deliberate pattern is a family of
+tips that say "this is a small technical change behind the scenes, not something you need to figure out
+yourself — aikyam will take care of it for you" (`spf_missing`/`dns_missing`/`dkim_missing`/etc., shipped
+and Jev-validated in Chapter 1 for being reassuring and reader-passive BY DESIGN). Re-testing this exact
+tip against `actionability` in Chapter 14 scored 94% `vague_needs_specifics` — Jev doesn't cleanly credit
+"the reader genuinely has nothing to do, and that's the point" as `not_applicable`, reading passivity as
+vagueness instead. This is a known gap in the criterion's phrasing, not a real content defect — don't
+reflexively rewrite an intentionally-passive tip based on this score alone; check whether the tip is
+supposed to name a reader action before treating a low `actionability` score as a finding.
+
 ## How these map to Jev's three primitives
 
 - **Noul** — binary risk flags, cheapest/fastest: `contradiction_check`.

@@ -638,5 +638,45 @@ healthy.
 
 ---
 
-*(Next entry: Chapter 14 — resume remaining `USE_CASES.md` sections: F (new-detector rollout, now with
-fresh real examples from Chapters 9/11 to check against) and J (cross-report/portfolio-wide consistency).)*
+## 2026-09-24 — Chapter 14: section F audit using Chapters 9/11 as real rollout case studies
+
+**Context:** Worked section F's checklist (F.51/56/58) against `spf_missing` (revived in Chapter 9) and
+`borrowed_sending_identity` (extended in Chapter 11) as real, fresh rollout examples.
+
+**F.51/F.58 (story passes audience_fit before shipping):** Retroactively tested `spf_missing`'s real
+story+why (tinkerhub.org): 72% `clear_as_is`, 78% `accurately_calibrated` — passes reasonably, no fix
+needed. Also tested the shared generic-DNS tip (`spf_missing` and 5 other categories) against
+`actionability`: scored 94% `vague_needs_specifics` even though this exact tip was already Jev-validated
+and shipped in Chapter 1 specifically for being reassuring/reader-passive by design ("aikyam will take
+care of it for you"). **Not a content bug** — a real limitation in the `actionability` criterion itself,
+which doesn't cleanly credit intentional reader-passivity as `not_applicable`. Documented as a known
+limitation in `jev/CRITERIA.md` rather than rewriting an already-good, already-validated tip based on a
+score that doesn't mean what it looks like it means.
+
+**F.56 (urgency framing justified by real severity) — a real asymmetry found and fixed.**
+`_URGENT_STILL_OPEN_CATEGORIES` already includes `spf_lookup_limit` and `dkim_weak_key` with the stated
+reasoning "undermine the proof that mail is genuinely theirs." Checked the set directly against
+Chapters 9/11's two real categories:
+- `spf_missing` (literally NO SPF record) is a strictly WORSE state than `spf_lookup_limit` ("SPF exists,
+  but too complex") — yet only the milder sibling was in the urgent set.
+- `borrowed_sending_identity` was never in the set either, despite the exact same "can never pass DMARC
+  alignment" reasoning, and Chapter 11 confirmed real, sustained (144/156-day) cases exist right now.
+
+Added both to `_URGENT_STILL_OPEN_CATEGORIES`. Verified the combined real text (story + the
+"reach out to aikyam directly" CTA) on both tinkerhub.org and aikyamfellows.org's real open items:
+`contradiction_check` 13% (low — the conditional, low-pressure CTA phrasing ["if you're not sure how to
+fix what's above..."] doesn't clash with the existing "we're on it" framing), `emotional_resonance`
+2.27/4 (reads as protective, not confusing), `audience_fit` 66% clear.
+
+**Shipped in** `app/domain_report.py::_URGENT_STILL_OPEN_CATEGORIES` (2 additions) and `jev/CRITERIA.md`
+(actionability limitation note). Verified live via `preview_domain_report()` for both real domains.
+Service restarted, healthy.
+
+**J deferred to a future chapter** — F's real findings (the urgent-set asymmetry, the actionability
+limitation) were substantial enough on their own; didn't want to dilute either by rushing J in the same
+round.
+
+---
+
+*(Next entry: Chapter 15 — section J (cross-report/portfolio-wide consistency), deferred from this
+chapter.)*
