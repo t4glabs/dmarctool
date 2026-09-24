@@ -39,12 +39,16 @@ Python, FastAPI + Jinja2 (server-rendered, no JS build step), raw `sqlite3` (no 
 - `header_compliance.py` — one-click-unsubscribe header compliance (`List-Unsubscribe`/`List-Unsubscribe-Post`) and RFC 5322 hygiene (Message-ID, misleading `Re:`/`Fwd:` subjects) for bulk senders
 - `content_scoring.py` — heuristic spam-trigger scoring for subject lines and newsletter body text (financial/urgency bait phrases, ALL-CAPS phrases, excessive punctuation/emoji) plus HTML structural scoring (image-to-text ratio, link shorteners)
 - `listmonk.py` — read-only Listmonk API integration (stdlib `urllib`, HTTP Basic-style `token user:key` auth) that fetches real newsletter body HTML for campaigns already tracked via the SES event pipeline (matched by Listmonk campaign UUID), strips it to plain text, and feeds `content_scoring`; needs `LISTMONK_URL`/`LISTMONK_API_USERNAME`/`LISTMONK_API_TOKEN` in `secrets.env`
+- `jev_client.py` — thin stdlib-only HTTP client for TypeSafe AI's "Jev" structured-decision model (schema-constrained yes/no, choice, and score judgments — never free text); needs `JEV_API_KEY` in `secrets.env`
+- `jev_context.py` — wraps `jev_client.ask()` with DMARCTool's standing audience/voice context and a reusable criteria checklist (audience fit, usefulness, repetition risk, emotional resonance, honesty calibration, contradiction check, actionability) for judging client-facing report/dashboard copy before it ships; see `jev/README.md` before touching report or dashboard wording
 
 Per-newsletter engagement (opens/clicks/bounces/complaints/rejects, per-campaign-recipient tracking for inactive-subscriber detection) is built inside `ses_events.py` itself, not a separate module — Listmonk stamps every campaign email with an `X-Listmonk-Campaign` header (plus Subject and From), which SES echoes back on every event notification, so campaign-level stats come from the same trusted SES event stream rather than a second integration.
 
 See `MANUAL.md` for the plain-language usage guide (what to click, what the terms mean, troubleshooting) — that's the doc to point the user to, not this file.
 
 See `AWS_SES_ONBOARDING.md` before onboarding any new domain/identity into AWS SES — the shared SNS topic + SQS queue architecture, the exact configuration-set naming convention `ses_events.py` depends on, and the AWS console steps (event destination, default configuration set). Getting the naming wrong silently drops that domain's events with no error.
+
+See `jev/README.md` before writing or auditing any client-facing report/dashboard copy — the standing Claude+Jev review workflow (audience/voice context, the 7-question criteria checklist, 100 grounded use cases, the data-handling rule for what can/can't be sent to Jev). This is a persistent, standing process, not a one-off audit — every future report/dashboard-copy decision is meant to run through it.
 
 ## Working style for this project
 
