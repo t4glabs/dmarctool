@@ -886,6 +886,48 @@ results this round are still valuable signal — not every em-dash is actually h
 
 ---
 
-*(Next entry: Chapter 19 — continue the sweep. Remaining real-impact candidates not yet tested: the
-`campaign_compliance_issue` tip, `mta_sts_broken`'s tip, `blocklist`'s tip (0 real open right now but
-worth fixing proactively), and `domain_expiring_soon`'s tip.)*
+## 2026-09-24 — Chapter 19: past the category dicts — every currently-open real category was already
+handled, so this round swept the structural functions that render regardless of which categories are open
+
+**Context:** checked first (per use case 101/106's own discipline): every real currently-open category's
+em-dash text had already been fixed or checked in Chapters 17-18. Rather than force-fix dormant categories
+next, broadened the search past `_PROBLEM_STORY`/`_TIP_LIBRARY`/`_WHY_IT_MATTERS` to the structural
+functions that fire in most/all real reports regardless of which specific categories happen to be open:
+`_incident_recurrence`, `_risk_warning`, `_list_hygiene`, `_ALL_CLEAR_PHRASES`. Confirmed via grep across
+the whole file that essentially every remaining real return-value f-string/string-literal em-dash has now
+been surfaced (the ~139 remaining "--" occurrences left after this chapter are overwhelmingly in
+docstrings/comments, not user-facing text).
+
+**Fixed — 4 real strings:**
+- `_incident_recurrence`'s RESOLVED branch (recurring problems that got fixed again): 80%→87%
+  `reads_like_a_person`. Real applicability confirmed broadly — many real domains have 2+ distinct
+  recurrence days on reader-facing categories (dns_drift, new_sender, postmaster_compliance,
+  mailgun_reputation, failure_investigation, lookalike_domain).
+- `_risk_warning`'s trailing clause — a real dash missed during the Chapter 6 rewrite of this same
+  function: 69%→76%.
+- `_list_hygiene`'s chronic-transient-bounce addition: **89%→54%, the single biggest natural_voice gain
+  of this round.** Confirmed real: pattic.org has real chronic-bounce items resolved on 2026-09-17.
+  Verified via a historical `_build_context()` reconstruction of that real period.
+- `domain_expiring_soon`'s tip: 68%→78%.
+
+**Checked, no action (2 items) — the sweep's discipline holding up again:**
+- `_ALL_CLEAR_PHRASES`'s 2 dashed variants: a plain period-split produced **zero movement** (69%→69%,
+  identically) on both. Tried two further, more substantial rewrites — best only reached 63%. Left
+  unchanged: these exist specifically as a deliberate 3-way rotation for variety (Chapter 2), and the
+  modest gains available didn't justify disrupting that designed set for an unproven edge.
+- `blocklist`'s tip: a period-split rewrite scored WORSE (63%→55%) than the original. Left unchanged.
+
+**Shipped in** `app/domain_report.py` only. Verified live: pattic.org's real chronic-bounce text via
+historical reconstruction, service restarted, healthy.
+
+**Running tally**: ~139 "--" occurrences remain in the file, but a full-file grep for real return-value
+strings suggests the vast majority of what's left is docstrings/comments rather than user-facing text.
+Worth re-confirming this with a more rigorous pass before declaring the sweep done, but the highest-value
+work is very likely complete.
+
+---
+
+*(Next entry: Chapter 20 — a rigorous final pass confirming no real user-facing em-dash strings remain
+unchecked; if confirmed, priority 2 shifts from "remove em-dashes" to auditing for other AI-writing tells
+the user named — overuse of "worth" as a transition, "X, which is exactly Y" constructions — across the
+now-cleaner content library.)*

@@ -231,7 +231,7 @@ _TIP_LIBRARY = {
     "spf_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "dns_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "dkim_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
-    "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can -- if it lapses, your website and all your email stop working right away, and someone else could register it.",
+    "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can. If it lapses, your website and all your email stop working right away, and someone else could register it.",
     "spf_lookup_limit": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "dkim_weak_key": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "dkim_alignment_gap": "This is a one-time setting aikyam can turn on with whichever service actually sends your mail, like Google Workspace or Mailgun.",
@@ -371,8 +371,10 @@ def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as
     first_month = datetime.datetime.strptime(days[0], "%Y-%m-%d").strftime("%B")
     phrase = _times_phrase(len(days))
     if resolved:
-        return (f"We've now sorted this out {phrase} since {first_month} -- it has a habit of coming back, "
-                f"so we keep a close eye on it for you.")
+        # Em-dash removed 2026-09-24 (Chapter 19): natural_voice 80%->87%
+        # reads_like_a_person.
+        return (f"We've now sorted this out {phrase} since {first_month}. It has a habit of coming back, "
+                f"so we're keeping a close eye on it for you.")
     return (f"This has surfaced {phrase} since {first_month}, even after earlier fixes, so we're watching it "
             f"closely rather than assuming it'll stay away.")
 
@@ -946,11 +948,13 @@ def _risk_warning(conn, domain_id: int, now: datetime.datetime):
             reasons.append("the share of your mail passing safety checks has been dropping over the last few weeks")
     if not reasons:
         return None
+    # Trailing em-dash removed 2026-09-24 (Chapter 19, missed in the Chapter 6
+    # rewrite): 69%->76% reads_like_a_person.
     return ("We're keeping a close watch on your email health because a few signs have started trending "
             "the wrong way: " + "; ".join(reasons) + ". Nothing urgent yet, but if this keeps going it "
-            "could start affecting where your mail lands. aikyam is already looking into it -- if anything "
-            "changed on your end recently (a new sending tool, a big one-off email blast), let us know so "
-            "we can factor that in.")
+            "could start affecting where your mail lands. aikyam is already looking into it. If anything "
+            "changed on your end recently, like a new sending tool or a big one-off email blast, let us "
+            "know so we can factor that in.")
 
 
 _POSTMASTER_REQUIREMENT_STORY = {
@@ -1044,10 +1048,13 @@ def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
     if emails:
         parts.append(_suppression_story(len(emails), emails))
     if chronic_count:
+        # Em-dash removed 2026-09-24 (Chapter 19): 89%->54% reads_like_
+        # generated_boilerplate, the biggest single natural_voice gain of
+        # this round.
         parts.append(
             f"We also found {chronic_count} email address{'es' if chronic_count != 1 else ''} that had been "
             f"quietly failing to receive your mail for months without ever fully bouncing (a full inbox that "
-            f"never clears, for example) -- worth removing from your own list too, same as the ones above."
+            f"never clears, for example). Worth removing from your own list too, same as the ones above."
         )
     return " ".join(parts)
 
