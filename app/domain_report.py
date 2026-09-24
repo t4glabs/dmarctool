@@ -2173,11 +2173,19 @@ def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_
     else:
         bounce_rate_chart_svg = None
 
+    pass_rate_series = analysis.daily_pass_series(conn, domain_id, days=60)
+    if len(pass_rate_series) >= 2 and any(p[3] is not None for p in pass_rate_series):
+        pass_rate_trend_svg = charts.pass_rate_sparkline(
+            pass_rate_series, width=520, height=120, colors=_EMAIL_CHART_COLORS)
+    else:
+        pass_rate_trend_svg = None
+
     return {
         "pass_rate_donut_svg": pass_rate_donut_svg,
         "pass_rate_donut_svg_small": pass_rate_donut_svg_small,
         "spam_rate_chart_svg": spam_rate_chart_svg,
         "bounce_rate_chart_svg": bounce_rate_chart_svg,
+        "pass_rate_trend_svg": pass_rate_trend_svg,
     }
 
 

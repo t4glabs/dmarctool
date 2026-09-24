@@ -125,7 +125,7 @@
   {% endif %}
 
   {% if risk_warning %}
-  <div style="margin-bottom:24px; background-color:#FBEBE8; border-radius:6px; padding:14px 16px; border:1px solid #f3c6c1;">
+  <div style="margin-bottom:24px; background-color:#FBEBE8; border-radius:6px; padding:14px 16px; border:1px solid #EAC6C1;">
     <h2 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:#C0392B; margin:0 0 8px 0;">Heads up</h2>
     <p style="font-size:15px; line-height:1.6; margin:0; color:#C0392B;">{{ risk_warning }}</p>
   </div>
@@ -144,6 +144,10 @@
     </table>
     {% else %}
     <p style="font-size:15px; line-height:1.6; margin:0 0 16px 0;">{{ deliverability }}</p>
+    {% endif %}
+    {% if pass_rate_trend_svg %}
+    <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:#7A746B; margin:0 0 4px 0;">Your delivery rate over time</p>
+    <div style="margin:0 0 16px 0;">{{ pass_rate_trend_svg|safe }}</div>
     {% endif %}
 
     <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:#7A746B; margin:0 0 4px 0;">Protection from fake emails</p>

@@ -1278,3 +1278,91 @@ heading in its rendered output, no leftover markup. Service restarted, healthy. 
 
 *(Next entry: Round 5 — the pass-rate sparkline and a whole-report Jev checkpoint, closing out the
 5-round visual redesign.)*
+
+## Chapter 27 — Email report visual/UI redesign, Round 5: pass-rate trend + whole-report checkpoint
+
+The 4th and final `colors` param, then the honesty check this whole 5-round redesign was building toward:
+does the finished report actually read well as ONE document, not just as individually-approved pieces.
+
+**`colors` param added to `pass_rate_sparkline`** (the simplest of the 4 -- only `currentColor`, no
+`var()` at all). All 4 email-used chart functions in `charts.py` now share the same pattern; every default
+stays byte-identical to pre-redesign behavior. Wired into a new `_email_charts()` key,
+`pass_rate_trend_svg`, from `analysis.daily_pass_series(days=60)`.
+
+**A real implementation deviation from the plan text, made and stated rather than silently decided**: the
+plan suggested folding this into KPI Tile 3 (the same slot reserved for the still-dormant health-timeline
+delta). Built instead as its own full-width chart in Zone D, beside the delivery-rate donut. Reasoning: a
+trend line with real axis labels and date ticks needs more room than a 33%-width KPI tile can give without
+becoming unreadable -- a legitimate design tradeoff, not a shortcut. Renders on 27 of 33 real domains (only
+needs 2+ daily points within 60 days, broader than the plan's cited "5 domains with 3+ history points"
+figure, which was policy_history's stricter bar, not daily_pass_series').
+
+**Named validation target confirmed exactly as specified**: aikyamfellows.org shows the pass-rate trend
+chart (real hex colors, real dates) while showing zero occurrences of the newsletter section -- the
+graceful-absence pairing this round's plan called out by name.
+
+**Full visual-consistency pass**: found and fixed one real leftover -- the `risk_warning` callout's border
+was still the pre-redesign `#f3c6c1`, never updated to the new token set in Round 1. Fixed to `#EAC6C1`
+(consistent with the new `bad`/`bad-bg` hue family). Confirmed zero emoji, zero stray old-palette hex,
+zero `Georgia` usage outside the one intentional greeting-line accent, and zero `currentColor`/`var()`
+leftovers in any of the 4 email-used chart functions.
+
+**`.txt` zone-order parity**: confirmed still matches the `.html` zone order exactly (Round 1's reorder
+holds; nothing in Rounds 2-4 touched section order, only added chart-adjacent content to `.html` alone).
+
+**Full-portfolio sweep**: all 33 real domains render both templates with zero errors (re-confirmed twice
+after two transient `database is locked` errors turned out to be the live background scheduler holding a
+write lock on a separate script-opened connection, not a code bug -- resolved with a short retry, the live
+app itself never errored, confirmed via its own request log). Found the real emptiest domain
+(mail.folktaler.com, zero chart/KPI data anywhere) and confirmed it degrades completely cleanly -- the
+whole KPI strip omits itself, no leftover markup, no crash.
+
+**The whole-report Jev checkpoint -- a real, honestly-reported finding, not a clean pass.** Ran the
+complete real `aikyamjobs.org` report (not an isolated sentence) through `audience_fit`, `usefulness`,
+`emotional_resonance`, `honesty_calibration`, `natural_voice`:
+
+| Criterion | Result |
+|---|---|
+| `usefulness` | 3.28/4 -- clearly useful |
+| `emotional_resonance` | 3.05/4 -- clearly makes the reader feel looked after |
+| `audience_fit` | 60% needs_plain_language_pass (borderline, not a clean pass) |
+| `honesty_calibration` | 65% overstates_beyond_the_evidence |
+| `natural_voice` | 95% reads_like_generated_boilerplate |
+
+The two content-quality axes this redesign was actually aiming at (does it feel useful, does it feel
+looked-after) score well. The two prose-voice axes don't. **Investigated rather than shipped blind**: two
+follow-up tests isolated whether this round's own new content was the cause. Removing the new bare
+"Delivered safely: 100%" / "Health score: 84/100" label:value lines from the `.txt` file barely moved
+`honesty_calibration` (65%->62%) and `natural_voice` (95%->96%, no real improvement). Converting the
+ALL-CAPS section headers to title case moved nothing either (95%->97% boilerplate, slightly worse).
+**Conclusion: this is not something Round 5's visual work introduced or can fix.** It reads as a
+whole-document-level property -- individually-approved sentences (each validated in isolation across
+Chapters 1-22) compounding into a templated rhythm only visible when read start-to-finish in one pass,
+which no prior chapter's per-sentence testing methodology could have caught. Per the plan's own framing,
+this is grounds to flag a follow-up chapter, not to abandon the KPI-strip/chart structure this round
+shipped (which the strong `usefulness`/`emotional_resonance` scores validate on its own terms). **This
+finding should be the entry point for resuming the already-paused em-dash/AI-voice prose sweep
+(Chapters 17-19, jev/DECISIONS_LOG.md) the next time general report-prose work is prioritized** -- it's
+the same thread, now with a concrete whole-document reproduction instead of isolated examples.
+
+Service restarted, healthy. No email sent.
+
+## All 5 rounds of the visual/UI redesign — summary
+
+| Round | What | Outcome |
+|---|---|---|
+| 1 | Palette/fonts/scaffolding/5-zone reorg/KPI strip | Shipped (Ch.23) |
+| 2 | `disposition_donut_chart` colors param, delivered-safely ring | Shipped (Ch.24) |
+| 3 | `spam_rate_sparkline`/`metric_trend_chart` colors, 2 trend charts | Shipped (Ch.25) |
+| 4 | Campaign-engagement table bars (new surface, not SVG) | Shipped (Ch.26) |
+| 5 | `pass_rate_sparkline` colors, polish, whole-report checkpoint | Shipped (Ch.27), real finding not fixed |
+
+All 5 rounds shipped real, working content, verified against the full 33-domain real portfolio at every
+step. The one honest gap: the whole-report checkpoint surfaced a real prose-voice issue this round's
+scope couldn't fix, flagged clearly for the next general-content-quality pass rather than ignored or
+force-patched.
+
+---
+
+*(Next entry: whatever the user prioritizes next -- the flagged whole-document natural_voice/
+honesty_calibration finding above, the still-paused general USE_CASES.md sweep, or something new.)*
