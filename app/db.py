@@ -85,6 +85,17 @@ def init_db(conn: sqlite3.Connection) -> None:
         # registries omit it, and "looked up, none found" is a valid answer.
         "country": "TEXT",
     })
+    _ensure_columns(conn, "domain_health_snapshots", {
+        # Real newsletter engagement (unique click rate), added to the health
+        # score's weighted formula 2026-09-24 (jev workflow Chapter 16) -- the
+        # score previously had no engagement component at all, despite the
+        # project's own deliverability research ranking engagement 3rd in what
+        # actually drives inbox placement. Nullable: most domains send no
+        # newsletters, and "no engagement data" must never score as "zero
+        # engagement" (same min-volume-floor discipline as the other
+        # components on this table).
+        "click_rate": "REAL",
+    })
     conn.commit()
 
 

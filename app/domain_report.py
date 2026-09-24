@@ -690,12 +690,12 @@ def _borrowed_identity_detail(conn, domain_id: int):
     if len(parts) == 1:
         acct, msgs, days = parts[0]
         return (f"Right now that's {acct}, which has carried {msgs} of your email{'s' if msgs != 1 else ''} "
-                f"over {_day_phrase(days)}.")
+                f"over {_day_phrase(days)}")
     clauses = [f"{acct}, which has carried {msgs} of your emails over {_day_phrase(days)}"
                for acct, msgs, days in parts]
     return f"Right now, {len(parts)} other accounts are involved: " + ", and ".join(
         [", ".join(clauses[:-1]), clauses[-1]] if len(clauses) > 2 else clauses
-    ) + "."
+    )
 
 
 def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blocklist_real_ips: set = frozenset()):

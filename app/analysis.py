@@ -1990,17 +1990,46 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     if run:
         policy_p, policy_pct = run["p"], run["pct"]
 
+    # Real newsletter engagement (unique-people click rate, not raw click
+    # events -- same fix as _newsletter_reach's, jev/DECISIONS_LOG.md Chapter
+    # 13), same 30-day window as the other components. Clicks over opens:
+    # dmarctool_deliverability_model.md already established clicks are immune
+    # to Apple Mail Privacy Protection's pixel pre-fetch, opens are not.
+    # Benchmarked against the same nonprofit-sector click benchmark
+    # campaign_score.py already grades individual newsletters against, so a
+    # domain sending right at the sector median scores this component ~1.0,
+    # not an arbitrary scale.
+    click_benchmark = float(settings.get("campaign_click_benchmark", 0.033))
+    recent_camps = [c for c in recent_campaigns(conn, domain_id, limit=200)
+                     if c["send_day"] and c["send_day"] >= since_day]
+    eng_delivered = sum(c["delivered"] for c in recent_camps)
+    eng_clicked = sum(c["unique_clickers"] for c in recent_camps)
+    click_rate = eng_clicked / eng_delivered if eng_delivered >= min_volume else None
+
+    # Reweighted 2026-09-24 (jev workflow Chapter 16, jev/DECISIONS_LOG.md):
+    # the original weights put authentication (pass_rate) highest at 40,
+    # despite the project's own deliverability research ranking it 4th --
+    # "cheap, usually one-time ESP config" -- behind spam complaints, bounce
+    # rate, and engagement, and had no engagement component at all. This
+    # reorders the weights to match that already-established research
+    # instead of contradicting it.
     weighted_sum = 0.0
     weight_total = 0.0
     for value, weight, threshold in (
-        (pass_rate, 40, None),
+        (pass_rate, 20, None),
         (postmaster_spam_rate, 25, 0.003),
-        (bounce_rate, 20, 0.05),
-        (complaint_rate, 15, 0.001),
+        (bounce_rate, 25, 0.05),
+        (complaint_rate, 10, 0.001),
+        (click_rate, 20, -click_benchmark),  # negative threshold marks "higher is better, benchmarked"
     ):
         if value is None:
             continue
-        component = value if threshold is None else 1 - min(value / threshold, 1)
+        if threshold is None:
+            component = value
+        elif threshold < 0:
+            component = min(value / -threshold, 1.0)
+        else:
+            component = 1 - min(value / threshold, 1)
         weighted_sum += component * weight
         weight_total += weight
     health_score = (weighted_sum / weight_total) * 100 if weight_total else None
@@ -2008,10 +2037,10 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     conn.execute(
         """INSERT OR IGNORE INTO domain_health_snapshots
            (domain_id, snapshot_date, pass_rate, postmaster_spam_rate, bounce_rate,
-            complaint_rate, policy_p, policy_pct, health_score)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            complaint_rate, policy_p, policy_pct, health_score, click_rate)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (domain_id, today, pass_rate, postmaster_spam_rate, bounce_rate,
-         complaint_rate, policy_p, policy_pct, health_score),
+         complaint_rate, policy_p, policy_pct, health_score, click_rate),
     )
 
 

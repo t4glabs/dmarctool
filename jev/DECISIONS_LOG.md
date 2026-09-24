@@ -718,6 +718,73 @@ rather than fixing report content. A legitimate chapter shape, same as Chapter 1
 
 *(15 chapters in. Tally against the now-106-item checklist: roughly 20 items explicitly closed out
 (fixed or checked-clean) across A/B/C/E/F/G/I/J, D and most of H still real but low-priority given current
-real data availability, plus 6 process/methodology items (101-106) now codified. No fixed cadence for the
-next chapter — pick up whichever section has real, currently-available data when the user asks for the
-next one.)*
+real data availability, plus 6 process/methodology items (101-106) now codified.)*
+
+## 2026-09-24 — the general `USE_CASES.md` sweep is paused; two new priorities
+
+User: "just keep this as a plan for us to do later, do not forget when we discuss pending items please."
+The sequential section-by-section sweep (D, most of H, whatever's left of A/B/C/E/F/G/I/J) is paused, not
+abandoned — resume it when asked. Two new, specific priorities take over from here: (1) audit and improve
+the criteria behind DMARCTool's domain health/"vibe" score, the same Jev-assisted way; (2) audit and fix
+the client email report's prose for AI-generated writing tells (em-dashes, repetitive phrasing), plus
+whatever new sections/details Jev validation surfaces along the way.
+
+## 2026-09-24 — Chapter 16: the domain health/"vibe" score contradicted the project's own research
+
+**Context:** Priority 1. `domain_vibe_verdict()` (`app/verdicts.py`) is literally named "vibe" — the
+one-glance dashboard read of `snapshot_domain_health()`'s composite 0-100 score
+(`app/analysis.py`), which also feeds the client-facing `_health_trend()`/`_health_timeline()` sections of
+the email report ("Your overall email health is X out of 100").
+
+**The real problem, found by reading the formula against already-established project research (no Jev
+needed for this part — a direct internal-consistency check, same method as Chapters 5/7/9/11/13):**
+`dmarctool_deliverability_model.md` already ranks what actually drives inbox placement: (1) spam
+complaint rate — the only hard published limit, (2) bounce rate/list hygiene, (3) engagement — "decides
+inbox vs. Promotions vs. Spam once authentication passes", (4) authentication — explicitly described as
+"cheap, usually one-time ESP config". The actual health-score formula weighted authentication (pass_rate)
+**highest at 40/100**, had Postmaster spam rate at 25, bounce at 20, ESP complaint rate at 15 — and **no
+engagement component at all**. A score shown directly to clients ("your health is X/100") never reflected
+whether anyone actually opened or clicked their mail, and weighted the cheapest, least-informative signal
+heaviest.
+
+**Proposed reweighting**, following the existing research directly rather than inventing new priorities:
+pass_rate 40→20, postmaster spam rate unchanged at 25, bounce rate 20→25, ESP complaint rate 15→10, new
+engagement component (real unique-click rate, using the same fix Chapter 13 applied to `_newsletter_reach`,
+benchmarked against the existing nonprofit-sector `campaign_click_benchmark` setting — clicks over opens
+per that same research: MPP-immune, opens aren't) at weight 20.
+
+**Validated against the real portfolio before shipping** (simulated old vs. new for every domain): most
+domains barely move (many at 100 either way, no engagement data to change them). Two real domains with
+real newsletter data shift substantially: aikyamjobs.org 95.5→83.7, pattic.org 74.3→62.4 — both driven by
+real click-through rates (1.5-1.6%) sitting well below the 3.3% sector benchmark, previously invisible to
+the score entirely. **Presented this exact swing to the user before shipping** (a client-facing number
+changing meaningfully for real domains is a real judgment call, not a bug fix) — user confirmed: "Ship as
+designed."
+
+**A second real problem found while verifying the fix**: `domain_health_snapshots` is idempotent per
+domain per day, so simply shipping the new formula would have produced a next report literally saying
+"your health has slipped from 95 to 84" — comparing a new-formula score against an old-formula prior
+snapshot, which is not a real change in the domain's behavior at all, just a change in how it's measured.
+Confirmed this would have shipped a real, misleading client-facing sentence. Fixed by clearing
+`domain_health_snapshots` entirely (its own docstring already calls it "pure derived history, safe to
+recompute" — every reader in the codebase already handles zero rows gracefully) and letting it rebuild
+fresh under the new formula. Verified: the same two real domains now correctly show the "not enough
+history yet to compare" framing instead of a false regression.
+
+**Shipped in** `app/analysis.py::snapshot_domain_health` (new weights + click_rate component),
+`app/db.py` (new `click_rate` column via the existing `_ensure_columns` migration pattern),
+`app/verdicts.py::domain_vibe_verdict` (tier text now names engagement alongside the signals it already
+named). Verified live against the real portfolio (31 domains), confirmed via `preview_domain_report()`
+that both real shifted domains render correctly. Service restarted, healthy.
+
+**Secondary finding, not chased this round**: ran the new `_health_trend()` sentence through Jev anyway —
+`honesty_calibration` came back only 56% accurately_calibrated (43% overstates) and `usefulness` only
+1.21/4, independent of the reweighting itself. `_health_trend`'s wording ("Overall, your email health is
+{band} -- we score it {score} out of 100") predates this session and wasn't part of what was asked for
+here — folding a rewrite of it into Priority 2 (the report-prose pass) rather than patching it ad hoc.
+
+---
+
+*(Next entry: Priority 2 — the report's prose for AI-generated writing tells. A real bug was already found
+while reading a live report for this: `_borrowed_identity_detail()`'s trailing period plus the template's
+own trailing period produced "...156 days.." — fixed immediately, unrelated to the style audit itself.)*
