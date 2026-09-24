@@ -743,13 +743,24 @@ MIN_CORROBORATED_MSGS = 3
 
 MIN_BORROWED_IDENTITY_DAYS = 5
 
+# A pattern this old is clearly an ongoing setup, not a one-off blip, even at
+# volume too low to trust on its own -- see path (d) below (Chapter 11,
+# jev/DECISIONS_LOG.md). Deliberately much higher than MIN_BORROWED_IDENTITY_DAYS
+# (which only matters paired with high volume): this is the bar for accepting
+# low volume BECAUSE the span is long, so it needs to be unambiguous.
+LONG_SPAN_DAYS = 90
+
 # ESPs commonly dual-sign with their own generic default domain *in addition*
 # to a customer's verified domain (e.g. every Mailgun message also carries a
 # d=mailgun.org signature alongside the customer's own). That's not a
 # meaningful "borrowed identity" to flag on its own -- it's just how the ESP
 # always signs -- so it's excluded here to avoid reporting the same root
 # cause as two separate findings (the real culprit domain still gets one).
-_ESP_DEFAULT_AUTH_DOMAINS = {"mailgun.org", "amazonses.com", "sendgrid.net"}
+# eu.mailgun.org added 2026-09-24 (Chapter 11): confirmed live on
+# aikyamfellows.org's own real data -- the exact same messages that carry a
+# real aikyam.space signature also always carry eu.mailgun.org's, the same
+# dual-sign pattern as the base mailgun.org domain, just for the EU region.
+_ESP_DEFAULT_AUTH_DOMAINS = {"mailgun.org", "eu.mailgun.org", "amazonses.com", "sendgrid.net"}
 
 
 def detect_borrowed_sending_identity(conn, domain_id: int, domain_name: str, settings: dict) -> list:
@@ -836,6 +847,20 @@ def detect_borrowed_sending_identity(conn, domain_id: int, domain_name: str, set
                 basis = (f"Flagged despite the low volume because {acted} message(s) from this source have "
                          f"already been sent to spam or blocked outright, so the damage is measurable "
                          f"rather than hypothetical.")
+            elif span_days >= LONG_SPAN_DAYS and total >= MIN_CORROBORATED_MSGS:
+                # (d) Added 2026-09-24 (Chapter 11, jev/DECISIONS_LOG.md): a
+                # real case sat invisible for 144 real days on aikyamfellows.org
+                # (13 msgs/IP, well under high_vol=20, no corroboration, nothing
+                # ever acted on) because path (a) requires high volume AND a
+                # long span together -- but a pattern this persistent is strong
+                # evidence on its own, the same reasoning path (c) already
+                # applies to measurable harm. Simulated against the whole
+                # portfolio before shipping: only 3 real, clean findings
+                # surfaced at 60/90/120-day span thresholds alike (stable, not
+                # threshold-sensitive), no new noise.
+                basis = (f"Flagged despite the low volume because this pattern has persisted for "
+                         f"{span_days} days without stopping -- long enough that it's clearly an ongoing "
+                         f"setup, not a one-off blip.")
             else:
                 continue
 

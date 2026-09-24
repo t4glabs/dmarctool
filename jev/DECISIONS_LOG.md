@@ -489,6 +489,69 @@ and two items resolved by checking what already exists rather than building some
 
 ---
 
-*(Next entry: Chapter 11 — whether `detect_borrowed_sending_identity`'s thresholds are correctly calibrated
-against aikyamfellows.org's real third-party volume (the G.62 follow-up), which may turn into either a
-threshold fix or a properly-targeted new report section once the underlying detector is trusted.)*
+## 2026-09-24 — Chapter 11: two real bugs found investigating the G.62 follow-up
+
+**Context:** Chapter 10 flagged that `detect_borrowed_sending_identity` hadn't fired for aikyamfellows.org
+despite 18 sources `classify_sources()` marked `third_party`. Investigated all 18 directly against real
+`known_senders` data (user: "yeah aikyamfellows corrections are alright do whatever is right").
+
+**What the 18 sources actually were, once inspected individually — two very different real patterns
+hiding under one number:**
+
+- **16 of 18: Google's own IP range (209.85.x.x), each low-volume (3-13 msgs), 100% signed by
+  `googlegroups.com`, span 0-1 day each.** This is Google Groups mailing-list relay traffic — someone
+  posted/forwarded aikyamfellows.org mail through a Google Group. Correctly stays unflagged: no individual
+  IP has real volume or span, and this is closer in spirit to benign forwarding than a borrowed-identity
+  misconfiguration Aikyam would need to fix. Not touched.
+- **2 of 18 (161.38.204.238, 185.250.239.7): 13 msgs each, 0% pass rate, span 144 DAYS, 100% signed by
+  `aikyam.space`** (a real domain in Aikyam's own tracked portfolio) via `eu.mailgun.org`. A genuinely
+  sustained, real cross-domain identity pattern — running for **144 real days** — invisible to every
+  existing qualifying path: too low volume for path (a) (13 < `high_vol`=20), no cross-domain
+  corroboration for path (b) (this exact (IP, auth_domain) pair appears on no other domain), nothing acted
+  on for path (c).
+
+**Bug 1 — the detector required high volume no matter how long a pattern had persisted.** Path (a) requires
+`total >= high_vol AND span_days >= MIN_BORROWED_IDENTITY_DAYS(5)` — both together. A pattern running 144
+days is arguably STRONGER evidence than a volume spike (the same reasoning path (c) already applies to
+measurable harm: real evidence lowers the volume bar rather than removing it). Added path (d): `span_days
+>= LONG_SPAN_DAYS(90) AND total >= MIN_CORROBORATED_MSGS(3)`. **Simulated against the WHOLE portfolio
+before shipping** at 60/90/120-day thresholds — stable, identical 3 clean real findings at every threshold
+tested (no fragility, no new noise anywhere outside aikyamfellows.org): the 2 aikyam.space IPs, plus a
+third real case (143.55.232.5 -> aikyamjobs.org, 3 msgs, 156 days) that had been sitting invisible on
+aikyamfellows.org too.
+
+**Bug 2, found while confirming Bug 1's fix wouldn't double-report — `_ESP_DEFAULT_AUTH_DOMAINS` was
+missing `eu.mailgun.org`.** The same 2 real IPs/messages also validly sign as `eu.mailgun.org` (Mailgun's
+EU-region default signing domain, dual-signed on every relayed message alongside the customer's own —
+confirmed real: `eu.mailgun.org` signs for exactly 1 domain across the whole portfolio, vs. `mailgun.org`'s
+16, and the identical IPs/messages carry both signatures). Without this, path (d) would have raised TWO
+near-duplicate findings for the same 13 messages (one for `aikyam.space`, one for `eu.mailgun.org`) —
+confusing rather than clarifying. Added `eu.mailgun.org` to the existing ESP-boilerplate exclusion set,
+same reasoning already applied to base `mailgun.org`.
+
+**Shipped in** `app/analysis.py::detect_borrowed_sending_identity` (`LONG_SPAN_DAYS` constant + path (d))
+and `_ESP_DEFAULT_AUTH_DOMAINS`. `borrowed_sending_identity` already had full client-facing infrastructure
+(story, tip, why-it-matters, dashboard label/help/remediation) from before this session — no new report
+wording needed, just a detection gap.
+
+**Verified live:** ran `detect_borrowed_sending_identity` directly against aikyamfellows.org — 2 real,
+correctly-bucketed findings, no `eu.mailgun.org` duplicate. Ran the full `run_analysis()` for real (per the
+established validation pattern) across the whole portfolio — 4 domains total now carry a real
+`borrowed_sending_identity` finding (aikyamfellows.org ×2 collapsed to one client-facing mention, plus the
+2 pre-existing ones on aikyamhq.com/tinybridge.in/catsofkochi.com, unaffected). Confirmed via
+`preview_domain_report()` that aikyamfellows.org's real email report now correctly surfaces this. Service
+restarted, healthy.
+
+**Not chased this round:** the client-facing story text is deliberately generic ("a different website's
+account," never naming which one) and correctly collapses aikyamfellows.org's 2 findings into one mention
+via the existing dedup-by-rendered-text rule — working as designed, not a bug. Whether a MORE specific
+client-facing version (naming which/how-many identities, now that length isn't a constraint per the
+Chapter 10 scope correction) would score higher on usefulness is a real, separate question worth a future
+chapter, not bundled into this one.
+
+---
+
+*(Next entry: Chapter 12 — whether naming specifics (which domain, how many identities) in the
+`borrowed_sending_identity` client story would score higher on usefulness now that length isn't a
+constraint; otherwise, resume the remaining `USE_CASES.md` sections not yet touched (F, H once Listmonk
+unblocks, J).)*
