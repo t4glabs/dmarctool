@@ -927,7 +927,65 @@ work is very likely complete.
 
 ---
 
-*(Next entry: Chapter 20 — a rigorous final pass confirming no real user-facing em-dash strings remain
-unchecked; if confirmed, priority 2 shifts from "remove em-dashes" to auditing for other AI-writing tells
-the user named — overuse of "worth" as a transition, "X, which is exactly Y" constructions — across the
-now-cleaner content library.)*
+## 2026-09-24 — a new standing priority supersedes the em-dash sweep: comprehensive report rebuild
+
+User: "before 20, i would like to make the email report much better... do not think about restricting
+space and content... we will slowly move this report into a pdf format later so whatever we need that time
+can start from now also in the content point... run it with criteria and rules and feed everything to jev
+ai." Standing constraint reaffirmed: no real/test emails, ever.
+
+Went through a full plan-mode research + design cycle (2 Explore agents surveying all 14 dashboard-only
+modules + the current report structure/PDF-readiness, 1 Plan agent designing the build) before touching
+code, given the scale of the ask. Full plan approved by the user and saved at
+`/Users/jinsoraj/.claude/plans/splendid-tumbling-summit.md`. Key conclusions:
+
+- **Keep the foundation, expand don't rebuild.** The current 21-section report structure and its voice/
+  honesty/anti-repetition machinery are mature and validated against 9 real domains across 19 prior
+  chapters — the ask is genuine expansion, not a teardown.
+- **Verdict on all 14 hidden-data modules**: 5 YES (campaign_score reframed, source_classification gated,
+  safe_browsing/display_name/content_scoring detail — all dormant, zero real rows yet but confirmed wired
+  into the real pipeline), 1 DEFER (mta_sts, no real broken record exists), 8 NO (operator-only jargon,
+  already covered elsewhere, shared-infrastructure misattribution risk, or explicitly a PDF-phase-only
+  concern like `charts.py`'s SVG rendering).
+- **Build sequence re-prioritized by real data availability** (not code-pattern simplicity, correcting
+  the Plan agent's initial ordering after checking the live DB directly): `campaign_score.py` and
+  `source_classification.py` have real, substantial data right now; the other three have real, working
+  detectors that simply haven't found anything yet (checked: zero rows, ever, portfolio-wide) — real but
+  dormant, ship later.
+
+## 2026-09-24 — Chapter 20: Round 1 — a real per-campaign standout, not a hidden grade
+
+**Checked real data before designing anything** (per use case 101's own discipline): computed
+`score_campaign()` for all 17 of aikyamjobs.org's real campaigns. Found the one real, differentiating
+signal (engagement vs. the sector benchmark) is **already** what `_newsletter_reach()` reports in
+aggregate — the 6-pillar scorecard's real content substantially overlaps with either `_newsletter_reach`
+itself (complaints/hygiene/engagement) or two already-existing, already-wired categories
+(`campaign_compliance_issue` covers the "technical" pillar; `content_spam_risk`/`subject_spam_risk` cover
+"structure"/"wording"). This reshaped the round: rather than surface a "worst pillar" (redundant), surface
+a **specific, real, named standout send** — something `_newsletter_reach`'s own aggregate blend can never
+show, since it scores PER campaign while the aggregate blends the whole period into one number.
+
+**Real, confirmed spread**: aikyamjobs.org's 17 campaigns scored 83-95 (a real 12-point range, all
+`confidence="high"`) — genuine variation, not noise.
+
+**Design, deliberately conservative**: `_standout_campaign_note()` only speaks up with 2+ high-confidence
+scores AND an 8+ point spread, so a normal, consistent period stays silent rather than manufacturing a
+"standout" out of nothing (same "no filler" discipline as every prior chapter). Never exposes the
+score/grade itself — CONTEXT.md's audience "fears technology" and needs to feel safe, not graded; a
+literal "B" or "83/100" would read as a report card, the opposite of the intended effect.
+
+**Jev-tested before shipping**: baseline (no standout note) scored usefulness 0.48/4; adding the named
+standout moved it to 0.67-0.72/4 depending on phrasing. `audience_fit` stayed strong both ways (83-89%
+clear). `emotional_resonance` stayed near-zero both ways — expected and correct, this is a status update,
+not a trust-building moment.
+
+**Shipped in** `app/domain_report.py::_standout_campaign_note` (new) + `_newsletter_reach` (wired in).
+Verified live: aikyamjobs.org's real report now correctly names 2026-08-11 (its real highest-scoring
+send) as the standout; pattic.org's real 4-campaign period correctly names its own real standout
+(2026-09-12); a 1-campaign period correctly stays silent (the `count >= 2` gate). Service restarted,
+healthy.
+
+---
+
+*(Next entry: Round 2 — source_classification summary, gated on reconciliation against
+borrowed_sending_identity's current findings for the same real sources.)*

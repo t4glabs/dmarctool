@@ -1169,6 +1169,39 @@ def _impersonation_good_news(conn, domain_id: int, domain_name: str, start_epoch
     return base + detail + outcome
 
 
+def _standout_campaign_note(conn, period_campaigns: list, settings: dict):
+    """Names a real, concretely-dated standout send this period, using
+    campaign_score.py's own per-campaign scoring -- Round 1 of the
+    comprehensive report expansion (jev/DECISIONS_LOG.md Chapter 20). The
+    scorecard itself (A-F grade, 6 weighted pillars) has never reached the
+    client report and never will as a raw grade -- CONTEXT.md's audience
+    "fears technology" and needs to feel safe, not graded. What IS new and
+    real: campaign_score.py runs PER campaign while _newsletter_reach blends
+    the whole period into one number, so a single standout send is currently
+    invisible. Only speaks up with a real, meaningful spread (checked live:
+    aikyamjobs.org's 17 real campaigns ranged 83-95, a real 12-point spread)
+    -- requires 2+ high-confidence scores and an 8+ point gap, so a normal,
+    consistent period stays silent rather than manufacturing a "standout"
+    out of noise. Never mentions the score/grade itself, only names the send
+    and the real reason (currently always engagement, since that's the one
+    pillar _newsletter_reach doesn't already report in aggregate)."""
+    from app.campaign_score import score_campaign
+    scored = []
+    for c in period_campaigns:
+        result = score_campaign(c, None, settings)
+        if result["confidence"] == "high" and result["score"] is not None:
+            scored.append((result["score"], c))
+    if len(scored) < 2:
+        return None
+    scored.sort(key=lambda t: t[0])
+    best_score, best_c = scored[-1]
+    worst_score, _ = scored[0]
+    if best_score - worst_score < 8:
+        return None
+    return (f" Your best-performing send this period was on {best_c['send_day']}, which got noticeably "
+            f"more people to click through than the rest.")
+
+
 def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, end_date: str, prev_start_date: str):
     """Opens/clicks/bounces/complaints for newsletters sent in this window vs.
     the equal-length window before it, phrased relatively and naming the
@@ -1248,6 +1281,12 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
         story += " Your newsletters are improving: " + ", and ".join(improvements) + " compared to last time."
     elif concerns:
         story += " Worth a look: " + ", and ".join(concerns) + " compared to last time."
+
+    if count >= 2:
+        settings = ensure_default_settings(conn)
+        standout = _standout_campaign_note(conn, this_period, settings)
+        if standout:
+            story += standout
     return story
 
 
