@@ -1486,10 +1486,14 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     "deliverability": str, "protection": str, "newsletter": str|None,
     "blocklist_good_news": str|None, "protection_tightened": str|None,
     "spam_trend": str|None, "risk_warning": str|None,
-    "contact_cta": str|None, "tips": [str, ...]} -- plain-language sections
-    ready to drop into the email templates. `resolved` items carry a real,
-    computed "impact" clause when a material before/after change was found,
-    else None."""
+    "contact_cta": str|None, "tips": [str, ...],
+    "delivery_rate_pct": int|None, "health_score_value": int|None,
+    "health_timeline_delta": int|None, "health_timeline_since": str|None}
+    -- plain-language sections ready to drop into the email templates, plus
+    the raw numbers the email's KPI strip needs (re-derived from the same
+    locals the prose above uses, never parsed back out of that prose).
+    `resolved` items carry a real, computed "impact" clause when a material
+    before/after change was found, else None."""
     start_str = period_start.strftime("%Y-%m-%d %H:%M:%S")
     end_str = period_end.strftime("%Y-%m-%d %H:%M:%S")
     start_epoch = int(period_start.timestamp())
@@ -1584,6 +1588,21 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     tips = _tips_for_domain(still_open_categories, cadence["irregular"])
     care_ledger = _care_ledger(conn, domain_id)
 
+    # KPI-strip numbers for the email report's stat tiles. Deliberately
+    # re-derived from the same locals the prose above already computed
+    # (rate/total, _latest_health_score) rather than parsed back out of that
+    # prose, so a tile and its matching sentence can never disagree -- same
+    # discipline as every _xxx_detail() helper elsewhere in this file.
+    delivery_rate_pct = round(rate * 100) if total else None
+    health_score_value = _latest_health_score(conn, domain_id)
+    health_score_points = _health_score_trail(conn, domain_id)
+    if health_score_points:
+        health_timeline_delta = health_score_points[-1][1] - health_score_points[0][1]
+        health_timeline_since = health_score_points[0][0]
+    else:
+        health_timeline_delta = None
+        health_timeline_since = None
+
     return {
         "headline": headline,
         "care_ledger": care_ledger,
@@ -1603,6 +1622,10 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "risk_warning": risk_warning,
         "contact_cta": contact_cta,
         "tips": tips,
+        "delivery_rate_pct": delivery_rate_pct,
+        "health_score_value": health_score_value,
+        "health_timeline_delta": health_timeline_delta,
+        "health_timeline_since": health_timeline_since,
     }
 
 
@@ -1662,16 +1685,13 @@ def _why_it_matters(category):
     return _WHY_IT_MATTERS.get(category)
 
 
-def _health_timeline(conn, domain_id: int, min_points: int = 3):
-    """A multi-month view of this domain's OWN health score -- the last score
-    recorded in each calendar month, most recent last -- so improvement is
-    visible as a trajectory, not just a single now-vs-last number. Deliberately
-    dormant until there are at least `min_points` distinct months: with less
-    history it would either duplicate _health_trend() or draw a 'trend' out of
-    two dots, so it simply returns None and the section is omitted. It lights
-    up on its own once the 6-hourly snapshot job has accumulated enough months
-    (as of 2026-08 there was only ~2 weeks of data, so nothing renders yet).
-    Caps at the last 6 months to stay a glanceable one-liner."""
+def _health_score_trail(conn, domain_id: int, min_points: int = 3):
+    """The last health-score snapshot recorded in each calendar month, most
+    recent last, as (month_label, rounded_score) pairs -- or None until there
+    are at least `min_points` distinct months (with less history a 'trend'
+    would be drawn from two dots). Shared by _health_timeline()'s prose and
+    the email report's dormant-until-real KPI trend tile, so both read the
+    exact same underlying months. Caps at the last 6 months."""
     rows = conn.execute(
         """SELECT substr(snapshot_date,1,7) month, health_score, snapshot_date
            FROM domain_health_snapshots
@@ -1685,8 +1705,22 @@ def _health_timeline(conn, domain_id: int, min_points: int = 3):
     if len(rows) < min_points:
         return None
     rows = rows[-6:]
-    points = [(datetime.datetime.strptime(r["month"] + "-01", "%Y-%m-%d").strftime("%b"),
-               round(r["health_score"])) for r in rows]
+    return [(datetime.datetime.strptime(r["month"] + "-01", "%Y-%m-%d").strftime("%b"),
+             round(r["health_score"])) for r in rows]
+
+
+def _health_timeline(conn, domain_id: int, min_points: int = 3):
+    """A multi-month view of this domain's OWN health score -- the last score
+    recorded in each calendar month, most recent last -- so improvement is
+    visible as a trajectory, not just a single now-vs-last number. Deliberately
+    dormant until there are at least `min_points` distinct months: with less
+    history it would either duplicate _health_trend() or draw a 'trend' out of
+    two dots, so it simply returns None and the section is omitted. It lights
+    up on its own once the 6-hourly snapshot job has accumulated enough months
+    (as of 2026-08 there was only ~2 weeks of data, so nothing renders yet)."""
+    points = _health_score_trail(conn, domain_id, min_points)
+    if not points:
+        return None
     trail = ", ".join(f"{name} {score}" for name, score in points)
     first_score, last_score = points[0][1], points[-1][1]
     delta = last_score - first_score
@@ -1701,6 +1735,20 @@ def _health_timeline(conn, domain_id: int, min_points: int = 3):
     return f"Your email health month by month: {trail}. {tail}"
 
 
+def _latest_health_score(conn, domain_id: int):
+    """The single most recent real health-score snapshot (0-100, rounded), or
+    None if none exist yet. Shared by _health_trend()'s prose and the email
+    report's KPI-tile number so the two can never disagree about the same
+    fact."""
+    row = conn.execute(
+        """SELECT health_score FROM domain_health_snapshots
+           WHERE domain_id=? AND health_score IS NOT NULL
+           ORDER BY snapshot_date DESC LIMIT 1""",
+        (domain_id,),
+    ).fetchone()
+    return round(row["health_score"]) if row else None
+
+
 def _health_trend(conn, domain_id: int, period_start):
     """This domain's OWN health score now vs. around the last report -- the
     single most reassuring number available, and the thing a "did it get
@@ -1712,13 +1760,8 @@ def _health_trend(conn, domain_id: int, period_start):
     domain having a hard time it reads as discouraging rather than
     reassuring). Returns None rather than inventing a trend when there isn't
     enough history yet."""
-    latest = conn.execute(
-        """SELECT snapshot_date, health_score FROM domain_health_snapshots
-           WHERE domain_id=? AND health_score IS NOT NULL
-           ORDER BY snapshot_date DESC LIMIT 1""",
-        (domain_id,),
-    ).fetchone()
-    if not latest:
+    score = _latest_health_score(conn, domain_id)
+    if score is None:
         return None
     prior = conn.execute(
         """SELECT health_score FROM domain_health_snapshots
@@ -1727,7 +1770,6 @@ def _health_trend(conn, domain_id: int, period_start):
         (domain_id, period_start.date().isoformat()),
     ).fetchone()
 
-    score = round(latest["health_score"])
     band = ("in good shape" if score >= 80 else
             "holding steady, with room to improve" if score >= 50 else
             "needs some work, and we're on it")

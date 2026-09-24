@@ -1,6 +1,10 @@
 Hi {{ recipient_label }},
 
 Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }} to {{ period_end }}), in plain terms. No technical jargon, just what happened and what we did about it.
+{% if delivery_rate_pct is not none %}
+Delivered safely: {{ delivery_rate_pct }}%{% endif %}{% if health_score_value is not none %}
+Health score: {{ health_score_value }}/100{% endif %}{% if health_timeline_delta is not none %}
+Since {{ health_timeline_since }}: {{ '+' if health_timeline_delta > 0 else '' }}{{ health_timeline_delta }}{% endif %}
 {% if headline %}
 {{ headline }}
 {% endif %}{% if care_ledger %}
@@ -28,11 +32,6 @@ We're already working through all of this, and we'll let you know as each one cl
 {% if contact_cta %}
 {{ contact_cta }}
 {% endif %}{% endif %}
-{%- if list_hygiene %}
-KEEPING YOUR LIST CLEAN
-
-{{ list_hygiene }}.
-{% endif %}
 {%- if not resolved and not still_open %}
 Nothing needed fixing this time, everything's running smoothly.
 {% endif %}
@@ -40,25 +39,31 @@ Nothing needed fixing this time, everything's running smoothly.
 HEADS UP
 {{ risk_warning }}
 {% endif %}
-HOW YOUR EMAILS ARE ARRIVING
+GETTING THROUGH, AND STAYING PROTECTED
+
+How your emails are arriving:
 {{ deliverability }}
 
-PROTECTION FROM FAKE EMAILS
+Protection from fake emails:
 {% if protection_tightened %}{{ protection_tightened }}
 {% endif %}{{ protection }}
 {% if spam_trend %}
-GOOGLE'S OWN VIEW OF YOUR MAIL
+Google's own view of your mail:
 {{ spam_trend }}
+{% endif %}
+{%- if list_hygiene %}
+Keeping your list clean:
+{{ list_hygiene }}.
+{% endif %}
+{%- if impersonation_good_news %}
+{{ impersonation_good_news }}
+{% endif %}
+{%- if blocklist_good_news %}
+{{ blocklist_good_news }}
 {% endif %}
 {%- if newsletter %}
 YOUR NEWSLETTER'S REACH
 {{ newsletter }}
-{% endif %}
-{%- if impersonation_good_news %}
-🛡️ {{ impersonation_good_news }}
-{% endif %}
-{%- if blocklist_good_news %}
-🛡️ {{ blocklist_good_news }}
 {% endif %}
 {%- if tips %}
 TIPS FOR THE NEXT FEW WEEKS

@@ -1084,3 +1084,81 @@ open threads are the paused general `USE_CASES.md` sweep and the paused em-dash/
 
 *(Next entry: resume the paused em-dash sweep, or the paused general USE_CASES.md chapter cadence —
 whichever the user asks for next.)*
+
+## Chapter 23 — Email report visual/UI redesign, Round 1: foundation
+
+New priority, superseding the paused em-dash/USE_CASES threads for now (user: "colors, fonts all
+decision run it through jev ai... dashboard elements, chart elements... should really make my audience
+feel it important and readable"). This is the visual counterpart to the Chapters 20-22 content rebuild —
+same email_report.html/.txt files, tied to the same eventual PDF migration.
+
+**Full plan-mode cycle run first** given the scale: 2 Explore agents (rendering-pipeline/asset inventory +
+real per-domain chartable-data depth) + 1 Plan agent (engineering design), plus live web research on
+email-client rendering constraints. Plan saved at
+`/Users/jinsoraj/.claude/plans/splendid-tumbling-summit.md` (overwritten from the completed Chapter 20-22
+plan — a different task, not a continuation).
+
+**Key finding that shaped everything**: DMARCTool has no public web exposure and Mailgun's send API has
+no `cid:` inline-attachment path, so any real chart must be inline `<svg>` markup, never an `<img>`. This
+is exactly what `app/charts.py`'s 9 existing SVG functions already produce, just wired for the dashboard's
+live CSS (`currentColor`/`var(--ok)`) — which won't survive an emailed HTML file. Real per-domain data is
+uneven: richest is `mailgun_daily_stats` (76-105 daily points, 5-7 domains) and current-period DMARC
+totals (broadest — works for any domain with any report data this period); narrowest is `ses_campaigns`
+newsletter engagement (only aikyamjobs.org and pattic.org have any). `domain_health_snapshots` (the
+0-100 score) is dormant for trend purposes right now — only 1 row/domain, the table was cleared during
+the recent scoring-formula change (Chapter 16) — so no health-score trend chart this round.
+
+**An honest scope-setting note stated plainly to the user before building**: Jev is a text-only judgment
+model, it cannot see pixels/colors/rendered layout. It validates wording (new labels/captions) and
+higher-level emotional-framing questions posed in words — color/type/layout craft itself is applied
+design judgment informed by the existing brand system + accessibility research, not something Jev
+directly reviews.
+
+**Round 1 shipped**: full palette/font token swap (literal hex reusing the *original* `style.css` brand
+tokens, not `client_report.html`'s already-drifted copy — warm cream `#FBF7F4`, ink `#1F2421`, brand
+purple `#7358B3` accent, flattened `rgba()` tints to solid hex for Outlook.com/Android-Gmail
+compatibility); web-safe font stack (`Helvetica Neue`/Arial body, one Georgia-serif display moment on the
+greeting line only — custom webfonts render in only ~51% of opens per live research, so no `@font-face`
+anywhere); table-based scaffolding replacing the old flat `<div>` card (`<table role="presentation">` +
+`bgcolor` attributes, not just CSS `background`, since Outlook honors the attribute more reliably);
+`<meta name="color-scheme"/"supported-color-schemes" content="light">` to force light mode, matching
+`client_report.html`'s own precedent of not following system dark mode; a new KPI stat-tile strip
+(delivery-rate %, health-score /100, both fed from the same locals the existing prose already computes —
+`delivery_rate_pct`/`health_score_value` — never parsed back out of that prose); a 5-zone reorg merging
+the 18 existing context keys with 2 real moves (`risk_warning` now sits after `still_open` as an
+escalation of the action ledger, not orphaned between `list_hygiene`/`deliverability`; `list_hygiene`
+moved into the new merged "Getting through, and staying protected" zone alongside `deliverability`,
+`protection`, and `spam_trend`, replacing 3 separately-emoji-headed sections with 1); all emoji section
+markers dropped in favor of small uppercase eyebrow-style labels (matching `client_report.html`'s own
+brand pattern).
+
+**Jev-tested (the one new sentence this round introduces)**: the merged Zone-D heading. 3 candidates
+tested with `audience_fit`+`natural_voice`: "How your emails are arriving & staying protected" (91%
+clear/84% person), "Delivery and protection, together" (85%/83%), and the winner, **"Getting through, and
+staying protected"** (92% clear_as_is, 88% reads_like_a_person) — shipped. Nothing else in this round
+changes wording, so nothing else needed a Jev pass, per the plan's explicit per-round scoping (stated
+rather than defaulting to "run everything through Jev" when there's no new prose).
+
+**Code changes**: `app/domain_report.py` gained `_latest_health_score()` and `_health_score_trail()`, both
+extracted from `_health_trend()`/`_health_timeline()`'s own inline queries (re-derive, don't duplicate —
+the same discipline as every `_xxx_detail()` helper) so the KPI tiles and the existing prose sentences can
+never disagree about the same underlying fact. `build_domain_report()` now also returns
+`delivery_rate_pct`, `health_score_value`, `health_timeline_delta`, `health_timeline_since` — the last
+two stay `None` portfolio-wide right now (same dormant-but-wired precedent as the Chapter 20-22 rounds),
+lighting up a 3rd KPI tile automatically once `domain_health_snapshots` accumulates 3+ months.
+
+**Verified against real data**: all 33 real domains in the portfolio rendered both `email_report.html` and
+`email_report.txt` with zero Jinja errors. Live HTTP checks (200 OK) via `/domain/{name}/report_preview`
+on aikyamjobs.org (richest — confirmed 100% delivered / 84/100 health tiles, correct 2-tile 50/50 width
+since the 3rd tile is absent, merged Zone D correctly shows all 3 sub-labels, `still_open` correctly
+precedes the now-absent-for-this-domain `risk_warning` slot), pattic.org, aikyamfellows.org (longest
+history), and aikyamsolve.org (the "nothing needed fixing" fallback path, confirmed still renders).
+No real domain currently has `risk_warning` active, so the reordered position couldn't be visually
+confirmed live this round — structurally verified in the template instead (correctly the last block in
+Zone C, before Zone D opens).
+
+Service restarted, healthy. No email sent or triggered.
+
+---
+
+*(Next entry: Round 2 — the delivered-safely ring, the first real chart in the email report.)*
