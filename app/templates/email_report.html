@@ -62,9 +62,10 @@
         <h2 style="font-size:16px; color:#9a6700; margin:0 0 10px 0;">👀 What we're still working on</h2>
         <ul style="font-size:15px; line-height:1.6; padding-left:20px; margin:0;">
           {% for item in still_open %}
-          <li style="margin-bottom:10px;">{{ item.story[0]|upper }}{{ item.story[1:] }}.{% if item.detail %} {{ item.detail }}.{% endif %}{% if item.why %} <span style="color:#555555;">{{ item.why }}</span>{% endif %}{% if item.history %} <span style="color:#555555;">{{ item.history }}</span>{% endif %} <strong>We're on it</strong>, and we'll tell you when it's done.</li>
+          <li style="margin-bottom:10px;">{{ item.story[0]|upper }}{{ item.story[1:] }}.{% if item.detail %} {{ item.detail }}.{% endif %}{% if item.why %} <span style="color:#555555;">{{ item.why }}</span>{% endif %}{% if item.history %} <span style="color:#555555;">{{ item.history }}</span>{% endif %}</li>
           {% endfor %}
         </ul>
+        <p style="font-size:15px; line-height:1.6; margin:12px 0 0 0;">We're already working through all of this, and we'll let you know as each one clears.</p>
         {% if contact_cta %}
         <p style="font-size:15px; line-height:1.6; margin:12px 0 0 0;">{{ contact_cta }}</p>
         {% endif %}
@@ -139,10 +140,6 @@
           {% endfor %}
         </ul>
       </div>
-      {% endif %}
-
-      {% if still_open %}
-      <p style="font-size:15px; line-height:1.6; margin:0 0 24px 0;">Whatever needs fixing here, aikyam will make sure it gets sorted properly. You don't have to solve this alone.</p>
       {% endif %}
 
       <p style="font-size:15px; line-height:1.6; margin:24px 0 0 0;">

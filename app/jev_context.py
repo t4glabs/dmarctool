@@ -141,6 +141,18 @@ CRITERIA = {
             "not_applicable_this_is_status_not_advice": "This is a status update, not advice -- actionability doesn't apply.",
         },
     },
+    "natural_voice": {
+        "type": "choice",
+        "instructions": (
+            "Does this read like a real person who knows this specific reader personally wrote it, or "
+            "like generated boilerplate -- heavy em-dashes, 'X -- which is exactly Y' constructions, "
+            "repeated stock phrases, overuse of the word 'worth' as a transition?"
+        ),
+        "criteria": {
+            "reads_like_a_person": "Natural sentence rhythm, no AI-writing tells.",
+            "reads_like_generated_boilerplate": "Has the tell-tale rhythm/punctuation/phrasing of AI-generated text.",
+        },
+    },
 }
 
 

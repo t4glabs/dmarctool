@@ -54,8 +54,13 @@ _PROBLEM_STORY = {
     # confidence only 0.36): it never actually says what was wrong. Rewritten
     # to name that the setting's CURRENT value differs from the expected one,
     # without using the underlying jargon term.
-    "dns_drift": ("the protective setting that decides what happens to a fake email pretending to be you is "
-                   "currently different from what we expect it to say -- either something changed it, or it's "
+    # Rewritten again 2026-09-24 (jev workflow, priority 2 -- report prose
+    # style): the "-- either X, or it's Y" construction is a real AI-writing
+    # tell, confirmed by the new natural_voice criterion (jev/CRITERIA.md):
+    # 74% reads_like_generated_boilerplate on the em-dash version, down to
+    # 52% split into two plain sentences with no em-dash.
+    "dns_drift": ("right now, the protective setting that decides what happens to a fake email pretending "
+                   "to be you doesn't match what we expect. Something may have changed it, or it just "
                    "drifted out of sync with what we're tracking"),
     "dns_policy_weakened": ("your protection against fake emails using your name got weaker recently, not just "
                              "out of date on our end -- someone or something actually changed a setting on your "
@@ -353,7 +358,12 @@ def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as
             as_of_dt = datetime.datetime.strptime(as_of_str, "%Y-%m-%d %H:%M:%S")
             if (as_of_dt - first_dt).days >= 30:
                 first_month = first_dt.strftime("%B")
-                return f"This has been open since {first_month} -- still on our list, not forgotten."
+                # Reworded 2026-09-24 (jev workflow, priority 2): the em-dash
+                # version tested fine in isolation but "not forgotten" is a
+                # phrase you'd defend against an accusation nobody made --
+                # natural_voice scored the plain restatement below higher
+                # (90% reads_like_a_person vs. 80%).
+                return f"We've known about this since {first_month}, and it hasn't slipped off our list."
         return None
     first_month = datetime.datetime.strptime(days[0], "%Y-%m-%d").strftime("%B")
     phrase = _times_phrase(len(days))
@@ -476,7 +486,10 @@ def _explain_policy_for_owner(p: str, pct, unchanged_since_before_period: bool =
             f"suspicious emails pretending to be you get {verb}, and we're keeping a close eye on the rest "
             f"before turning the lock up further. That way we never accidentally block your own real mail.")
     if unchanged_since_before_period:
-        base += " Same level as last time -- still watching before raising it further."
+        # Reworded 2026-09-24 (jev workflow, priority 2): natural_voice
+        # scored a same-level-as-last-time em-dash fragment worse than this
+        # woven-together version (65% reads_like_a_person vs. 47%).
+        base += " It has stayed at that level since last time, while we keep watching before turning it up further."
     return base
 
 
@@ -1477,20 +1490,26 @@ def _health_trend(conn, domain_id: int, period_start):
     band = ("in good shape" if score >= 80 else
             "holding steady, with room to improve" if score >= 50 else
             "needs some work, and we're on it")
+    # Em-dashes removed from all 4 branches 2026-09-24 (jev workflow,
+    # priority 2: report prose style) -- natural_voice moved the "steady"
+    # branch from 97% to 69% reads_like_generated_boilerplate. Usefulness
+    # stayed low even after (~1/4) regardless of the dash -- a deeper
+    # rewrite of this whole framing is flagged in jev/DECISIONS_LOG.md
+    # Chapter 16 as a follow-up, not solved here.
     if not prior or prior["health_score"] is None:
-        return (f"Overall, your email health is {band} -- we score it {score} out of 100. "
-                f"We'll show you how this moves each time, so you can see progress rather than take our word for it.")
+        return (f"Overall, your email health is {band}, scoring {score} out of 100 right now. "
+                f"We'll show you how this moves each cycle, so you can see progress rather than take our word for it.")
 
     before = round(prior["health_score"])
     delta = score - before
     if delta >= 3:
-        return (f"Your overall email health has improved since the last update -- from {before} to {score} out of "
+        return (f"Your overall email health has improved since the last update, from {before} to {score} out of "
                 f"100. That's real progress, and it's the direct result of the fixes below.")
     if delta <= -3:
-        return (f"Your overall email health has slipped a little since the last update -- from {before} to {score} "
+        return (f"Your overall email health has slipped a little since the last update, from {before} to {score} "
                 f"out of 100. Nothing here is alarming, and the items below are what we're working through.")
-    return (f"Your overall email health is steady at {score} out of 100, about the same as last time -- which is "
-            f"exactly what you want between updates.")
+    return (f"Your overall email health is steady at {score} out of 100, about the same as last time. "
+            f"That's exactly what you want between updates.")
 
 
 def _coverage_expansion_note(conn, domain_id: int, start_str: str, end_str: str):

@@ -785,6 +785,59 @@ here — folding a rewrite of it into Priority 2 (the report-prose pass) rather 
 
 ---
 
-*(Next entry: Priority 2 — the report's prose for AI-generated writing tells. A real bug was already found
-while reading a live report for this: `_borrowed_identity_detail()`'s trailing period plus the template's
-own trailing period produced "...156 days.." — fixed immediately, unrelated to the style audit itself.)*
+## 2026-09-24 — Chapter 17: report prose, first pass — the worst repetition tell, plus 4 em-dash fixes
+
+**Context:** Priority 2. First real bug found immediately while reading a live report for this (unrelated
+to style): `_borrowed_identity_detail()` (Chapter 12) returns a string already ending in a period, and the
+template also appends one, producing "...156 days..". Fixed in `app/domain_report.py`.
+
+**New criterion added**: `natural_voice` (`jev/CRITERIA.md` #8, `app/jev_context.py`) — Choice,
+`reads_like_a_person` / `reads_like_generated_boilerplate`. Distinct from `audience_fit` (jargon/complexity,
+not style) and `repetition_risk` (same fact across cycles, not the same phrase within one read).
+
+**The single worst finding: "We're on it, and we'll tell you when it's done." appeared 4 times, verbatim,
+back to back**, in a real aikyamfellows.org report — once per still-open item. Tested: `natural_voice` 87%
+`reads_like_generated_boilerplate`, `repetition_risk` 98% `reads_as_boilerplate`. The single most
+noticeable "templated" tell found in the whole report. **Fixed in the two EMAIL report templates**
+(`email_report.txt`/`.html`, the actual deliverable per the user's standing scope instruction): removed the
+per-item trailer, replaced with one consolidated sentence after the whole list ("We're already working
+through all of this, and we'll let you know as each one clears."). Also removed a second, now-redundant
+hardcoded reassurance paragraph ("Whatever needs fixing here, aikyam will make sure it gets sorted
+properly...") that repeated the same sentiment again near the closing. Verified: `repetition_risk` dropped
+from 98% to 23% on the real fixed section. `client_report.html` (the interactive view) has its own
+milder version of the same pattern ("We're on it.") — left untouched, per the user's standing instruction
+not to invest further effort there.
+
+**Four individual em-dash rewrites, each tested old vs. new before shipping:**
+- `dns_drift`'s story ("...currently different from what we expect it to say -- either X, or it's Y"):
+  74%→52% `reads_like_generated_boilerplate`. Split into two plain sentences.
+- The still-open duration note ("...open since {month} -- still on our list, not forgotten"): tested 3
+  variants; "We've known about this since {month}, and it hasn't slipped off our list" won (90% vs. 80%
+  `reads_like_a_person`) — also drops "not forgotten," a phrase that defends against an accusation nobody
+  made.
+- The policy-unchanged line ("Same level as last time -- still watching before raising it further"): a
+  naive split (just replacing the dash with a comma) scored WORSE (61% vs. 53% boilerplate) — the fix that
+  actually worked wove it into one sentence instead: "It has stayed at that level since last time, while we
+  keep watching before turning it up further" (65% `reads_like_a_person`). Real lesson: removing the
+  em-dash mechanically isn't the fix by itself; the sentence needs to actually flow.
+- `_health_trend()`'s 4 branches (all had an em-dash): dashes removed from all 4. The "steady" branch
+  moved 97%→69% `reads_like_generated_boilerplate`, the clearest single win. `usefulness` stayed low
+  (~1/4) regardless of the dash — a deeper rewrite of this sentence's whole framing is flagged as a
+  follow-up, not solved this round (already noted as a Chapter 16 secondary finding).
+
+**Scope, stated plainly:** `app/domain_report.py` has ~149 occurrences of "--" across its story/tip/why
+text. This chapter fixed the highest-impact ones (everything that rendered in the one real report used for
+testing, plus the worst repetition tell found in it). ~145 remain across dozens of other strings not yet
+tested — this is genuinely a multi-chapter effort, not something to claim finished after one pass.
+
+**Shipped in** `app/domain_report.py`, `app/templates/email_report.txt`, `app/templates/email_report.html`,
+`app/templates/client_report.html` (only for the shared trailer-repetition bug fix — not otherwise touched,
+per the user's standing instruction to focus on the email report and not invest further in the interactive
+view), `jev/CRITERIA.md`, `app/jev_context.py`. Verified live against aikyamfellows.org's real report,
+full before/after read. Service restarted, healthy.
+
+---
+
+*(Next entry: Chapter 18 — continue the em-dash/AI-voice sweep through the rest of `_PROBLEM_STORY`/
+`_TIP_LIBRARY`/`_WHY_IT_MATTERS`, prioritizing whichever strings render in other real, currently-open
+reports next.)*

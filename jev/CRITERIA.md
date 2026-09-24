@@ -82,11 +82,22 @@ vagueness instead. This is a known gap in the criterion's phrasing, not a real c
 reflexively rewrite an intentionally-passive tip based on this score alone; check whether the tip is
 supposed to name a reader action before treating a low `actionability` score as a finding.
 
+## 8. `natural_voice` (Choice) — added Chapter 17, priority 2 (report prose style)
+**Question:** Does this read like a real person who knows this reader personally wrote it, or like
+generated boilerplate (heavy em-dashes, "X -- which is exactly Y" constructions, repeated stock phrases,
+overuse of "worth")?
+**Options:** `reads_like_a_person` / `reads_like_generated_boilerplate`
+**Ties back to:** the user's own instruction (2026-09-24): "it has too much ai written format especially
+emdashes and ai kind of style." Distinct from `audience_fit` (which is about jargon/complexity, not
+about STYLE/voice) and `repetition_risk` (which is about the same fact repeating cycle-to-cycle, not the
+same phrase repeating within a single read). A sentence can be perfectly plain-language and non-repetitive
+across cycles while still reading as templated/robotic within one report.
+
 ## How these map to Jev's three primitives
 
 - **Noul** — binary risk flags, cheapest/fastest: `contradiction_check`.
 - **Choice** — categorical judgment with calibrated confidence: `audience_fit`, `repetition_risk`,
-  `honesty_calibration`, `actionability`.
+  `honesty_calibration`, `actionability`, `natural_voice`.
 - **Score** — where a continuum genuinely exists: `usefulness`, `emotional_resonance`.
 
 ## What Jev is never asked to do
