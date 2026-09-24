@@ -2144,8 +2144,14 @@ def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_
     if disp_none + disp_quarantine + disp_reject > 0:
         pass_rate_donut_svg = charts.disposition_donut_chart(
             disp_none, disp_quarantine, disp_reject, width=110, height=110, colors=_EMAIL_CHART_COLORS)
+        # 40x40 triggers disposition_donut_chart's compact mode (no center
+        # text -- a fixed 64x64 version used to try to fit "100%" + "delivered"
+        # inside the donut hole and visually collided with the ring stroke,
+        # a real UI bug found after shipping). The KPI tile shows the
+        # percentage as separate HTML text next to this ring instead, sized
+        # to match KPI Tile 2's number exactly.
         pass_rate_donut_svg_small = charts.disposition_donut_chart(
-            disp_none, disp_quarantine, disp_reject, width=64, height=64, colors=_EMAIL_CHART_COLORS)
+            disp_none, disp_quarantine, disp_reject, width=40, height=40, colors=_EMAIL_CHART_COLORS)
     else:
         pass_rate_donut_svg = None
         pass_rate_donut_svg_small = None

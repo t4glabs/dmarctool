@@ -1366,3 +1366,36 @@ force-patched.
 
 *(Next entry: whatever the user prioritizes next -- the flagged whole-document natural_voice/
 honesty_calibration finding above, the still-paused general USE_CASES.md sweep, or something new.)*
+
+## Chapter 28 — Post-ship bug fix: the mini delivered-safely ring collided with its own text
+
+User caught this live, in a real sent-eligible report, right after Chapter 27 shipped: "that circle just
+covers the text and number written under it and also not aligned with the health score card."
+
+**Root cause**: `disposition_donut_chart`'s 64x64 KPI-tile version (Chapter 24) put a 16px bold percentage
+and a 10px sublabel INSIDE the ring's own hole, same as the working 110px Zone D version -- but at 64px
+the donut's inner hole (computed from the same fixed stroke-fraction geometry) isn't wide enough for that
+fixed-size text, so "100%" visually overran the ring's stroke on both sides. The 110px version never had
+this problem because its larger hole comfortably fits the same fixed-size text -- the bug only existed at
+the smaller size, which is exactly why the full-portfolio Jinja-error sweeps in Chapters 24-27 never
+caught it (nothing crashes; it's a pure visual collision, invisible to an automated render check that
+doesn't look at the actual pixels).
+
+**Fix, matching an existing codebase precedent**: `health_score_sparkline` already has a `compact = height
+< 90` mode that drops axis text entirely rather than shrinking it (documented reasoning: fixed-size text
+doesn't scale gracefully, dropping it is more reliable than resizing it). Added the identical pattern to
+`disposition_donut_chart` -- below 90px tall, both center-text elements are omitted entirely, leaving a
+clean ring with no risk of text collision at any size. The KPI tile's ring shrunk from 64x64 to 40x40
+(now a pure icon, no embedded text) and the percentage moved to sit beside it as separate HTML text at
+the exact same 24px/700-weight style KPI Tile 2's health-score number already uses -- which also directly
+fixes the alignment complaint, since both tiles now share identical typography and vertical structure
+(one label line, one content line) rather than one tile being an SVG-with-embedded-text and the other
+being plain HTML text at a different implicit size.
+
+Verified against the full real portfolio (zero Jinja errors), confirmed live on aikyamjobs.org: the ring
+renders with no center text at all, "100%" renders as a properly-sized number beside it. Service
+restarted, healthy. No email sent.
+
+---
+
+*(Next entry: whatever the user prioritizes next.)*

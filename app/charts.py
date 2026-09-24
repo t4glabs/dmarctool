@@ -337,7 +337,16 @@ def disposition_donut_chart(pass_count: int, quarantine_count: int, reject_count
     "warn"/"bad"/"muted". Text labels also switch from CSS classes to inline
     styles in that case, since email clients don't reliably load a <style>
     block in <head>. Default (None) is byte-identical to the pre-existing
-    behavior, so every dashboard/client_report.html call site is untouched."""
+    behavior, so every dashboard/client_report.html call site is untouched.
+
+    Below ~90px tall this switches to a compact mode with no center text at
+    all -- same "drop text, don't just shrink it" precedent as
+    health_score_sparkline's own compact mode. At small sizes the donut hole
+    isn't wide enough for the fixed-size percentage/sublabel text without it
+    visually colliding with the ring stroke itself; callers needing the
+    number at this size should show it as separate HTML text next to the
+    ring instead."""
+    compact = height < 90
     total = pass_count + quarantine_count + reject_count
     cx, cy = width / 2, height / 2
     # stroke_w is a fraction of r, so the ring's OUTER edge is r + stroke_w/2,
@@ -361,10 +370,10 @@ def disposition_donut_chart(pass_count: int, quarantine_count: int, reject_count
     sublabel_attr = f'style="font-size:10px; fill:{muted_c};"' if colors else 'class="donut-center-sublabel"'
 
     if total <= 0:
+        no_data_text = "" if compact else f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" {sublabel_attr}>no data</text>'
         return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">'
                 f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="{ink}" '
-                f'stroke-opacity="0.15" stroke-width="{stroke_w:.1f}"/>'
-                f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" {sublabel_attr}>no data</text></svg>')
+                f'stroke-opacity="0.15" stroke-width="{stroke_w:.1f}"/>{no_data_text}</svg>')
 
     segments = [
         (pass_count, ok_c, "delivered"),
@@ -387,10 +396,13 @@ def disposition_donut_chart(pass_count: int, quarantine_count: int, reject_count
         cumulative += length
 
     pass_rate = pass_count / total
+    center_text = "" if compact else (
+        f'<text x="{cx}" y="{cy - 2}" text-anchor="middle" {label_attr}>{pass_rate:.0%}</text>'
+        f'<text x="{cx}" y="{cy + 15}" text-anchor="middle" {sublabel_attr}>delivered</text>'
+    )
     return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
   {''.join(arcs)}
-  <text x="{cx}" y="{cy - 2}" text-anchor="middle" {label_attr}>{pass_rate:.0%}</text>
-  <text x="{cx}" y="{cy + 15}" text-anchor="middle" {sublabel_attr}>delivered</text>
+  {center_text}
 </svg>'''
 
 
