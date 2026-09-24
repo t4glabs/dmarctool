@@ -678,5 +678,46 @@ round.
 
 ---
 
-*(Next entry: Chapter 15 — section J (cross-report/portfolio-wide consistency), deferred from this
-chapter.)*
+## 2026-09-24 — Chapter 15: section J, and a self-audit closing out the original 100
+
+**J.91 (same category, two real domains, same cycle — consistency check):** `spf_missing` fires on both
+tinkerhub.org and olimalarfoundation.org right now (from Chapter 9). Pulled both real rendered still-open
+items directly: byte-for-byte identical story/why, no `detail` on either (consistent — `spf_missing` has no
+dedicated detail generator, unlike `borrowed_sending_identity` now does). Checked clean, no fix needed.
+
+**J.98 (quiet-cycle report shape):** Found 5 real domains with a genuinely empty cycle (nothing open,
+nothing resolved) and read one full real report front to back (aikyamsolve.org). The existing
+"omit empty sections rather than pad them" discipline already produces a coherent, non-awkward shape —
+no "TIPS FOR THE NEXT FEW WEEKS" heading over nothing, no still-open/resolved headers with nothing under
+them. Checked clean; this use case's underlying worry ("does the full template read badly when nothing's
+there") turned out to already be handled correctly by rules built in earlier sessions.
+
+**J.100 — the real work of this chapter: a self-audit of `USE_CASES.md` against 14 real chapters.**
+Went through every chapter's actual findings looking for RECURRING techniques that produced real value but
+were never written down as their own checklist item. Found six, added as a new addendum section (101-106,
+`jev/USE_CASES.md`) rather than renumbering into the original 100 (kept as a stable historical reference):
+
+101. Check the real code path directly before testing wording — the single most valuable technique of
+     the whole audit (Chapters 5, 7, 9, 11, 13).
+102. Audit a category's dashboard-facing completeness (label/help/priority-order), not just its report
+     story, whenever wiring up a category (Chapters 7, 9).
+103. Audit gating SETS for internal consistency against their own stated reasoning, not just whether one
+     addition is individually justified (Chapter 14).
+104. Simulate a detection-logic/threshold change against the WHOLE portfolio before shipping (Chapters 9,
+     11) — distinct from F/J's wording-focused checks.
+105. Before trusting a low Jev score, check whether the criterion can even meaningfully judge this content
+     (Chapters 8, 14's scope caveats).
+106. Verify a memory note that says something is "blocked" before working around or skipping it — an
+     entire section (H) sat unaudited for 12 chapters on a stale assumption (Chapter 13).
+
+**Shipped this chapter:** `jev/USE_CASES.md` only (the addendum). No `app/` changes — every content check
+came back clean, and this chapter's real value was closing the loop on the workflow's own documentation
+rather than fixing report content. A legitimate chapter shape, same as Chapter 10's research round.
+
+---
+
+*(15 chapters in. Tally against the now-106-item checklist: roughly 20 items explicitly closed out
+(fixed or checked-clean) across A/B/C/E/F/G/I/J, D and most of H still real but low-priority given current
+real data availability, plus 6 process/methodology items (101-106) now codified. No fixed cadence for the
+next chapter — pick up whichever section has real, currently-available data when the user asks for the
+next one.)*

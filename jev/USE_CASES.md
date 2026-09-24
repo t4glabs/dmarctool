@@ -245,3 +245,47 @@ rather than deciding on judgment alone. Grouped by area; numbered for reference 
 100. Does this very use-case list itself get periodically re-validated against real report content as
     the tool grows — are there real decision points made in the last few sessions that aren't yet
     represented here, and should be added?
+
+## Addendum — patterns found in practice (added Chapter 15, answering use case 100)
+
+Chapters 1-14 surfaced real, recurring techniques that produced genuine findings but weren't captured as
+their own checklist items above. Documented here rather than renumbered into 1-100, so the original list
+stays a stable historical reference and this addendum can keep growing as new patterns prove out.
+
+101. **Check the real code path directly before testing any wording.** The single most valuable technique
+    of the whole audit — structural/logic bugs found this way, with zero or secondary Jev involvement:
+    Chapter 5 (`_health_comparison` contradicted the report's own stated philosophy), Chapter 7 (a
+    Postmaster requirement key that could never match Google's real API string), Chapter 9 (`spf_missing`
+    and `spf_lookup_limit` sharing one category for two different real problems), Chapter 11 (a detection
+    threshold that required high volume no matter how long a pattern had persisted), Chapter 13 (raw event
+    counts vs. real people, inflating engagement up to ~4x). None of these were found by running content
+    through the checklist — Jev judges wording quality once the underlying fact is already right; it
+    doesn't verify the fact itself (confirmed explicitly in Chapters 9, 11, 13's "why this wasn't a Jev
+    finding" notes). Before testing a sentence's wording, check what the code that generates its inputs
+    actually computes, on real data.
+102. **Audit a category's dashboard-facing completeness (label/help/priority-order), not just its
+    report-facing story, whenever wiring up or re-wiring a category.** Chapters 7 and 9 both found a
+    category with a fully-built `CATEGORY_REMEDIATION` but a missing `CATEGORY_LABELS`/`CATEGORY_HELP`/
+    `CATEGORY_PRIORITY_ORDER` entry — half-finished infrastructure that's easy to miss because the report
+    still renders fine; only the dashboard side was incomplete.
+103. **Audit gating SETS (`_URGENT_STILL_OPEN_CATEGORIES`, `_OPERATOR_ONLY_CATEGORIES`,
+    `_RESOLVED_EXCLUDED_CATEGORIES`, etc.) for internal consistency against their own stated reasoning,
+    not just whether one category's inclusion is individually justified.** Chapter 14's finding: two
+    categories sharing the exact reasoning already used to justify their siblings' inclusion were simply
+    missing from the set — an omission, not a wrong judgment call. Worth a periodic sweep of each gating
+    set against its own comment.
+104. **Simulate a detection-logic or threshold change against the WHOLE portfolio before shipping it, not
+    just the domain that prompted the question.** Distinct from F/J's wording-focused checks — this is
+    specifically for changes to the CONDITIONS under which a category fires. Chapters 9 and 11 both did
+    this (checking every domain's real data at several candidate threshold values) before shipping, and it
+    caught stability (or the lack of new noise) that a single-domain test couldn't have shown.
+105. **Before trusting a low Jev score, check whether the criterion can even meaningfully judge this
+    content.** Two real cases where a low score was correctly NOT treated as a finding: Chapter 8
+    (`audience_fit`/`emotional_resonance` don't generalize to operator-only dashboard copy, which is
+    supposed to be technical) and Chapter 14 (`actionability` can't distinguish "intentionally nothing for
+    the reader to do" from "vague"). Both are now documented as scope caveats in `CRITERIA.md` itself —
+    check there before assuming a low score means the content needs to change.
+106. **When a memory note says something is "blocked," verify it before working around it or skipping the
+    work.** Chapter 13: a Listmonk integration noted as blocked on a token-permission grant had, at some
+    point, actually started working — the note was simply never updated. An entire `USE_CASES.md` section
+    (H) sat unaudited for 12 chapters on a stale assumption. Cheap to check, expensive to keep assuming.
