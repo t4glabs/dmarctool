@@ -1245,3 +1245,36 @@ the plan's explicit validation target for this case). Service restarted, healthy
 
 *(Next entry: Round 4 — the campaign-engagement table bars, the one genuinely new visual surface in this
 redesign.)*
+
+## Chapter 26 — Email report visual/UI redesign, Round 4: campaign-engagement bars
+
+The one genuinely new visual surface in this redesign -- deliberately table-`<td bgcolor>` bars, not a new
+untested SVG shape, per the plan's own reasoning: this is new content with real rendering risk, and
+table-bars are the decades-proven ESP-standard technique for in-email progress bars, degrading to "a
+table with a colored cell and a number" in the most hostile clients rather than a silent blank box.
+
+**Re-derive, don't duplicate, applied one more time**: `_newsletter_reach()`'s rate math used to live in a
+nested `_rates()` closure, invisible outside that function. Extracted to a module-level `_newsletter_rates()`
+(pure computation, no I/O) and a new `_newsletter_engagement_bars()` that calls it against the same
+`this_period` campaign rows `_newsletter_reach()` already filters -- so the bars and the prose sentence
+share the literal same math and can never drift apart, same discipline as every prior round's KPI/chart
+work. Returns `None` in exactly the same conditions `_newsletter_reach()` does (verified: 0 mismatches
+across all 33 real domains), so the two stay gated together in the template with no separate condition to
+maintain.
+
+**A deliberate wording choice, not left implicit**: bar labels are "Opened"/"Clicked" -- exact one-word
+echoes of `_newsletter_reach()`'s already-Jev-approved prose ("opened it"/"clicked through to read more"),
+not a reword. Per the plan's own scoping for this round, an exact echo needs no separate Jev pass; a
+reworded label would have. Flagged here as the judgment call it is, not silently assumed.
+
+**Verified against the full real portfolio**: zero Jinja errors on all 33 domains. Only aikyamjobs.org has
+real bars in the CURRENT live reporting period (pattic.org's historical campaigns from the data-inventory
+check don't fall inside its current window) -- confirmed the rendered bars match the existing prose
+exactly (20% opened, 1% clicked, both numbers identical to the sentence above them). aikyamfellows.org
+(zero campaigns ever) confirmed a completely clean disappearance -- zero occurrences of the newsletter
+heading in its rendered output, no leftover markup. Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: Round 5 — the pass-rate sparkline and a whole-report Jev checkpoint, closing out the
+5-round visual redesign.)*

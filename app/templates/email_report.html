@@ -187,6 +187,24 @@
   <div style="margin-bottom:24px;">
     <h2 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:#1F2421; margin:0 0 10px 0;">Your newsletter's reach</h2>
     <p style="font-size:15px; line-height:1.6; margin:0;">{{ newsletter }}</p>
+    {% if newsletter_bars %}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:14px 0 0 0; font-size:13px;">
+      {% for label, frac in newsletter_bars %}
+      <tr>
+        <td width="60" style="color:#7A746B; padding:5px 0;">{{ label }}</td>
+        <td style="padding:5px 10px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4EFE8" style="background-color:#F4EFE8; border-radius:4px;">
+            <tr>
+              <td bgcolor="#7358B3" width="{{ (frac * 100)|round|int }}%" style="background-color:#7358B3; height:10px; border-radius:4px; font-size:1px; line-height:1px;">&nbsp;</td>
+              <td style="font-size:1px; line-height:1px;">&nbsp;</td>
+            </tr>
+          </table>
+        </td>
+        <td width="40" align="right" style="font-weight:700; padding:5px 0;">{{ (frac * 100)|round|int }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
   </div>
   {% endif %}
 

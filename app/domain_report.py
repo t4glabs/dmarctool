@@ -1391,6 +1391,42 @@ def _standout_campaign_note(conn, period_campaigns: list, settings: dict):
             f"more people to click through than the rest.")
 
 
+def _newsletter_rates(items: list):
+    """Real open/click/bounce/complaint rates (of delivered) for a list of
+    campaign rows -- pure computation, no I/O, so _newsletter_reach()'s prose
+    and the email report's engagement bars share the exact same math and can
+    never disagree. Returns (open, click, bounce, complaint), each None if
+    nothing in `items` was delivered."""
+    delivered = sum(c["delivered"] for c in items)
+    if not delivered:
+        return None, None, None, None
+    opened = sum(c["unique_openers"] for c in items)
+    clicked = sum(c["unique_clickers"] for c in items)
+    bounced = sum(c["bounced"] for c in items)
+    complained = sum(c["complained"] for c in items)
+    return opened / delivered, clicked / delivered, bounced / delivered, complained / delivered
+
+
+def _newsletter_engagement_bars(conn, domain_id: int, start_date: str, end_date: str):
+    """Opened/clicked rates for this period's newsletters as [(label, fraction),
+    ...] for the email report's table-bar visual -- the same _newsletter_rates()
+    math _newsletter_reach()'s prose already uses, so the bars and the
+    sentence can never disagree. Returns None exactly when _newsletter_reach()
+    would also return None (no newsletters this period, or nothing
+    delivered), so the two stay gated together in the template."""
+    campaigns = recent_campaigns(conn, domain_id, limit=200)
+    this_period = [c for c in campaigns if c["send_day"] and start_date <= c["send_day"] <= end_date]
+    if not this_period:
+        return None
+    this_open, this_click, _, _ = _newsletter_rates(this_period)
+    if this_open is None:
+        return None
+    bars = [("Opened", this_open)]
+    if this_click is not None:
+        bars.append(("Clicked", this_click))
+    return bars
+
+
 def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, end_date: str, prev_start_date: str):
     """Opens/clicks/bounces/complaints for newsletters sent in this window vs.
     the equal-length window before it, phrased relatively and naming the
@@ -1420,18 +1456,8 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
     if not this_period:
         return None
 
-    def _rates(items):
-        delivered = sum(c["delivered"] for c in items)
-        if not delivered:
-            return None, None, None, None
-        opened = sum(c["unique_openers"] for c in items)
-        clicked = sum(c["unique_clickers"] for c in items)
-        bounced = sum(c["bounced"] for c in items)
-        complained = sum(c["complained"] for c in items)
-        return opened / delivered, clicked / delivered, bounced / delivered, complained / delivered
-
-    this_open, this_click, this_bounce, this_complaint = _rates(this_period)
-    prev_open, prev_click, prev_bounce, prev_complaint = _rates(prev_period)
+    this_open, this_click, this_bounce, this_complaint = _newsletter_rates(this_period)
+    prev_open, prev_click, prev_bounce, prev_complaint = _newsletter_rates(prev_period)
     count = len(this_period)
     story = f"You sent {count} newsletter{'s' if count != 1 else ''} this time."
 
@@ -1572,6 +1598,9 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         period_start.date().isoformat(), period_end.date().isoformat(),
         (period_start - (period_end - period_start)).date().isoformat(),
     )
+    newsletter_bars = _newsletter_engagement_bars(
+        conn, domain_id, period_start.date().isoformat(), period_end.date().isoformat(),
+    )
 
     headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end),
                                   period_start)
@@ -1615,6 +1644,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "deliverability": deliverability,
         "protection": protection,
         "newsletter": newsletter,
+        "newsletter_bars": newsletter_bars,
         "blocklist_good_news": blocklist_good_news,
         "impersonation_good_news": impersonation_good_news,
         "protection_tightened": protection_tightened,
