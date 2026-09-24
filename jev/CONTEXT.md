@@ -47,6 +47,20 @@ what's now clear → what's still pending → the best next tip, if any — on a
 comparison to their own past** so improvement is visible (not a competitor benchmark — "did *my* month go
 well," not "how do I rank").
 
+## Which surface this is actually for (clarified 2026-09-24)
+
+**The EMAIL report** (`app/templates/email_report.txt`/`.html`, sent via `report_sends`) is the real
+deliverable — the thing Aikyam actually sends and the org actually reads. There is also an interactive
+web view (`client_report.html`) that reads the exact same content, but the user's own words: "kind of a
+testing which was never shown or used" — it is not a separate target worth its own review round. Judge
+content against the email report.
+
+**Length is explicitly not a constraint.** The user's own words: "i dont care how much lengthy it is
+because slowly i will move the email report version to a proper pdf version later in future to send in
+email, so dont try to limit urself." Don't score something down, or hold back a genuinely useful addition,
+out of a concern that the email is getting long — the only bar is real usefulness/emotional resonance to
+the reader, not brevity.
+
 ## Voice rules — stricter than the rest of the tool
 
 The internal dashboard (built for Aikyam's own operator) already avoids saying "quarantine"/"reject" but

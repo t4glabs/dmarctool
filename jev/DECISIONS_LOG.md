@@ -424,5 +424,71 @@ ever cross into a client report wasn't reached this chapter — queued for Chapt
 
 ---
 
-*(Next entry: Chapter 10 — G.63 (deferred from this chapter), plus the rest of section G now that G's
-discovery method just paid off once already.)*
+## 2026-09-24 — Scope correction, before Chapter 10
+
+The user gave explicit, durable scoping guidance: the EMAIL report (`email_report.txt`/`.html`, sent via
+`report_sends`) is the real deliverable — the interactive `client_report.html` view "was never shown or
+used," not a separate target worth its own attention going forward. Also: **length is explicitly not a
+constraint** for the email report — it will eventually become a PDF, so don't hold back genuinely useful
+content out of a fear of making it too long; the only real bar is usefulness/emotional resonance.
+
+Updated `jev/CONTEXT.md` and `app/jev_context.py::AUDIENCE_CONTEXT` (the thing actually transmitted to
+every future Jev call) to say both explicitly, so this reframes every future G-section judgment call: the
+question is "is this genuinely useful," never "will this make the email too long."
+
+## 2026-09-24 — Chapter 10: section G, tested against the new "don't self-limit" framing
+
+**G.62 (source-classification breakdown — own/forwarded/third-party/unverified) — real value found,
+shipping deferred pending a better-targeted fix.**
+
+Pulled real `classify_sources()` output for every tracked domain. aikyamfellows.org has real, substantial
+variety: 61 aligned, 4 forwarded, **18 third-party** (mail authenticating as a domain that isn't
+aikyamfellows.org's own — "a shared ESP account verified under one domain but sending with another domain
+in the From address," per the module's own docstring), 131 too-low-volume to classify.
+
+Drafted a summary paragraph for the email report and tested it twice:
+- v1 (inventory-style, raw counts per kind): `usefulness` **2.48/4** (53% "clearly useful") — real,
+  meaningful value, genuinely surprising given this exact kind of content was previously assumed too
+  much/too long to include. `audience_fit` 84% needs-plain-language-pass (raw counts read as a data dump).
+- v2 (narrative, led with the one real finding instead of an inventory): `usefulness` improved to
+  **2.91/4** (71% "clearly useful"), `audience_fit` improved to 67% needs-pass (down from 84%), but
+  `honesty_calibration` dropped to 67% accurately_calibrated (32% overstates) — a vaguer claim ("the large
+  majority... clearly, verifiably yours") without v1's grounding numbers cost real accuracy.
+
+**Why this isn't shipping yet, despite real usefulness:** `classify_sources()` is deliberately hedged
+dashboard-only language ("looks like," "probably," "a description of recent evidence, not a permanent
+verdict" — its own docstring). The tool already has a STRICTER, already-built, already-tested client-facing
+detector for exactly this pattern: `detect_borrowed_sending_identity` (`analysis.py`), which requires
+sustained volume/span/message-share evidence before raising `borrowed_sending_identity`. **Checked: it has
+NOT fired for aikyamfellows.org**, despite 18 real third-party-classified sources. Before writing new
+ad-hoc report content around the looser dashboard classification, the real open question is whether the
+stricter detector's thresholds are correctly calibrated against this much real third-party volume, or
+whether there's a genuine gap there — telling the client about a looser, hedged classification that
+contradicts the report's own stricter, already-vetted detector would be inconsistent. Flagged for a
+dedicated chapter rather than chased today.
+
+**G.63 (SPF-lookup-budget detail) — still can't be tested, now with proof why.**
+
+Checked every domain's `spf_checks` table directly: **zero rows anywhere in the portfolio currently have
+`status='over_limit'`.** Every real `spf_lookup_limit` item that existed turned out to be a miscategorized
+"missing" case (Chapter 9's fix). This isn't just "no data yet" — it's live confirmation that Chapter 9's
+fix was complete: not one domain in the whole portfolio is actually over the real SPF DNS-lookup budget
+right now. G.63 stays genuinely untestable against real data until a domain's SPF record actually grows
+too complex.
+
+**G.68 (known-bad cross-reference, "we already know these addresses bounce") — already covered.**
+
+`_list_hygiene()` (built and Jev-tested in Chapters 1-2) already tells the reader about addresses that
+stopped accepting mail, framed as routine housekeeping rather than an alarm. This substantially answers
+G.68's intent already; no new work needed.
+
+**Shipped this chapter:** the scope/context updates only (`jev/CONTEXT.md`, `app/jev_context.py`). No
+`app/` report-logic changes — this was a research chapter, not a content-fix chapter, and that's a
+legitimate shape: real evidence gathered, a genuinely promising idea found NOT ready to ship responsibly,
+and two items resolved by checking what already exists rather than building something new.
+
+---
+
+*(Next entry: Chapter 11 — whether `detect_borrowed_sending_identity`'s thresholds are correctly calibrated
+against aikyamfellows.org's real third-party volume (the G.62 follow-up), which may turn into either a
+threshold fix or a properly-targeted new report section once the underlying detector is trusted.)*

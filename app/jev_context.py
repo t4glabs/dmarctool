@@ -20,6 +20,12 @@ Aikyam is a nonprofit that helps other nonprofits and grassroots movements with 
 for social good. DMARCTool ("vigil") manages email authentication and deliverability on behalf of a
 portfolio of real client domains so those orgs never have to understand DMARC/SPF/DKIM themselves.
 
+The real deliverable is the EMAIL report (email_report.txt/.html) -- judge content against that. There is
+also an interactive web view of the same content, but it was never actually shown to or used by any real
+client, so it isn't a separate target. Length is explicitly not a constraint here -- the email report will
+eventually become a PDF, so don't score something down or hold back a genuinely useful addition out of
+concern that the email is getting long; the only real bar is usefulness/emotional resonance to the reader.
+
 The readers of the content being judged are staff at small NGOs with no technical background. They fear
 technology, don't know what tools exist or how to use them, and are trusting Aikyam to handle something
 they can't verify themselves. The report must make them feel SAFE and that trusting Aikyam was the right
