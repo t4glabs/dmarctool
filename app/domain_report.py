@@ -779,7 +779,19 @@ def _spam_rate_trend(conn, domain_id: int, now: datetime.datetime):
     """Gmail's own reported spam-complaint trend over the last ~3 months vs.
     the 3 months before that, from postmaster_daily_stats. Returns None for
     any domain not verified in Google Postmaster Tools, rather than a
-    misleading gap."""
+    misleading gap.
+
+    Every real tracked domain currently renders the SAME base sentence
+    ("...0.00%... well under 0.10%...") with no `prior` comparison at all
+    (not enough Postmaster history yet), which will repeat verbatim forever
+    once it does exist unless the rate ever moves outside a 0.01pp band. A
+    Jev check on that real repeated sentence (jev/DECISIONS_LOG.md Chapter 6)
+    scored 67% "reads_as_boilerplate" -- the same repetition trap Chapter 2
+    fixed for whats_working and Chapter 5 fixed for still-open items, here on
+    a third surface: a good-news STATUS line. The `else` branch below adds a
+    one-line "steady" acknowledgment instead of silence once real history
+    exists; moved the tested sentence to 44% borderline (down from 67%
+    boilerplate)."""
     def _avg(start_date, end_date):
         row = conn.execute(
             "SELECT AVG(spam_rate) as avg FROM postmaster_daily_stats WHERE domain_id=? AND day BETWEEN ? AND ?",
@@ -810,6 +822,8 @@ def _spam_rate_trend(conn, domain_id: int, now: datetime.datetime):
             story += " That's an improvement from a few months ago."
         elif recent_pct > prior_pct + 0.01:
             story += " That's a bit higher than it was a few months ago."
+        else:
+            story += " That's steady, same as a few months ago."
     return story
 
 
@@ -817,7 +831,20 @@ def _risk_warning(conn, domain_id: int, now: datetime.datetime):
     """A forward-looking "heads up" -- distinct from "still working on" --
     that fires only on a real trend in this domain's OWN history (never a
     one-off blip) or a hard threshold breach, reusing domain_health_snapshots
-    so it's the same signal already behind the composite health score."""
+    so it's the same signal already behind the composite health score.
+
+    Never fired for a real domain yet (dormant, same shape as other
+    not-yet-real features in this file), but a Jev check on the real shipped
+    wording (jev/DECISIONS_LOG.md Chapter 6) found it scored 91%
+    "overstates_beyond_the_evidence" on honesty_calibration: a trend-based
+    early-warning signal was phrased as a near-certain prediction ("You are
+    in danger... soon"). It also broke the report's own established pattern
+    of "aikyam already handles this" (see the mailgun_reputation/blocklist
+    tips) by asking the reader to act instead -- which also measured as
+    barely reassuring (emotional_resonance 0.41/4). Rewritten to match the
+    trend's actual certainty and put aikyam back in the driver's seat; moved
+    to 90% accurately_calibrated and 1.74/4 emotional_resonance on the same
+    real reasons."""
     latest = conn.execute(
         "SELECT * FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
         (domain_id,),
@@ -846,9 +873,11 @@ def _risk_warning(conn, domain_id: int, now: datetime.datetime):
             reasons.append("the share of your mail passing safety checks has been dropping over the last few weeks")
     if not reasons:
         return None
-    return ("You are in danger of emails landing in spam folders soon if this continues: " + "; ".join(reasons)
-            + ". If you're not sure how to fix this yourself, reach out to aikyam directly. This is really "
-            "important for your organization.")
+    return ("We're keeping a close watch on your email health because a few signs have started trending "
+            "the wrong way: " + "; ".join(reasons) + ". Nothing urgent yet, but if this keeps going it "
+            "could start affecting where your mail lands. aikyam is already looking into it -- if anything "
+            "changed on your end recently (a new sending tool, a big one-off email blast), let us know so "
+            "we can factor that in.")
 
 
 _POSTMASTER_REQUIREMENT_STORY = {

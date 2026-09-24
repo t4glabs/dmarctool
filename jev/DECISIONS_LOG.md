@@ -191,6 +191,68 @@ forgotten." / "...since August..." for its two real long-open categories.
 
 ---
 
-*(Next entry: Chapter 6 — H (newsletter engagement, once Listmonk sync is unblocked), and revisiting
-dkim_alignment_gap's remaining audience_fit gap with a fresh angle now that the repetition driver is
-separately handled.)*
+## 2026-09-24 — Chapter 6: section C (deliverability/reputation signals)
+
+**Context:** First chapter to deliberately work a specific `USE_CASES.md` section (C) rather than follow
+up on a prior chapter's queue, per the user asking directly how chapters get picked and what's left — C
+was untouched and has real live data (Postmaster spam-rate stats) to test against right now.
+
+### Finding 1 — `_risk_warning` (use case C.21-adjacent, found via the same "read the real shipped
+sentence" method as Chapter 5): fixed, most significant finding this chapter
+
+Never fired for a real domain yet (dormant — same shape as other not-yet-real features shipped this
+session), but this is real, live copy that runs the moment a real trend crosses its thresholds, so tested
+it directly with real reason-clauses the code actually generates:
+
+*"You are in danger of emails landing in spam folders soon if this continues: Google's own numbers show
+more people than recommended are marking your mail as spam right now; your bounce rate has been climbing
+over the last few weeks. If you're not sure how to fix this yourself, reach out to aikyam directly. This
+is really important for your organization."*
+
+- `honesty_calibration`: **91% `overstates_beyond_the_evidence`** — the largest single miscalibration
+  found in any chapter so far. A trend-based early-warning signal (real, but probabilistic) was phrased as
+  a near-certain prediction ("You are in danger... soon").
+- `emotional_resonance`: 0.41/4 (70% "no resonance") — surprisingly low for an urgent-sounding message.
+  Root cause: it broke the report's own established "aikyam already handles this" pattern (the
+  mailgun_reputation/blocklist tips) by asking the READER to act instead, which reads as being handed a
+  problem rather than being looked after.
+
+Rewrote to match the trend's actual certainty and put aikyam back in the driver's seat: *"We're keeping a
+close watch on your email health because a few signs have started trending the wrong way: [same real
+reasons]. Nothing urgent yet, but if this keeps going it could start affecting where your mail lands.
+aikyam is already looking into it -- if anything changed on your end recently (a new sending tool, a big
+one-off email blast), let us know so we can factor that in."*
+
+- `honesty_calibration`: 91% overstates → **90% accurately_calibrated**. `emotional_resonance`: 0.41 →
+  **1.74/4**. `audience_fit` moved the wrong way slightly (71% → 80% needs-plain-language-pass) — the
+  individual `reasons` clauses (bounce rate, spam numbers) weren't touched and remain the harder part;
+  noted as a residual for a future pass rather than chased further this round.
+
+**Shipped in** `app/domain_report.py::_risk_warning`.
+
+### Finding 2 — `_spam_rate_trend`'s good-case sentence (use case C.21, the repetition angle): fixed
+
+Every real tracked domain currently renders the identical base sentence — *"Google's own numbers show very
+few people are marking your mail as spam, averaging about 0.00% over the last few months, well under the
+0.10% Google recommends staying under."* — with **no domain having enough Postmaster history yet for the
+`prior`-comparison branch to fire**, meaning this sentence will repeat verbatim, unchanged, for as long as
+the domain stays healthy (which is the goal!) unless the rate crosses a 0.01pp band. Tested the real
+sentence: `repetition_risk` 67% `reads_as_boilerplate`. A third surface for the same trap Chapter 2 fixed
+for `whats_working` and Chapter 5 fixed for still-open items — this time on a good-news STATUS line rather
+than a positive streak or an open problem.
+
+Fix: added an `else` branch (previously nonexistent — flat/unchanged silently added nothing) appending
+*"That's steady, same as a few months ago."* once real `prior` history exists. Tested combined:
+`repetition_risk` 67% boilerplate → 44% `borderline_needs_variation` (real improvement — a status sentence
+that repeats "very few, well under 0.10%" every cycle will always have some inherent repetition risk no
+matter how it's dressed, but silence made it worse).
+
+**Shipped in** `app/domain_report.py::_spam_rate_trend`. Dormant like Finding 1 above — no domain has 6
+months of Postmaster history yet, so this branch hasn't fired for real data, but the sentence it will
+eventually produce is now validated.
+
+---
+
+*(Next entry: Chapter 7 — continuing section C (C.22 Postmaster complianceStatus wording, C.28-30 DKIM
+weak-key/SPF-lookup/MTA-STS tips), or section F (dkim_alignment_gap's own rollout re-examined as a "new
+detector" case study) — whichever has more real current data when picked up.)*
