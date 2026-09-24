@@ -987,5 +987,56 @@ healthy.
 
 ---
 
-*(Next entry: Round 2 — source_classification summary, gated on reconciliation against
-borrowed_sending_identity's current findings for the same real sources.)*
+## 2026-09-24 — Chapter 21: Rounds 2-4 in one pass
+
+**Round 2 — source_classification summary: tested twice, real reason not to ship.** Found the cleanest
+real test case first: pattic.org has 99.5% aligned mail (345,599 of 347,461 real messages) and real
+forwarded volume (1,208 messages) — crucially, **zero current `borrowed_sending_identity` findings**, so
+no reconciliation risk for this specific domain. Drafted a positive reassurance sentence ("...about 99
+clearly check out as genuinely yours...") and tested 3 real variants, iterating on wording each time.
+`honesty_calibration` never cleared ~54% accurately_calibrated on any of them (42-47% overstates on every
+attempt). Root cause, not a wording problem: `source_classification.py`'s own docstring already says these
+are "inferences from counts, not facts a report states outright" — any confident-sounding reassurance
+built on a hedged classifier reads as overstating it, no matter the phrasing. This matches Chapter 10's
+original finding on this same content area (a narrative version there also lost accuracy vs. a
+numbers-grounded one). **Not shipped.** Real, honest limitation of this content, documented rather than
+forced through on a 4th attempt.
+
+**Round 3 — safe_browsing threat-type detail: shipped, dormant.** New
+`_safe_browsing_detail(conn, domain_id)`, mapping Google's real 4 threat-type values (confirmed from
+`app/safe_browsing.py::THREAT_TYPES`) to plain English. Tested 3 phrasings: a bare "flagged for X" scored
+worst on `honesty_calibration` (25-45% accurately_calibrated) — stating Google's classification as settled
+fact overstated a probabilistic signal that can misfire after a compromised plugin/theme. Naming that
+possibility explicitly (matching what the existing tip already tells the reader) moved it to 56%. Wired
+into `_still_open_items`. Verified logic against single/double/triple-threat-type cases via an in-memory
+test DB (never touching real production data) — all joined and rendered correctly. Zero real domains have
+ever been flagged (checked live) — dormant, same precedent as `risk_warning`/`mta_sts_broken`.
+
+**Round 4 — display_name detail(s): shipped, dormant, strong scores on the first real attempt.** Traced
+exactly where `check_display_name()`'s output is persisted (`app/ses_events.py` lines ~557-570) — found
+the stored `action_items.detail` text joins multiple issues with a single space and no reliable delimiter,
+too fragile to re-parse. New `_display_name_detail()` instead re-derives the issue list by calling
+`check_display_name()` directly against the domain's real, currently-stored `from_display_name`/
+`from_address` — exact by construction, no parsing risk. Tested on a constructed real-shaped example
+("ACT NOW UPDATES" — ALL CAPS): **94% clear_as_is, 93% accurately_calibrated on the first draft**, no
+iteration needed. Also fixed `display_name_inconsistent`'s already-real stored detail ("Names seen: X, Y,
+Z.") which reads like a log line, not a sentence — reworded to "Recently it's gone out under a few
+different names: X, Y, and Z," tested old vs. new: usefulness 1.95→2.12/4, audience_fit 64%→86% clear,
+natural_voice 71%→82% reads_like_a_person. Both wired into `_still_open_items`. Verified via an in-memory
+test DB — real multi-issue joining logic confirmed correct (3 issues joined with commas + "and"). Zero
+real domains have ever triggered either category — dormant, real and wired-in.
+
+**Shipped in** `app/domain_report.py` only: `_safe_browsing_detail`, `_SAFE_BROWSING_THREAT_STORY`,
+`_display_name_detail`, `_DISPLAY_NAME_ISSUE_STORY`, `_display_name_inconsistency_detail`, all wired into
+`_still_open_items`'s elif-chain (no template changes needed — same `item.detail` slot already used by
+prior detail generators). Verified live against real domains (`preview_domain_report()` returns `None`
+correctly for the currently-clean real cases, no crash). Service restarted, healthy.
+
+**Rounds shipped this session: 3 of 5** (Round 1 Ch.20, Rounds 3-4 this chapter). Round 2 tested and
+honestly not shipped. **Round 5 remains** (content_scoring specific-phrase detail — the one flagged for
+needing the most Jev iteration given real accusation-risk).
+
+---
+
+*(Next entry: Round 5 — content_scoring specific-phrase detail, the last of the five. After that, resume
+the paused em-dash sweep and the paused general USE_CASES.md chapter cadence.)*

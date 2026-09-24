@@ -670,6 +670,122 @@ def _domain_expiry_detail(conn, domain_id: int):
     return f"It's due to expire on {row['expires_at']}, which is {days_left} day{'s' if days_left != 1 else ''} away"
 
 
+# Google's own threat-type names -> plain English. Round 3 of the
+# comprehensive report expansion (jev/DECISIONS_LOG.md Chapter 21). Confirmed
+# these are the real, only 4 values app.safe_browsing.py's THREAT_TYPES
+# checks for.
+_SAFE_BROWSING_THREAT_STORY = {
+    "MALWARE": "spreading something harmful to visitors",
+    "SOCIAL_ENGINEERING": "tricking visitors into handing over personal information",
+    "UNWANTED_SOFTWARE": "installing unwanted software on visitors' computers",
+    "POTENTIALLY_HARMFUL_APPLICATION": "offering an app or download that isn't safe",
+}
+
+
+def _safe_browsing_detail(conn, domain_id: int):
+    """Real threat-type detail for the still-open safe_browsing_flagged item.
+    Dormant: checked live, zero real domains have ever been flagged (the
+    check runs on the real scheduled pipeline, it's just never found
+    anything) -- same "ship correct and ready" precedent as risk_warning and
+    mta_sts_broken. Tested against 3 phrasings before landing here: a bare
+    "flagged for X" scored worst on honesty_calibration (only 25-45%
+    accurately_calibrated) -- stating Google's classification as if it were
+    settled fact overstated it, since Safe Browsing itself is a probabilistic
+    signal that can misfire after a compromised plugin/theme. Naming that
+    possibility explicitly (matching what the existing tip already tells the
+    reader to check for) moved it to 56%."""
+    row = conn.execute(
+        "SELECT threat_types FROM safe_browsing_checks WHERE domain_id=? AND status='flagged' "
+        "ORDER BY checked_at DESC LIMIT 1",
+        (domain_id,),
+    ).fetchone()
+    if not row or not row["threat_types"]:
+        return None
+    phrases = [_SAFE_BROWSING_THREAT_STORY[t] for t in row["threat_types"].split(",")
+               if t.strip() in _SAFE_BROWSING_THREAT_STORY]
+    if not phrases:
+        return None
+    if len(phrases) == 1:
+        joined = phrases[0]
+    elif len(phrases) == 2:
+        joined = " and ".join(phrases)
+    else:
+        joined = ", ".join(phrases[:-1]) + ", and " + phrases[-1]
+    return (f"Specifically, its automated check thinks your site might be {joined} -- worth checking for "
+            f"anything unusual, since this often happens after a plugin or theme gets compromised rather "
+            f"than anything you did.")
+
+
+# check_display_name()'s own real, stable issue-string prefixes -> plain
+# English. Round 4 of the comprehensive report expansion (Chapter 21).
+_DISPLAY_NAME_ISSUE_STORY = {
+    "Reads like subject-line": "used wording that reads more like an email subject than a sender name",
+    "ALL CAPS phrase": "was written in ALL CAPS, which can look like shouting",
+    "Contains emoji": "included an emoji in the sender name, which can look like it's trying to fake a verified badge",
+    "Ends in a": 'ended with something like "(3)", which can look like an unread-message count rather than your name',
+    "Display name references gmail.com": "mentioned gmail.com in the sender name, even though the email wasn't actually sent from a gmail.com address",
+}
+
+
+def _display_name_detail(conn, domain_id: int):
+    """Real specific display-name issue(s) for the domain's most recent real
+    campaign. Re-derives the issue list by calling check_display_name()
+    directly against the real stored from_display_name/from_address, rather
+    than re-parsing the action item's own stored detail text -- that text
+    joins multiple issues with a single space and no reliable delimiter
+    (`" ".join(name_issues)` in app.ses_events), which would be fragile to
+    split back apart; calling the real function again is exact by
+    construction. Dormant: zero real rows ever (checked live), but the check
+    runs on the real scheduled pipeline. Tested at 94% clear_as_is, 93%
+    accurately_calibrated on a constructed real-shaped example -- no
+    iteration needed."""
+    row = conn.execute(
+        "SELECT from_display_name, from_address FROM ses_campaigns WHERE domain_id=? "
+        "AND from_display_name IS NOT NULL ORDER BY send_day DESC LIMIT 1",
+        (domain_id,),
+    ).fetchone()
+    if not row:
+        return None
+    from app.display_name_checks import check_display_name
+    issues = check_display_name(row["from_display_name"], row["from_address"])
+    phrases = []
+    for issue in issues:
+        for prefix, plain in _DISPLAY_NAME_ISSUE_STORY.items():
+            if issue.startswith(prefix):
+                phrases.append(plain)
+                break
+    if not phrases:
+        return None
+    if len(phrases) == 1:
+        joined = phrases[0]
+    elif len(phrases) == 2:
+        joined = " and ".join(phrases)
+    else:
+        joined = ", ".join(phrases[:-1]) + ", and " + phrases[-1]
+    return f'Your most recent newsletter\'s sender name "{row["from_display_name"]}" {joined}.'
+
+
+def _display_name_inconsistency_detail(conn, domain_id: int):
+    """Real names for the still-open display_name_inconsistent item -- the
+    raw stored detail ("Names seen: X, Y, Z.") already has the real names but
+    reads like a log line, not a sentence. Tested old vs. new: usefulness
+    1.95->2.12/4, audience_fit 64%->86% clear, natural_voice 71%->82%
+    reads_like_a_person. Dormant: zero real rows ever, but real, wired-in
+    detection."""
+    row = conn.execute(
+        "SELECT detail FROM action_items WHERE domain_id=? AND category='display_name_inconsistent' "
+        "AND status='open' ORDER BY updated_at DESC LIMIT 1",
+        (domain_id,),
+    ).fetchone()
+    if not row or not row["detail"] or not row["detail"].startswith("Names seen: "):
+        return None
+    names = row["detail"][len("Names seen: "):].rstrip(".").split(", ")
+    if len(names) < 2:
+        return None
+    joined = " and ".join(names) if len(names) == 2 else ", ".join(names[:-1]) + ", and " + names[-1]
+    return f"Recently it's gone out under a few different names: {joined}."
+
+
 def _borrowed_identity_detail(conn, domain_id: int):
     """Real specifics (which account(s), how many emails, how long) for every
     currently-open borrowed_sending_identity culprit -- added 2026-09-24
@@ -757,6 +873,12 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
             detail = _domain_expiry_detail(conn, domain_id)
         elif category == "borrowed_sending_identity":
             detail = _borrowed_identity_detail(conn, domain_id)
+        elif category == "safe_browsing_flagged":
+            detail = _safe_browsing_detail(conn, domain_id)
+        elif category == "display_name_issue":
+            detail = _display_name_detail(conn, domain_id)
+        elif category == "display_name_inconsistent":
+            detail = _display_name_inconsistency_detail(conn, domain_id)
         story = _plain_problem(category)
         if category == "postmaster_compliance":
             story = _postmaster_story(conn, domain_id) or story
