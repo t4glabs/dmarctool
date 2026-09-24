@@ -311,7 +311,7 @@ def _care_ledger(conn, domain_id: int):
     return line
 
 
-def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool):
+def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as_of_str: str = None):
     """A short 'this has happened before' clause for an incident's category,
     or None. Counts the distinct DAYS this category was raised for this domain
     -- so several IPs/selectors flagged in one scan count as one incident, not
@@ -319,7 +319,18 @@ def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool):
     line would be exactly the repetitive clutter this report just shed; the
     signal worth carrying is a problem that KEEPS coming back. History only
     reaches back to the first scan, so it never implies we watched longer than
-    we did."""
+    we did.
+
+    A single continuously-open item (raised once, never re-raised) used to
+    fall through to None here and repeat its identical `story` sentence every
+    report cycle -- a Jev-informed fix (jev/DECISIONS_LOG.md Chapter 5): a
+    real still-open story+why pairing scored repetition_risk as high as 89%
+    "reads as boilerplate", the same trap Chapter 2 fixed for whats_working's
+    POSITIVE streaks but never applied to still-open problems. `as_of_str`
+    (the report's own period end, not wall-clock time -- see
+    dmarctool_streak_framing on why "now" breaks historical reconstruction)
+    lets a long-open item get a duration note instead of silent repetition,
+    once it's been open at least one full report cycle (30 days)."""
     days = sorted({
         r["d"] for r in conn.execute(
             """SELECT substr(created_at, 1, 10) d FROM action_items
@@ -328,6 +339,12 @@ def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool):
         ).fetchall()
     })
     if len(days) < 2:
+        if not resolved and len(days) == 1 and as_of_str:
+            first_dt = datetime.datetime.strptime(days[0], "%Y-%m-%d")
+            as_of_dt = datetime.datetime.strptime(as_of_str, "%Y-%m-%d %H:%M:%S")
+            if (as_of_dt - first_dt).days >= 30:
+                first_month = first_dt.strftime("%B")
+                return f"This has been open since {first_month} -- still on our list, not forgotten."
         return None
     first_month = datetime.datetime.strptime(days[0], "%Y-%m-%d").strftime("%B")
     phrase = _times_phrase(len(days))
@@ -675,7 +692,7 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
             continue
         seen_stories.add(story)
         items.append({"story": story, "detail": detail, "why": _why_it_matters(category),
-                      "history": _incident_recurrence(conn, domain_id, category, resolved=False)})
+                      "history": _incident_recurrence(conn, domain_id, category, resolved=False, as_of_str=end_str)})
     return items
 
 
@@ -933,42 +950,6 @@ def _postmaster_story(conn, domain_id: int):
     return f"Google told us {story}" if story else None
 
 
-def _health_comparison(conn, domain_id: int):
-    """This domain's latest composite health_score vs. every other tracked
-    domain's latest score. Only shown once a handful of other domains
-    actually have snapshots, so this never claims "better than 100%" off a
-    single, meaningless comparison -- and always frames it as "the other
-    organizations Aikyam supports," never a geographic claim we can't back."""
-    row = conn.execute(
-        "SELECT health_score FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
-        (domain_id,),
-    ).fetchone()
-    if not row or row["health_score"] is None:
-        return None
-    my_score = row["health_score"]
-
-    latest_per_domain = conn.execute(
-        """SELECT domain_id, MAX(snapshot_date) as latest FROM domain_health_snapshots
-           WHERE domain_id != ? GROUP BY domain_id""",
-        (domain_id,),
-    ).fetchall()
-    other_scores = []
-    for r in latest_per_domain:
-        s = conn.execute(
-            "SELECT health_score FROM domain_health_snapshots WHERE domain_id=? AND snapshot_date=?",
-            (r["domain_id"], r["latest"]),
-        ).fetchone()
-        if s and s["health_score"] is not None:
-            other_scores.append(s["health_score"])
-    if len(other_scores) < 3:
-        return None
-
-    better_than = sum(1 for s in other_scores if my_score > s)
-    percentile = round(100 * better_than / len(other_scores))
-    return (f"Your domain's overall email health is better than about {percentile}% of the other organizations "
-            f"aikyam supports right now.")
-
-
 def _blocklist_split(conn, domain_id: int, domain_name: str, start_str: str, end_str: str):
     """Every distinct IP flagged on a public blocklist for this domain that's
     either still open or was resolved during this window, split by
@@ -1122,7 +1103,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     "still_open": [{"story","detail"}, ...],
     "deliverability": str, "protection": str, "newsletter": str|None,
     "blocklist_good_news": str|None, "protection_tightened": str|None,
-    "spam_trend": str|None, "risk_warning": str|None, "comparison": str|None,
+    "spam_trend": str|None, "risk_warning": str|None,
     "contact_cta": str|None, "tips": [str, ...]} -- plain-language sections
     ready to drop into the email templates. `resolved` items carry a real,
     computed "impact" clause when a material before/after change was found,
@@ -1216,7 +1197,6 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     protection_tightened = _protection_tightened(conn, domain_id, period_start)
     spam_trend = _spam_rate_trend(conn, domain_id, period_end)
     risk_warning = _risk_warning(conn, domain_id, period_end)
-    comparison = _health_comparison(conn, domain_id)
     contact_cta = _contact_aikyam_cta(still_open_categories)
     cadence = sending_cadence(conn, domain_id)
     tips = _tips_for_domain(still_open_categories, cadence["irregular"])
@@ -1239,7 +1219,6 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "protection_tightened": protection_tightened,
         "spam_trend": spam_trend,
         "risk_warning": risk_warning,
-        "comparison": comparison,
         "contact_cta": contact_cta,
         "tips": tips,
     }
@@ -1340,10 +1319,14 @@ def _health_timeline(conn, domain_id: int, min_points: int = 3):
 def _health_trend(conn, domain_id: int, period_start):
     """This domain's OWN health score now vs. around the last report -- the
     single most reassuring number available, and the thing a "did it get
-    better?" question actually needs. Distinct from _health_comparison(),
-    which ranks against other orgs; a peer ranking can't tell you whether
-    YOUR month went well. Returns None rather than inventing a trend when
-    there isn't enough history yet."""
+    better?" question actually needs, without ranking against other orgs
+    (a Jev-informed removal, jev/DECISIONS_LOG.md Chapter 5: a peer-percentile
+    "HOW YOU COMPARE" section used to exist alongside this one and scored
+    emotional_resonance as low as 0.17/4 on a real struggling domain -- a
+    peer ranking can't tell you whether YOUR month went well, and for a
+    domain having a hard time it reads as discouraging rather than
+    reassuring). Returns None rather than inventing a trend when there isn't
+    enough history yet."""
     latest = conn.execute(
         """SELECT snapshot_date, health_score FROM domain_health_snapshots
            WHERE domain_id=? AND health_score IS NOT NULL

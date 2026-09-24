@@ -119,5 +119,78 @@ historical data (arpo.in, 2026-08-21 to 2026-09-22 real report period, sent volu
 
 ---
 
-*(Next entry: Chapter 5 — remaining unaudited `USE_CASES.md` sections, starting with D (streak/repetition
-across real long-running domains) and H (newsletter engagement, once Listmonk sync is unblocked).)*
+## 2026-09-24 — Chapter 5: peer-comparison removal, still-open repetition fix
+
+**Context:** Continued the D (streak/repetition) and J (portfolio-wide consistency) `USE_CASES.md`
+sections. Found one structural issue never flagged in Chapters 1-4 and fixed the general case of a
+repetition gap Chapter 2's streak work never reached.
+
+### Finding 1 — the "HOW YOU COMPARE" peer-percentile section (use case J, cross-cutting with
+CONTEXT.md's own stated rule): removed entirely
+
+While reading `_health_trend`'s docstring (which already noted, unresolved, "distinct from
+`_health_comparison()`, which ranks against other orgs; a peer ranking can't tell you whether YOUR month
+went well") — found that `_health_comparison()` was still live, wired into `build_domain_report()`, and
+rendered in all three templates (`email_report.txt`/`.html`, `client_report.html`) under a real "HOW YOU
+COMPARE" heading. This directly contradicts `CONTEXT.md`'s own stated rule: "historical comparison to
+their own past... not a competitor benchmark."
+
+Pulled the real sentence for every tracked domain. Worst real case, **pattic.org**: *"Your domain's
+overall email health is better than about 0% of the other organizations aikyam supports right now."*
+Typical case, arpo.in: *"...better than about 33%..."*
+
+- pattic.org (0%): `emotional_resonance` 0.17/4 (86% mass on "flat, no resonance either way" — for a
+  domain already having a hard time, this reads as demoralizing, not reassuring), `audience_fit` 58%
+  needs-plain-language-pass, `contradiction_check` 28% (moderate tension against the report's own
+  progress-focused framing elsewhere).
+- arpo.in (33%, a "good" real result): still only 0.48/4 `emotional_resonance`, 47% needs-plain-language.
+  Even the best-case number doesn't help.
+
+**No rewording could fix this** — the whole point of the section is a peer ranking, which is exactly what
+`CONTEXT.md` says not to do, and `_health_trend` already exists as the correct alternative sitting right
+next to it. Removed `_health_comparison()` and the "comparison" context key entirely, and the "HOW YOU
+COMPARE" block from all three templates. `_health_trend` (own-progress framing) is untouched and remains
+the report's only health-trajectory content.
+
+**Shipped in** `app/domain_report.py` (`_health_comparison()` deleted, `comparison` removed from context
+dict and docstring), `app/templates/email_report.txt`, `app/templates/email_report.html`,
+`app/templates/client_report.html`. Verified: `preview_domain_report()` for pattic.org renders with no
+`comparison` key and no "HOW YOU COMPARE" text in the output.
+
+### Finding 2 — still-open items get zero duration framing, unlike resolved streaks (use case D,
+generalizes past the specific dkim_alignment_gap use case D was scoped to)
+
+Went in planning to test `dkim_alignment_gap`'s wording (real domains catsofkochi.com/captains.ngo have it
+open). The isolated story scored 83% `needs_plain_language_pass` on `audience_fit` — tried 3 rewordings,
+best got to 36-46% `clear_as_is`, real but modest gains, diminishing returns.
+
+The bigger finding came from testing the REAL combined render (story + why + "we're on it" trailer, exactly
+as `email_report.txt` assembles it): `repetition_risk` came back at **89% "reads as boilerplate."** Not
+because story and why duplicate each other (they do, slightly, but that wasn't the driver) — Jev reads this
+as boilerplate because a still-open, unchanged, multi-cycle problem repeats the *exact same sentence* every
+report cycle until it's fixed, and `CRITERIA.md`'s `repetition_risk` question is explicitly about
+cross-cycle repetition. Chapter 2's streak-framing work fixed this for `whats_working`'s POSITIVE facts
+(real streak numbers, phrase rotation, "no change since last time") but never touched the still-open
+section's problem descriptions, which had no equivalent mechanism at all.
+
+Confirmed this isn't dkim_alignment_gap-specific: real data shows `dns_drift` open 58 days straight on
+prerna.aikyam.school and 50 days on chingaritrustbhopal.org with zero duration framing either.
+
+Fix: extended `_incident_recurrence()` (previously only fired at 2+ distinct re-raise days) to also handle
+a single continuously-open item — once open at least 30 days (one full report cycle) as of the report's
+own `period_end` (never wall-clock time, per [[dmarctool_streak_framing]]'s earlier lesson), it now returns
+*"This has been open since {month} -- still on our list, not forgotten."* Tested on the real
+dkim_alignment_gap combined text: `repetition_risk` dropped from 89% to 57% `reads_as_boilerplate` (real
+improvement; can't fully eliminate it, since "still not fixed after 2 months" is inherently less exciting
+than a positive streak, but a duration note beats silent identical repetition).
+
+**Shipped in** `app/domain_report.py::_incident_recurrence` (new `as_of_str` param) and its still-open call
+site in `_still_open_items` (now passes `end_str`). Verified against real data: `_still_open_items()` for
+prerna.aikyam.school (domain_id 6) now returns "This has been open since July -- still on our list, not
+forgotten." / "...since August..." for its two real long-open categories.
+
+---
+
+*(Next entry: Chapter 6 — H (newsletter engagement, once Listmonk sync is unblocked), and revisiting
+dkim_alignment_gap's remaining audience_fit gap with a fresh angle now that the repetition driver is
+separately handled.)*

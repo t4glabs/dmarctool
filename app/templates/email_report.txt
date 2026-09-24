@@ -58,10 +58,6 @@ YOUR NEWSLETTER'S REACH
 {%- if blocklist_good_news %}
 🛡️ {{ blocklist_good_news }}
 {% endif %}
-{%- if comparison %}
-HOW YOU COMPARE
-{{ comparison }}
-{% endif %}
 {%- if tips %}
 TIPS FOR THE NEXT FEW WEEKS
 {% for tip in tips %}
