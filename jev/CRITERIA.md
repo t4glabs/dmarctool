@@ -12,6 +12,19 @@ Not every criterion applies to every decision — pick the ones relevant to what
 `WORKFLOW.md` for how to choose). Running all seven on trivial copy is wasteful; running zero on a new
 report section is a process failure.
 
+**Audience scope, clarified in Chapter 8:** `AUDIENCE_CONTEXT` (and therefore every criterion here) is
+calibrated for the non-technical NGO reader the CLIENT REPORT is written for. It does not apply the same
+way to operator-only dashboard content (`labels.py`'s `CATEGORY_HELP`/`CATEGORY_REMEDIATION` tooltips,
+aimed at Aikyam itself) — that content is *supposed* to use real technical terms (DKIM, DMARC, DNS
+records), the same way the dashboard already does more broadly per `CONTEXT.md`. Running `audience_fit` or
+`emotional_resonance` against operator copy will produce a misleading "needs plain language" verdict for
+content that's already correctly calibrated for its real audience. `actionability` and
+`contradiction_check` generalize fine to either audience (concreteness and internal consistency matter
+regardless of who's reading); `honesty_calibration` does too. When judging operator-only copy, pick from
+that subset and skip `audience_fit`/`emotional_resonance`/`repetition_risk` (the last is specifically about
+what a non-technical reader would recognize as boilerplate across monthly reports — operator tooltips
+aren't read that way).
+
 ## 1. `audience_fit` (Choice)
 **Question:** Is this understandable to a non-technical NGO staffer with zero DMARC/email-infrastructure
 background, with no jargon requiring a definition?

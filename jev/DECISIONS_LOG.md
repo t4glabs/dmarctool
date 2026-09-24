@@ -300,5 +300,72 @@ a `contradiction_check` pass once a domain has both open at once in real data.
 
 ---
 
-*(Next entry: Chapter 8 — the DMARC_POLICY/dns_drift overlap check flagged above, and section F using
-dkim_alignment_gap as a "new detector rollout" case study.)*
+## 2026-09-24 — Chapter 8: the flagged overlap check, and dkim_alignment_gap as a rollout case study
+
+**Context:** No real domain currently has `DMARC_POLICY` open alongside `dns_missing`/`dns_drift` as
+flagged in Chapter 7, but real data turned up a closer case: **captains.ngo has both `DMARC_POLICY` (the
+Chapter 7 fix) and `dkim_alignment_gap` open simultaneously right now** — a better test than the
+originally-planned one, since both are genuinely about authentication weakness from two independent
+detection paths (DMARCTool's own report analysis vs. Google Postmaster's verdict).
+
+### Finding 1 — real co-occurrence check: no contradiction, but confirms Chapter 5's repetition finding
+compounds when items pair up
+
+Pulled both items' real, fully-assembled still-open text for captains.ngo exactly as `_still_open_items()`
+renders them (story + why + duration note + trailer) and tested them together as they'd actually appear as
+consecutive bullets in the same report:
+
+- `contradiction_check`: **19% risk** — low. The two stories are different enough (one about DKIM rarely
+  aligning, one about Google wanting a stronger DMARC policy) that a reader wouldn't read them as
+  duplicating or contradicting each other. **Resolves the question Chapter 7 flagged**: no fix needed here.
+- `repetition_risk` on the pair: 80% `reads_as_boilerplate` — high, but not a NEW finding: this reflects
+  `dkim_alignment_gap`'s own already-known repetition profile (57% after Chapter 5's duration-note fix,
+  tested alone) compounding when a second still-open item sits next to it. Not actioned separately —
+  tracked under the existing `dkim_alignment_gap` residual from Chapters 5/7.
+
+**No code change** — checked clean on the specific question asked (contradiction), with the repetition
+signal correctly attributed to already-tracked work rather than treated as a new bug.
+
+### Finding 2 — dkim_alignment_gap retroactively audited against section F's own rollout checklist
+
+Section F (`USE_CASES.md` #51-60) describes what a NEW detector category's rollout should look like.
+`dkim_alignment_gap` (added 2026-09-23, before this Jev workflow existed) is the one real category built
+from scratch this session — a natural case study for whether the checklist would have caught its known
+problems earlier if it had existed at the time.
+
+- **F.51/F.58 (audience_fit before shipping, full checklist before first real report):** No — confirmed
+  by history. It shipped with a silently-missing `_PROBLEM_STORY` entry (Chapter 2 found and fixed that),
+  then its story wording itself wasn't Jev-tested until Chapter 5, which found 83%
+  `needs_plain_language_pass`. Had F.51/F.58 existed and been followed at rollout time, both gaps would
+  have been caught before ever reaching a real report instead of after.
+- **F.52 (dashboard label, separate audience):** `labels.py`'s `"DKIM rarely/never aligns"` label uses
+  real jargon deliberately — correct, since the dashboard is Aikyam's own operator-facing tool, not the
+  client report. Confirms this use case needs the audience-scope caveat added to `CRITERIA.md` this
+  chapter (see below) — testing this label against client-audience criteria would have wrongly flagged it.
+- **F.53 (operator remediation tooltip actionability):** Tested the real `CATEGORY_REMEDIATION` text
+  (exact click-path: "Google Workspace -> Admin Console -> Apps -> ... -> Authenticate email") —
+  `actionability` came back **99% `concrete_next_step`**, the highest score of any check this session.
+  Already excellent; no fix needed.
+- **F.57 (min-volume threshold to avoid low-volume false alarms):** Already built correctly from the
+  start (`dkim_alignment_min_volume=20`, 30-day window, 0.5 min rate) — this is the one F-checklist item
+  the original rollout got right without any formal checklist existing yet.
+
+**Net effect:** confirms the value of the workflow existing going forward (2 of 4 checked items were real,
+now-fixed gaps that predated the checklist) without needing any NEW code change this round — the fixes
+were already made in Chapters 2 and 5.
+
+### Process fix — `CRITERIA.md` audience scope, clarified
+
+Running F.53's test surfaced a real gap in the workflow documentation itself: nothing previously said
+`AUDIENCE_CONTEXT`/the 7 criteria are calibrated for the CLIENT report's non-technical reader specifically,
+not for operator-only dashboard tooltips. Applying `audience_fit`/`emotional_resonance` to correctly
+technical operator copy would produce a misleading "needs plain language" verdict for content that's
+already right for its real audience. Added an explicit scope note to `jev/CRITERIA.md`: `actionability`,
+`contradiction_check`, and `honesty_calibration` generalize to operator content; `audience_fit`,
+`emotional_resonance`, and `repetition_risk` don't and should be skipped for that audience.
+
+---
+
+*(Next entry: Chapter 9 — section G (deciding what dashboard-only data should ever cross into a client
+report at all) has real candidate data and hasn't been touched; section D's remaining items (streak-bucket
+repetition, health-trajectory wording) also have real multi-month data available now.)*
