@@ -1399,3 +1399,85 @@ restarted, healthy. No email sent.
 ---
 
 *(Next entry: whatever the user prioritizes next.)*
+
+## Chapter 29 — Investigating Chapter 27's whole-document finding: a real bug, a real fix, a real partial result
+
+User asked directly: "is there a fix possible to sort all issues mentioned by jev" (re: Chapter 27's
+weak whole-document `honesty_calibration`/`natural_voice` scores). Investigated properly rather than
+repeating "not fixable" -- found one genuine logic bug and one real prose improvement, both shipped, both
+measured. Honest result: real, meaningful improvement, not a full fix.
+
+**Localized the problem by zone first**: split the real aikyamjobs.org report into its 5 zones and tested
+each independently. Every zone scored 36-66% boilerplate/overstate on its own -- none anywhere near the
+whole document's 95%/65% -- confirming the low whole-document score is a genuine compounding effect
+across many individually-approved sentences, not one bad section.
+
+**A real bug, not just prose**: rereading `_headline_verdict()`, found the branch for "non-urgent open
+items exist" returned an `_ALL_CLEAR_PHRASES` rotation ("Nothing on your domain needs your attention this
+time.") -- while the branch for "genuinely nothing open" returned `None`. Backwards. Confirmed live on
+aikyamjobs.org: the real report said "Nothing on your domain needs your attention" directly above a real
+"WHAT WE'RE STILL WORKING ON" section naming an actual open item (Google's low-confidence-mail flag).
+Tested the combined headline+still-open block against Jev's `contradiction_check` +
+`honesty_calibration`: current behavior scored **0.84 contradiction, 81% overstates**; removing the false
+headline (return `None` instead, letting the still-open section speak for itself) dropped that to **0.45
+contradiction, 25% overstates** -- more than a 35-point swing on the single clearest test in this whole
+investigation.
+
+**Fixed**: swapped `_headline_verdict()`'s branches so `_ALL_CLEAR_PHRASES` only fires when
+`still_open_categories` is genuinely empty (the case it's actually true), and the non-urgent-open-item
+case returns `None` (matching the docstring's own original design principle -- the still-open section
+already states it accurately, a headline can only repeat or contradict it). **Found and fixed a new
+duplication risk this created**: for the truly-empty case, the headline now says an all-clear phrase
+*and* the existing "not resolved and not still_open" fallback box would ALSO fire its own near-identical
+message -- confirmed live on aikyamsolve.org before the fix would have shipped two "nothing to worry
+about" lines back to back. Fixed by adding `and not headline` to that fallback box's condition in both
+`email_report.html` and `email_report.txt`, so exactly one home for that message exists per report.
+Verified live: aikyamsolve.org now shows the headline once, the fallback box correctly stays silent
+(1 occurrence of "Nothing" in the rendered text, not 2).
+
+**Real portfolio impact**: 8 real domains had this exact false-contradiction live right now --
+aikyamjobs.org, arpo.in, climatekhoj.com, folktaler.com, mail.aikyamhq.com, makestories.space,
+pattic.org, send.mail.folktaler.com. All 8 now correctly show no headline (letting their real open item
+speak accurately for itself) instead of a false all-clear claim.
+
+**One more real, clearly-measured prose fix**: `_suppression_story()`'s tail claimed "Keeping a clean
+list like this is **exactly** what helps your future emails land in the inbox" -- unwarranted causal
+certainty (list hygiene is one factor among many, not "exactly" the thing that does it), plus a
+"so...so" double-clause structure. Reworded to "Worth removing them from your own list too, for the same
+reason." -- tested cleanly better on both axes (`honesty_calibration` 47%->34% overstates,
+`natural_voice` crossed from 72% boilerplate to reads_like_a_person).
+
+**One tested change NOT shipped, documented honestly**: tried 2 rewordings of `_explain_policy_for_owner`'s
+"blocked completely, never even arriving" verb phrase. Results were noisy/inconsistent across repeated
+Jev calls (one run showed improvement, a second showed the rewording scoring worse than the original) --
+not a reliable enough signal to justify a code change. Left as-is rather than churn on an unclear result.
+
+**The honest overall result -- re-ran the full whole-document checkpoint on the real, now-fixed
+aikyamjobs.org report:**
+
+| Criterion | Chapter 27 (before) | Chapter 29 (after) |
+|---|---|---|
+| `audience_fit` | 40% clear | 45% clear |
+| `usefulness` | 3.28/4 | 3.24/4 (noise, not a regression) |
+| `emotional_resonance` | 3.05/4 | 3.02/4 (noise, not a regression) |
+| `honesty_calibration` | 65% overstates | 61% overstates |
+| `natural_voice` | 95% boilerplate | 84% boilerplate |
+
+**Not a clean pass.** `natural_voice` moved a real 11 points, `honesty_calibration` a more modest 4 --
+genuine improvement, especially given the isolated headline fix alone was a 35+ point swing, showing the
+whole-document score really is diluted across many contributing sentences, each individually small. The
+two real fixes shipped here (the headline contradiction bug, the suppression-story overclaim) were the
+highest-confidence, most clearly-isolatable issues found. What remains is the same distributed,
+whole-document-level pattern Chapter 27 already named -- fixing it further means going sentence by
+sentence through the rest of the report (the reassurance-tail "X, so/rather-than Y" construction repeats
+in `_health_trend`, `_still_open_items`'s generic wrapper, and elsewhere), which is genuinely the scope of
+the already-paused em-dash/AI-voice sweep (Chapters 17-19), not a single follow-up chapter. Reported
+honestly rather than claimed as fully resolved.
+
+Verified against the full real portfolio (zero Jinja errors, 33/33 domains). Service restarted, healthy.
+No email sent.
+
+---
+
+*(Next entry: whatever the user prioritizes next -- continuing the sentence-by-sentence prose sweep this
+chapter's numbers point toward, or something new.)*

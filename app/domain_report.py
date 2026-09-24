@@ -457,9 +457,15 @@ def _suppression_story(count: int, sample_emails=None) -> str:
         if remaining > 0:
             names += f", and {remaining} more"
         base += f", including {names}"
-    base += (". These are now automatically skipped so they don't drag down your other emails. Keeping a clean "
-             "list like this is exactly what helps your future emails land in the inbox instead of getting "
-             "filtered out, so it's worth removing them from your own list too")
+    # Reworded 2026-09-24 (whole-report Jev checkpoint, Chapter 29): the old
+    # "...is exactly what helps..." tail claimed unwarranted causal certainty
+    # (list hygiene is ONE factor among many in inbox placement, not
+    # "exactly" the thing that does it) and its "so...so" double-clause
+    # structure was part of the reassurance-tail pattern repeating across
+    # several sections. honesty_calibration 47%->34% overstates, natural_voice
+    # crossed from 72% boilerplate to reads_like_a_person.
+    base += (". These are now automatically skipped so they don't drag down your other emails. "
+             "Worth removing them from your own list too, for the same reason")
     return base
 
 
@@ -2040,12 +2046,26 @@ def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_war
     stated outright, which the user found read as padding on top of an email
     whose whole tone already conveys it. Everything worth saying about how
     safe they are is now shown as evidence in _whats_working() instead.
-    Returns None where a sentence would add nothing at all: with no problems
-    to flag, the "what's already working" list is a better opening than any
-    summary of it could be."""
+    Returns None where a sentence would add nothing at all: with a real
+    non-urgent item still open, "WHAT WE'RE STILL WORKING ON" already states
+    it accurately a few lines down, so a headline here can only either
+    repeat that or (the bug this fixed) contradict it.
+
+    Fixed 2026-09-24 (whole-report Jev checkpoint, jev/DECISIONS_LOG.md
+    Chapter 29): this used to return an ALL_CLEAR_PHRASES rotation whenever
+    `still_open_categories` was non-empty -- exactly backwards. Confirmed
+    live on aikyamjobs.org: the report said "Nothing on your domain needs
+    your attention this time" directly above a "WHAT WE'RE STILL WORKING ON"
+    section naming a real open item. Jev's contradiction_check flagged this
+    at 0.84 (of 1) and honesty_calibration at 81% overstates_beyond_the_evidence
+    -- both dropped to well under half (0.45 / 25%) once this branch returns
+    None instead. ALL_CLEAR_PHRASES now only fires when still_open_categories
+    is genuinely empty, which is when it's actually true; see
+    build_domain_report()'s "not resolved and not still_open" fallback box
+    for how the true-empty case avoids saying the same thing twice."""
     if still_open_categories & _URGENT_STILL_OPEN_CATEGORIES or risk_warning:
         return "There's one thing on this update we want to flag for you, and it's explained below."
-    if still_open_categories:
+    if not still_open_categories:
         if period_start is not None:
             return _ALL_CLEAR_PHRASES[period_start.month % len(_ALL_CLEAR_PHRASES)]
         return _ALL_CLEAR_PHRASES[0]

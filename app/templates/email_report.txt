@@ -32,7 +32,7 @@ We're already working through all of this, and we'll let you know as each one cl
 {% if contact_cta %}
 {{ contact_cta }}
 {% endif %}{% endif %}
-{%- if not resolved and not still_open %}
+{%- if not resolved and not still_open and not headline %}
 Nothing needed fixing this time, everything's running smoothly.
 {% endif %}
 {%- if risk_warning %}
