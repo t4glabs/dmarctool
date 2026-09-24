@@ -592,5 +592,51 @@ aikyamjobs.org, which has carried 3 of your emails over the last 156 days."* Ser
 
 ---
 
-*(Next entry: Chapter 13 — resume the remaining `USE_CASES.md` sections not yet touched: F (new-detector
-rollout, now with 2 fresh real examples from Chapters 9/11 to check against), H (blocked on Listmonk), J.)*
+## 2026-09-24 — Chapter 13: Listmonk unblocked, and a real ~1.3-4x engagement overstatement found and fixed
+
+**Context:** Went in to check section H (blocked on Listmonk per prior-session memory). **Checked first:
+it isn't blocked anymore** — `fetch_all_campaigns()` returned 150 real campaigns with no error, and all 21
+of `ses_campaigns`' tracked rows already have real `body_html` populated. The prior "blocked on a
+token-permission grant" note in memory was stale; corrected.
+
+**What that unblocked, immediately: real per-campaign engagement data for aikyamjobs.org (17 real
+campaigns) and pattic.org (4).** Pulling it via `recent_campaigns()` surfaced fields
+`_newsletter_reach()` (the client-facing function) never used: `unique_openers`/`unique_clickers` (real
+distinct people) alongside the raw `opened`/`clicked` (event counts) it actually reads.
+
+**The bug, confirmed with real portfolio numbers before touching any code:** aggregated across all 17 real
+aikyamjobs.org campaigns (21,565 delivered) — raw open rate 46.2% vs. the correct unique-people rate 35.6%
+(a ~1.3x overstatement: some people reopen a message); raw click rate 6.3% vs. unique 1.55% (a **~4x**
+overstatement: click-tracking events multiply per link/repeat-click far more than opens do). This is
+exactly the "counted ~7x overstated" trap `dmarctool_deliverability_model.md` already documented and
+already fixed in the dashboard's own `campaign_score.py` months before this session — but `_newsletter_
+reach()`, the separate client-facing narrative function, was never updated to match. Confirmed this
+memory's OWN standing guidance directly: "Always benchmark on unique people... Don't benchmark the
+automation-filtered 'genuine' counts either: they're deliberately conservative... unfairly harsh" — so the
+fix uses `unique_openers`/`unique_clickers`, not the separately-available bot-filtered "genuine" counts,
+per that established research rather than re-deciding it from scratch.
+
+**Shipped:** `_newsletter_reach()` now sums `unique_openers`/`unique_clickers` instead of `opened`/
+`clicked`. Also surfaces clicks in the client report for the first time — previously never mentioned at
+all, despite the same research explicitly ranking clicks as the MORE trustworthy signal (immune to Apple
+Mail Privacy Protection's pixel pre-fetch, which opens are not). Added a rounding guard so a sub-1% click
+rate is omitted rather than rounded up to "about 1" — the exact overstatement trap this whole fix exists
+to close.
+
+**Jev's role here, explicitly noted:** ran both the old (raw) and new (unique) real sentences through
+`honesty_calibration` — both scored 99% accurately_calibrated, unable to distinguish them, because Jev
+judges a claim's tone against evidence stated in the same `state`, not against ground truth it has no way
+to independently verify. Same class of "not a Jev finding" as Chapters 9 and 11 — found and verified by
+computing real aggregate numbers directly and checking them against the project's own established research,
+not via the checklist.
+
+**Verified live:** aikyamjobs.org's real Aug-Sep period now renders *"You sent 17 newsletters this time.
+Out of every 100 people who received one, about 36 opened it and about 2 clicked through to read more."*
+— matching the corrected unique rates exactly. pattic.org's real 2-newsletter period also renders
+correctly, including the improved/concern comparison logic now covering clicks too. Service restarted,
+healthy.
+
+---
+
+*(Next entry: Chapter 14 — resume remaining `USE_CASES.md` sections: F (new-detector rollout, now with
+fresh real examples from Chapters 9/11 to check against) and J (cross-report/portfolio-wide consistency).)*

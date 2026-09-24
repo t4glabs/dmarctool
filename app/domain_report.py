@@ -1138,12 +1138,28 @@ def _impersonation_good_news(conn, domain_id: int, domain_name: str, start_epoch
 
 
 def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, end_date: str, prev_start_date: str):
-    """Opens/bounces/complaints for newsletters sent in this window vs. the
-    equal-length window before it, phrased relatively and naming the
+    """Opens/clicks/bounces/complaints for newsletters sent in this window vs.
+    the equal-length window before it, phrased relatively and naming the
     specific factors that changed rather than a single vague "reach" number.
     Returns None if no newsletters were sent in this window (most
     beneficiary domains won't have Listmonk/SES campaign data at all, or
-    won't send every period)."""
+    won't send every period).
+
+    Uses unique_openers/unique_clickers (real people), not the raw
+    opened/clicked event counts -- a real bug (jev/DECISIONS_LOG.md Chapter
+    13, once Listmonk sync turned out to already be working and this section
+    got its first real test): confirmed live on aikyamjobs.org's real 17
+    campaigns, raw counts overstated the open rate 46.2% vs the correct
+    35.6% (one person re-opening counts multiple times), and clicks far worse
+    -- 6.3% vs 1.55%, a 4x overstatement. dmarctool_deliverability_model.md
+    already established unique rates as the right number (comparable to
+    published benchmarks) months before this function existed -- the
+    dashboard's own campaign_score.py already got this right; this
+    client-facing narrative function just never matched it. Also now
+    surfaces clicks for the first time: per that same research, clicks are
+    immune to Apple Mail Privacy Protection's pixel pre-fetch, so they're the
+    more trustworthy of the two signals, and previously went unmentioned
+    entirely."""
     campaigns = recent_campaigns(conn, domain_id, limit=200)
     this_period = [c for c in campaigns if c["send_day"] and start_date <= c["send_day"] <= end_date]
     prev_period = [c for c in campaigns if c["send_day"] and prev_start_date <= c["send_day"] < start_date]
@@ -1153,19 +1169,26 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
     def _rates(items):
         delivered = sum(c["delivered"] for c in items)
         if not delivered:
-            return None, None, None
-        opened = sum(c["opened"] for c in items)
+            return None, None, None, None
+        opened = sum(c["unique_openers"] for c in items)
+        clicked = sum(c["unique_clickers"] for c in items)
         bounced = sum(c["bounced"] for c in items)
         complained = sum(c["complained"] for c in items)
-        return opened / delivered, bounced / delivered, complained / delivered
+        return opened / delivered, clicked / delivered, bounced / delivered, complained / delivered
 
-    this_open, this_bounce, this_complaint = _rates(this_period)
-    prev_open, prev_bounce, prev_complaint = _rates(prev_period)
+    this_open, this_click, this_bounce, this_complaint = _rates(this_period)
+    prev_open, prev_click, prev_bounce, prev_complaint = _rates(prev_period)
     count = len(this_period)
     story = f"You sent {count} newsletter{'s' if count != 1 else ''} this time."
 
     if this_open is not None:
-        story += f" Out of every 100 people who received one, about {round(this_open * 100)} opened it."
+        story += f" Out of every 100 people who received one, about {round(this_open * 100)} opened it"
+        # Never round a sub-1% click rate up to "about 1" -- that would overstate
+        # it, the exact trap this whole fix exists to close. Omit the clause
+        # instead of guessing when there's nothing honest to round to.
+        if this_click is not None and round(this_click * 100) >= 1:
+            story += f" and about {round(this_click * 100)} clicked through to read more"
+        story += "."
 
     improvements, concerns = [], []
     if this_open is not None and prev_open is not None and prev_open > 0:
@@ -1174,6 +1197,12 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
             improvements.append("more people are opening your emails")
         elif change < -0.1:
             concerns.append("fewer people opened them than usual")
+    if this_click is not None and prev_click is not None and prev_click > 0:
+        change = (this_click - prev_click) / prev_click
+        if change > 0.1:
+            improvements.append("more people are clicking through to read more")
+        elif change < -0.1:
+            concerns.append("fewer people clicked through than usual")
     if this_bounce is not None and prev_bounce is not None and prev_bounce - this_bounce >= 0.01:
         improvements.append("fewer of them bounced back")
     elif this_bounce is not None and prev_bounce is not None and this_bounce - prev_bounce >= 0.01:
