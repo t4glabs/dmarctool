@@ -551,7 +551,46 @@ chapter, not bundled into this one.
 
 ---
 
-*(Next entry: Chapter 12 — whether naming specifics (which domain, how many identities) in the
-`borrowed_sending_identity` client story would score higher on usefulness now that length isn't a
-constraint; otherwise, resume the remaining `USE_CASES.md` sections not yet touched (F, H once Listmonk
-unblocks, J).)*
+## 2026-09-24 — Chapter 12: naming specifics in borrowed_sending_identity, now that length is free
+
+**Context:** Chapter 11 left this open: the client story for `borrowed_sending_identity` is entirely
+generic (no culprit domain, count, or duration ever surfaces), even though the real detector already
+computes all of it. Tested whether naming specifics scores higher, per the Chapter 10 scope correction
+(email report is the deliverable, length is not a constraint).
+
+**Baseline vs. with real detail**, tested on aikyamfellows.org's real, live data (2 open findings:
+aikyam.space, 26 msgs/144 days; aikyamjobs.org, 3 msgs/156 days):
+
+| | audience_fit (clear_as_is) | honesty_calibration (accurate) | usefulness |
+|---|---|---|---|
+| baseline (fully generic) | 79% | 68% | 1.63/4 |
+| + real detail (list format) | 61% | 84% | 2.53/4 |
+| + real detail (prose, shipped) | 66% | 87% | 2.50/4 |
+
+**A genuine surprise**: the fully-generic baseline was WORSE on `honesty_calibration` (68%, 31%
+overstates) than the version with real specifics (87%) — an unsubstantiated claim ("some of your emails")
+reads as less trustworthy than the same claim backed by real numbers, not more. `usefulness` more than
+doubled once real detail was added. `audience_fit` dipped moderately (naming domains/durations adds real
+complexity) but stayed majority-clear.
+
+**The complication, found while building this**: `_still_open_items`' own query (`GROUP BY category` +
+`MAX(ref_key)`) only ever surfaces ONE ref_key per category — meaning a naive fix using just that one
+ref_key would have silently omitted aikyamfellows.org's second real finding (aikyamjobs.org), understating
+the real picture. New function `_borrowed_identity_detail()` queries ALL open ref_keys for the category
+directly, independent of that GROUP BY limitation, and parses the real msg-count/day-span already stored
+in each action item's `detail` text (same regex-on-stored-text approach as
+`_chronic_bounce_count_in_period`, so it can never drift from what was actually raised). Handles 1 vs. 2+
+accounts with correct prose joining, and a day-phrase helper fixing a grammar edge case caught while
+verifying ("over the last 0 days" / "over the last 1 days" → "just today" / "the last day").
+
+**Shipped in** `app/domain_report.py::_borrowed_identity_detail`, wired into `_still_open_items`. Verified
+against all 4 real domains currently carrying this finding (aikyamfellows.org ×2, aikyamhq.com,
+tinybridge.in, catsofkochi.com) — correct singular/plural and day-phrase grammar on every real case.
+Confirmed via `preview_domain_report()` that aikyamfellows.org's real report now shows: *"Right now, 2
+other accounts are involved: aikyam.space, which has carried 26 of your emails over the last 144 days, and
+aikyamjobs.org, which has carried 3 of your emails over the last 156 days."* Service restarted, healthy.
+
+---
+
+*(Next entry: Chapter 13 — resume the remaining `USE_CASES.md` sections not yet touched: F (new-detector
+rollout, now with 2 fresh real examples from Chapters 9/11 to check against), H (blocked on Listmonk), J.)*

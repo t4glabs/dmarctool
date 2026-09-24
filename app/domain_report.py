@@ -643,6 +643,52 @@ def _domain_expiry_detail(conn, domain_id: int):
     return f"It's due to expire on {row['expires_at']}, which is {days_left} day{'s' if days_left != 1 else ''} away"
 
 
+def _borrowed_identity_detail(conn, domain_id: int):
+    """Real specifics (which account(s), how many emails, how long) for every
+    currently-open borrowed_sending_identity culprit -- added 2026-09-24
+    (Chapter 12, jev/DECISIONS_LOG.md) once the user confirmed length is not a
+    constraint for the email report. Queries ALL open ref_keys directly rather
+    than relying on _still_open_items' own GROUP BY (which only ever surfaces
+    one ref_key per category via MAX()) -- a domain can genuinely be borrowing
+    more than one identity at once (aikyamfellows.org currently borrows two),
+    and naming only one would understate the real picture. Parses msg count
+    and day span from detect_borrowed_sending_identity's own stored detail
+    text (same regex-on-stored-text approach as _chronic_bounce_count_in_period)
+    rather than recomputing, so this never drifts from what actually got
+    raised. Returns None if nothing parses, rather than guessing."""
+    rows = conn.execute(
+        """SELECT ref_key, detail FROM action_items
+           WHERE domain_id=? AND category='borrowed_sending_identity' AND status='open'
+             AND ref_key IS NOT NULL ORDER BY ref_key""",
+        (domain_id,),
+    ).fetchall()
+    def _day_phrase(days: int) -> str:
+        if days <= 0:
+            return "just today"
+        if days == 1:
+            return "the last day"
+        return f"the last {days} days"
+
+    parts = []
+    for r in rows:
+        m = re.search(r"^(\d+) msgs .*? over at least (\d+) days", r["detail"] or "")
+        if not m:
+            continue
+        msgs, days = int(m.group(1)), int(m.group(2))
+        parts.append((r["ref_key"], msgs, days))
+    if not parts:
+        return None
+    if len(parts) == 1:
+        acct, msgs, days = parts[0]
+        return (f"Right now that's {acct}, which has carried {msgs} of your email{'s' if msgs != 1 else ''} "
+                f"over {_day_phrase(days)}.")
+    clauses = [f"{acct}, which has carried {msgs} of your emails over {_day_phrase(days)}"
+               for acct, msgs, days in parts]
+    return f"Right now, {len(parts)} other accounts are involved: " + ", and ".join(
+        [", ".join(clauses[:-1]), clauses[-1]] if len(clauses) > 2 else clauses
+    ) + "."
+
+
 def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blocklist_real_ips: set = frozenset()):
     """Still-open action items, one per category (same dedup as the
     dashboard's own list), each carrying as concrete a "detail" clause as we
@@ -682,6 +728,8 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
             detail = _reputation_rate_detail(conn, category, ref_key, start_str, end_str)
         elif category == "domain_expiring_soon":
             detail = _domain_expiry_detail(conn, domain_id)
+        elif category == "borrowed_sending_identity":
+            detail = _borrowed_identity_detail(conn, domain_id)
         story = _plain_problem(category)
         if category == "postmaster_compliance":
             story = _postmaster_story(conn, domain_id) or story
