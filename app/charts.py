@@ -66,16 +66,24 @@ def pass_rate_sparkline(series, threshold: float = 0.99, width: int = 640, heigh
     return svg
 
 
-def spam_rate_sparkline(series, width: int = 640, height: int = 140) -> str:
+def spam_rate_sparkline(series, width: int = 640, height: int = 140, colors: dict | None = None) -> str:
     """series: list of (date_str, rate_or_none) as from analysis.postmaster_daily_series.
-    Reference lines at Gmail's own published thresholds (0.10% ideal, 0.30% hard limit)."""
+    Reference lines at Gmail's own published thresholds (0.10% ideal, 0.30% hard limit).
+
+    `colors`, when given, overrides the default currentColor/var(--x) theming
+    with literal hex -- keys "ink"/"warn"/"bad" -- for embedding in an emailed
+    HTML file, which has no access to the dashboard's live stylesheet. Default
+    (None) is byte-identical to the prior behavior."""
+    ink = colors["ink"] if colors else "currentColor"
+    warn_c = colors["warn"] if colors else "var(--warn)"
+    bad_c = colors["bad"] if colors else "var(--bad)"
     pad_l, pad_r, pad_t, pad_b = 42, 8, 10, 20
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
 
     points_with_data = [(i, r) for i, (_, r) in enumerate(series) if r is not None]
     if len(series) < 2 or not points_with_data:
-        return '<svg width="{}" height="{}"><text x="10" y="20" fill="currentColor" opacity="0.6">not enough history yet</text></svg>'.format(width, height)
+        return '<svg width="{}" height="{}"><text x="10" y="20" fill="{}" opacity="0.6">not enough history yet</text></svg>'.format(width, height, ink)
 
     n = len(series)
 
@@ -98,17 +106,17 @@ def spam_rate_sparkline(series, width: int = 640, height: int = 140) -> str:
             gy = y_for(pct)
             gridlines.append(
                 f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{width - pad_r}" y2="{gy:.1f}" '
-                f'stroke="currentColor" stroke-opacity="0.25" stroke-width="1" stroke-dasharray="4 3"/>'
+                f'stroke="{ink}" stroke-opacity="0.25" stroke-width="1" stroke-dasharray="4 3"/>'
             )
             gridlines.append(
-                f'<text x="2" y="{gy + 4:.1f}" font-size="10" fill="currentColor" opacity="0.6">{label}</text>'
+                f'<text x="2" y="{gy + 4:.1f}" font-size="10" fill="{ink}" opacity="0.6">{label}</text>'
             )
 
     first_date, last_date = series[0][0], series[-1][0]
 
     dots = []
     for i, rate in points_with_data:
-        style = "fill:var(--bad)" if rate >= 0.003 else ("fill:var(--warn)" if rate >= 0.001 else "fill:currentColor")
+        style = f"fill:{bad_c}" if rate >= 0.003 else (f"fill:{warn_c}" if rate >= 0.001 else f"fill:{ink}")
         tooltip = f"{series[i][0]}: {rate:.3%}"
         dots.append(
             f'<circle cx="{x_for(i):.1f}" cy="{y_for(rate):.1f}" r="3" style="{style}" opacity="0.9" '
@@ -117,14 +125,15 @@ def spam_rate_sparkline(series, width: int = 640, height: int = 140) -> str:
 
     return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
   {''.join(gridlines)}
-  <polyline points="{polyline}" fill="none" stroke="currentColor" stroke-width="1.75" opacity="0.9"/>
+  <polyline points="{polyline}" fill="none" stroke="{ink}" stroke-width="1.75" opacity="0.9"/>
   {''.join(dots)}
-  <text x="{pad_l}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6">{first_date}</text>
-  <text x="{width - pad_r}" y="{height - 4}" font-size="10" fill="currentColor" opacity="0.6" text-anchor="end">{last_date}</text>
+  <text x="{pad_l}" y="{height - 4}" font-size="10" fill="{ink}" opacity="0.6">{first_date}</text>
+  <text x="{width - pad_r}" y="{height - 4}" font-size="10" fill="{ink}" opacity="0.6" text-anchor="end">{last_date}</text>
 </svg>'''
 
 
-def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 170, rolling_days: int = 7) -> str:
+def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 170, rolling_days: int = 7,
+                        colors: dict | None = None) -> str:
     """series: list of (date_str, numerator, denominator) -- ONE metric
     (just bounce rate, or just complaint rate), never sharing an axis with
     another metric at a wildly different scale. A 5% bounce-rate warning
@@ -140,10 +149,19 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
     rates, so a single big campaign day isn't drowned out by a week of tiny
     ones or vice versa. `thresholds`: list of (value, label, color) in
     ascending order -- drawn as dashed reference lines, and used to color
-    the latest point/line by the most severe one it's crossed. The latest
-    rolling value is called out directly on the chart (not just on hover),
-    and the x-axis gets real, spaced-out date labels instead of only the
-    two ends."""
+    the latest point/line by the most severe one it's crossed; callers
+    already pass a concrete color per threshold, so an emailed report's
+    caller just passes literal hex there directly. The latest rolling value
+    is called out directly on the chart (not just on hover), and the x-axis
+    gets real, spaced-out date labels instead of only the two ends.
+
+    `colors`, when given, overrides the function's OWN internal
+    currentColor/var(--ok) defaults (axis text, raw dots, and the
+    no-threshold-crossed line color) with literal hex -- keys "ink"/"ok" --
+    for embedding in an emailed HTML file. Default (None) is byte-identical
+    to the prior behavior."""
+    ink = colors["ink"] if colors else "currentColor"
+    ok_c = colors["ok"] if colors else "var(--ok)"
     pad_l, pad_r, pad_t, pad_b = 34, 50, 14, 22
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
@@ -153,7 +171,7 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
     # still contribute to the rolling window below, they just have no dot.
     points_with_data = [(i, num / den, num, den) for i, (_, num, den) in enumerate(series) if den]
     if len(series) < 2 or not points_with_data:
-        return '<svg width="{}" height="{}"><text x="10" y="20" fill="currentColor" opacity="0.6">not enough history yet</text></svg>'.format(width, height)
+        return '<svg width="{}" height="{}"><text x="10" y="20" fill="{}" opacity="0.6">not enough history yet</text></svg>'.format(width, height, ink)
 
     n = len(series)
 
@@ -191,8 +209,8 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
         return pad_t + (1 - r / y_max) * plot_h
 
     gridlines = [
-        f'<text x="1" y="{pad_t + 4}" font-size="10" fill="currentColor" opacity="0.5">{y_max:.2%}</text>',
-        f'<text x="1" y="{pad_t + plot_h:.1f}" font-size="10" fill="currentColor" opacity="0.5">0%</text>',
+        f'<text x="1" y="{pad_t + 4}" font-size="10" fill="{ink}" opacity="0.5">{y_max:.2%}</text>',
+        f'<text x="1" y="{pad_t + plot_h:.1f}" font-size="10" fill="{ink}" opacity="0.5">0%</text>',
     ]
     for value, label, color in thresholds:
         if value <= y_max:
@@ -206,12 +224,12 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
             )
 
     raw_dots = "".join(
-        f'<circle cx="{x_for(i):.1f}" cy="{y_for(r):.1f}" r="2" fill="currentColor" opacity="0.25" '
+        f'<circle cx="{x_for(i):.1f}" cy="{y_for(r):.1f}" r="2" fill="{ink}" opacity="0.25" '
         f'data-tooltip="{series[i][0]}: {r:.3%} ({num} of {den})"/>'
         for i, r, num, den in points_with_data
     )
 
-    latest_color = "var(--ok)"
+    latest_color = ok_c
     for value, _label, color in thresholds:
         if rolling[-1][1] >= value:
             latest_color = color
@@ -236,7 +254,7 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
         except ValueError:
             label = series[i][0]
         x_ticks.append(
-            f'<text x="{x_for(i):.1f}" y="{height - 4}" font-size="9" fill="currentColor" '
+            f'<text x="{x_for(i):.1f}" y="{height - 4}" font-size="9" fill="{ink}" '
             f'opacity="0.55" text-anchor="middle">{label}</text>'
         )
     if (n - 1) % tick_every != 0:
@@ -245,7 +263,7 @@ def metric_trend_chart(series, thresholds=(), width: int = 640, height: int = 17
         except ValueError:
             last_label = series[-1][0]
         x_ticks.append(
-            f'<text x="{x_for(n - 1):.1f}" y="{height - 4}" font-size="9" fill="currentColor" '
+            f'<text x="{x_for(n - 1):.1f}" y="{height - 4}" font-size="9" fill="{ink}" '
             f'opacity="0.55" text-anchor="end">{last_label}</text>'
         )
 

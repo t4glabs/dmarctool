@@ -154,12 +154,20 @@
 
     {% if spam_trend %}
     <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:#7A746B; margin:0 0 4px 0;">Google's own view of your mail</p>
-    <p style="font-size:15px; line-height:1.6; margin:0 0 16px 0;">{{ spam_trend }}</p>
+    <p style="font-size:15px; line-height:1.6; margin:0 0 8px 0;">{{ spam_trend }}</p>
+    {% if spam_rate_chart_svg %}
+    <div style="margin:0 0 16px 0;">{{ spam_rate_chart_svg|safe }}</div>
+    {% endif %}
     {% endif %}
 
     {% if list_hygiene %}
     <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:#7A746B; margin:0 0 4px 0;">Keeping your list clean</p>
     <p style="font-size:15px; line-height:1.6; margin:0;">{{ list_hygiene }}.</p>
+    {% endif %}
+
+    {% if bounce_rate_chart_svg %}
+    <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:#7A746B; margin:{{ '16px' if list_hygiene else '0' }} 0 4px 0;">Your bounce rate over time</p>
+    <div>{{ bounce_rate_chart_svg|safe }}</div>
     {% endif %}
   </div>
 

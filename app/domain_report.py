@@ -2120,9 +2120,34 @@ def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_
         pass_rate_donut_svg = None
         pass_rate_donut_svg_small = None
 
+    spam_series = analysis.postmaster_daily_series(conn, domain_id, days=60)
+    if any(rate is not None for _, rate in spam_series):
+        spam_rate_chart_svg = charts.spam_rate_sparkline(
+            spam_series, width=520, height=120, colors=_EMAIL_CHART_COLORS)
+    else:
+        spam_rate_chart_svg = None
+
+    # Bounce rate, not complaint rate -- complaint volume is thin enough
+    # portfolio-wide that a real chart would mostly be an uninteresting flat
+    # line; bounce rate is the one _list_hygiene() already narrates counts
+    # for without ever showing the rate those counts sit inside, so this
+    # chart is genuinely new information, not a restatement.
+    mailgun_series = analysis.mailgun_daily_series(conn, domain_id, days=60)
+    bounce_points = [(r["day"], r["bounce_num"], r["bounce_den"]) for r in mailgun_series]
+    if any(den for _, _, den in bounce_points):
+        settings = ensure_default_settings(conn)
+        bounce_warn = float(settings["mailgun_bounce_rate_warn"])
+        bounce_rate_chart_svg = charts.metric_trend_chart(
+            bounce_points, thresholds=[(bounce_warn, "warn", _EMAIL_CHART_COLORS["bad"])],
+            width=520, height=150, colors=_EMAIL_CHART_COLORS)
+    else:
+        bounce_rate_chart_svg = None
+
     return {
         "pass_rate_donut_svg": pass_rate_donut_svg,
         "pass_rate_donut_svg_small": pass_rate_donut_svg_small,
+        "spam_rate_chart_svg": spam_rate_chart_svg,
+        "bounce_rate_chart_svg": bounce_rate_chart_svg,
     }
 
 

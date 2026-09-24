@@ -1206,3 +1206,42 @@ real zero-report domain). Service restarted, healthy. No email sent.
 
 *(Next entry: Round 3 — spam-rate and bounce/complaint trend charts, the richest real historical data in
 the whole portfolio.)*
+
+## Chapter 25 — Email report visual/UI redesign, Round 3: trend charts
+
+Second and third real charts. `colors` param (default `None`, byte-identical to prior behavior) added to
+`spam_rate_sparkline` and `metric_trend_chart` in `app/charts.py` — both needed the full ink/warn/bad hex
+treatment across every internal `currentColor`/`var(--x)` (axis text, gridlines, raw dots, the
+no-threshold-crossed line color), not just the arc-level swap `disposition_donut_chart` needed in
+Chapter 24. `metric_trend_chart`'s `thresholds` list was already fully caller-supplied (value, label,
+color) tuples, so no chart-level change was needed there beyond the function's own internal defaults —
+the email caller just passes literal hex in the threshold tuples directly.
+
+**A real scope decision, not in the original plan text**: only ONE `metric_trend_chart` ships (bounce
+rate), not two (bounce + complaint, which is what the dashboard shows). Reasoning: complaint volume is
+thin enough portfolio-wide that a real chart would mostly be an uninteresting flat line, while bounce rate
+is the metric `_list_hygiene()` already narrates *counts* for without ever showing the *rate* those counts
+sit inside — genuinely new information, not a duplicate. Paired with `list_hygiene` visually but gated
+independently on its own data (bounce-rate history is broader than `list_hygiene`'s own gate, which only
+fires when there were suppression/chronic-bounce events specifically this period) so the chart doesn't
+hide behind a narrower condition than its real data supports.
+
+**`_email_charts()` extended**: `spam_rate_chart_svg` (`analysis.postmaster_daily_series`, 60 days, paired
+with the existing `spam_trend` paragraph) and `bounce_rate_chart_svg` (`analysis.mailgun_daily_series`,
+60 days, threshold from the real `mailgun_bounce_rate_warn` setting, same one the dashboard's own alert
+uses). Both independently `{% if %}`-gated on real series length, matching `charts.py`'s own "not enough
+history yet" convention.
+
+**No Jev call this round** — both charts pair with already-approved existing sentences, no new captions.
+
+**Verified against the full real portfolio**: zero Jinja errors on all 33 domains. Spam-rate chart renders
+on 16 domains, bounce-rate chart on 18. Live-checked on aikyamjobs.org (real hex confirmed throughout the
+raw SVG — no `currentColor`/`var()` leftover anywhere, a real red-threshold-crossing dot correctly colored
+`#C0392B`, a real 7-day rolling average called out at 0.31%) and ilabindia.org (thin postmaster history —
+11 real points, confirmed the chart renders sensibly rather than looking broken at low point-count, per
+the plan's explicit validation target for this case). Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: Round 4 — the campaign-engagement table bars, the one genuinely new visual surface in this
+redesign.)*
