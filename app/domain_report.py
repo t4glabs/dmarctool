@@ -109,9 +109,12 @@ _PROBLEM_STORY = {
     # (see AWS_SES_ONBOARDING-adjacent Chapter 2 note): a new check existed on
     # the dashboard for weeks with no matching story here, which the project's
     # own stated rule says should never happen.
-    "dkim_alignment_gap": ("one of the two checks that prove your emails really came from you almost never "
-                            "actually confirms it, so you're currently relying entirely on the other one -- with "
-                            "no backup if that one ever has a problem"),
+    # Rewritten again 2026-09-24 (jev workflow Chapter 18, priority 2): the
+    # natural_voice criterion (added Chapter 17) found this scored 82%
+    # reads_like_generated_boilerplate; this version tested at 31%.
+    "dkim_alignment_gap": ("right now, your emails only really prove they're yours one way, not two. The "
+                            "backup way almost never works, so if the first one ever breaks, nothing would "
+                            "catch it"),
     "mta_sts_broken": ("the extra protection that keeps email sent *to* your organization from being quietly "
                         "intercepted had stopped working the way it should"),
     "campaign_compliance_issue": ("one of your newsletters was missing some of the formatting mailbox providers "
@@ -231,7 +234,7 @@ _TIP_LIBRARY = {
     "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can -- if it lapses, your website and all your email stop working right away, and someone else could register it.",
     "spf_lookup_limit": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "dkim_weak_key": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
-    "dkim_alignment_gap": "This one needs a setting turned on with whichever service actually sends your mail (Google Workspace, Mailgun, etc) -- aikyam can help set this up.",
+    "dkim_alignment_gap": "This is a one-time setting aikyam can turn on with whichever service actually sends your mail, like Google Workspace or Mailgun.",
     "mta_sts_broken": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
     "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link -- most newsletter tools have a single setting for this.",
     "display_name_inconsistent": "Keep your newsletter's \"from\" name consistent and clearly recognisable as your organization across every email you send.",
@@ -953,8 +956,8 @@ def _risk_warning(conn, domain_id: int, now: datetime.datetime):
 _POSTMASTER_REQUIREMENT_STORY = {
     # Phrased as clauses that read naturally after "Google told us ..." --
     # so none of them may start with "Google" or the sentence doubles it up.
-    "SPF_AND_DKIM": ("it couldn't always confirm your emails were signed by you -- the proof that a message really "
-                      "came from your domain"),
+    "SPF_AND_DKIM": ("it couldn't always confirm your emails were really signed by you. That's the proof a "
+                      "message actually came from your domain"),
     "DMARC_ALIGNMENT": ("the \"from\" address on some of your mail didn't line up with the domain that actually "
                          "sent it, which makes it look less trustworthy"),
     "ENCRYPTION": "some of your mail travelled without encryption, which it now expects for every message",
@@ -972,8 +975,8 @@ _POSTMASTER_REQUIREMENT_STORY = {
     # real domains with an open postmaster_compliance item (aikyam.space,
     # captains.ngo, climatekhoj.com, makestories.space) were hitting the
     # generic fallback because of this and the missing DMARC_POLICY key below.
-    "USER_REPORTED_SPAM_RATE": ("more of your recipients marked your mail as spam than its guidance allows -- the "
-                                 "one number that most directly decides whether you reach the inbox"),
+    "USER_REPORTED_SPAM_RATE": ("more of your recipients marked your mail as spam than its guidance allows. "
+                                 "That's the one number that most directly decides whether you reach the inbox"),
     "DELIVERABILITY": ("it isn't yet confident about your mail overall, most often because it simply hasn't seen "
                         "enough steady sending from your domain to judge it yet"),
     # Added alongside the USER_REPORTED_SPAM_RATE fix above -- a real,
@@ -1409,7 +1412,10 @@ _WHY_IT_MATTERS = {
     "domain_expiring_soon": "If a domain lapses, your website and every email address on it stop working the same day.",
     "spf_lookup_limit": "This is part of what proves an email really came from you, so it's worth keeping it working cleanly.",
     "dkim_weak_key": "This is the signature a funder's mail system uses to confirm your message is genuinely yours.",
-    "dkim_alignment_gap": "Right now you have only one way to prove an email is genuinely yours, not two -- if that one has a problem, there's nothing to fall back on.",
+    # Reworded 2026-09-24 (Chapter 18) to add real information instead of
+    # restating the story's own mechanism (the story already explains "one
+    # way, not two") -- this now names the actual stake instead.
+    "dkim_alignment_gap": "If your usual way ever breaks, funders and donors could stop seeing your emails as trustworthy, with no warning to either of you.",
     "mta_sts_broken": "It's what stops someone quietly reading or tampering with email sent to your organization.",
     "campaign_compliance_issue": "Mailbox providers increasingly expect this from newsletter senders, and missing it can push your mail toward spam.",
     "display_name_inconsistent": "A consistent \"from\" name is part of how readers decide an email is really you and worth opening.",

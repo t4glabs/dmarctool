@@ -838,6 +838,54 @@ full before/after read. Service restarted, healthy.
 
 ---
 
-*(Next entry: Chapter 18 — continue the em-dash/AI-voice sweep through the rest of `_PROBLEM_STORY`/
-`_TIP_LIBRARY`/`_WHY_IT_MATTERS`, prioritizing whichever strings render in other real, currently-open
-reports next.)*
+## 2026-09-24 — Chapter 18: em-dash sweep, round 2 — prioritized by real domain count
+
+**Method:** parsed `_PROBLEM_STORY`/`_TIP_LIBRARY`/`_WHY_IT_MATTERS`/`_POSTMASTER_REQUIREMENT_STORY` for
+every entry still containing "--" (13 entries found), then cross-referenced against real currently-open
+categories portfolio-wide, prioritizing by how many real domains each one actually affects right now.
+
+**Fixed — `_POSTMASTER_REQUIREMENT_STORY`, affects the 8-domain `postmaster_compliance` category:**
+- `SPF_AND_DKIM`: 75%→48% `reads_like_generated_boilerplate`. Split "...you -- the proof that..." into two
+  sentences.
+- `USER_REPORTED_SPAM_RATE`: 91%→60%. Same split pattern.
+- Neither is currently the MOST RECENTLY UPDATED requirement for any of the 8 real domains (checked before
+  claiming impact — `DMARC_POLICY`/`DELIVERABILITY` currently win that slot for the domains tested), so
+  these specific fixes aren't live yet for any real send, but are real content that will render once
+  those requirements are the most recent again.
+
+**Fixed — `dkim_alignment_gap`'s all 3 texts (story/tip/why), affects 2 real domains
+(catsofkochi.com, captains.ngo), and resolves a gap flagged back in Chapter 5:**
+- Story: 82%→31% `reads_like_generated_boilerplate`. Chapter 5 had already flagged this story's
+  `audience_fit` as still needing work (best prior attempt: 36-46% clear); this round's rewrite trades a
+  few points of `audience_fit` (78%→85% needs-pass — a real, acknowledged cost) for a much larger
+  `natural_voice` gain. `repetition_risk` on the story alone also improved slightly (81%→79%).
+- Tip: dropped the em-dash, matches the established "one-time setting, aikyam handles it" tip pattern.
+- `_WHY_IT_MATTERS`: rewritten to add NEW information (funder/donor trust consequence) instead of
+  restating the story's own "one way, not two" mechanism, which is what made the combined story+why
+  redundant in the first place.
+- Note on the combined story+why+trailer test: still scored 97% `repetition_risk` — this is the
+  already-documented, already-mostly-solved cross-cycle repetition problem from Chapter 5 (the duration
+  note only kicks in once an item's been open 30+ days; this real item opened 2 days ago, so it hasn't
+  triggered yet). Not a new failure of this round's wording fix.
+
+**Checked, no action taken (2 items):**
+- `lookalike_domain`'s story (7 real domains, the highest domain-count of anything tested this round):
+  already scores 68% `reads_like_a_person` as-is. Two rewrite attempts tested — neither improved
+  `natural_voice` meaningfully, and one measurably hurt `honesty_calibration` (78% vs. the ~90%+ the
+  original scored in Chapter 4). Left unchanged rather than trade a real win for an uncertain one.
+- The shared generic-DNS tip ("...aikyam will take care of it for you", affects `spf_missing`'s 3 domains
+  among 6 total categories): scores a borderline 56% boilerplate. One rewrite attempt tested WORSE (61%).
+  Already extensively validated for `actionability`/clarity in Chapter 1 — left unchanged rather than
+  degrade something that's already working well on other axes for an unproven style gain.
+
+**Shipped in** `app/domain_report.py` only this round (no template changes). Verified live against
+catsofkochi.com and captains.ngo's real rendered reports. Service restarted, healthy.
+
+**Running tally**: ~143 of the original ~149 "--" occurrences remain. Two more real "checked, no action"
+results this round are still valuable signal — not every em-dash is actually hurting the sentence it's in.
+
+---
+
+*(Next entry: Chapter 19 — continue the sweep. Remaining real-impact candidates not yet tested: the
+`campaign_compliance_issue` tip, `mta_sts_broken`'s tip, `blocklist`'s tip (0 real open right now but
+worth fixing proactively), and `domain_expiring_soon`'s tip.)*
