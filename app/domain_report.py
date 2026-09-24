@@ -1027,9 +1027,14 @@ def _impersonation_good_news(conn, domain_id: int, domain_name: str, start_epoch
     actually feels, and the clearest possible demonstration of why this all
     matters. Reuses source_classification.caught_impersonation() (the same
     detection the dashboard shows) and is worded honestly by what DMARC
-    actually did: never 'blocked' when the policy only detected. Returns None
-    when there were no caught attempts this period, so the line just doesn't
-    appear."""
+    actually did: never 'blocked' when the policy only detected. Names the
+    most recent attempt's fake address and date -- a Jev-informed change
+    (jev/DECISIONS_LOG.md, Chapter 4): a naming-the-example version tested
+    higher on audience_fit and honesty_calibration than the countries-only
+    version, on the same real caught attempts. 'blocked outright' also
+    dropped everywhere in favor of plainer phrasing per the same audit.
+    Returns None when there were no caught attempts this period, so the line
+    just doesn't appear."""
     data = caught_impersonation(conn, domain_id, domain_name, start_epoch, end_epoch)
     if not data:
         return None
@@ -1040,16 +1045,22 @@ def _impersonation_good_news(conn, domain_id: int, domain_name: str, start_epoch
         names = [_COUNTRY_NAMES.get(c, c) for c in countries[:2]]
         where = f", one of them from {names[0]}" if len(names) == 1 else f", from places like {names[0]} and {names[1]}"
     base = (f"We caught {n} attempt{'s' if n != 1 else ''} to send email pretending to be your "
-            f"organization{where}")
+            f"organization{where}.")
+    example = data["examples"][0] if data["examples"] else None
+    detail = ""
+    if example and example.get("identity") and example.get("date"):
+        detail = (f' The most recent, on {example["date"]}, used the made-up address '
+                   f'"{example["identity"]}" to try to pass as you.')
     if data["all_blocked"]:
-        return (f"{base}. Not one reached anyone -- your protection blocked them all. This is exactly "
-                f"what it's there for.")
-    if data["blocked"]:
-        return (f"{base}. {data['blocked']} {'was' if data['blocked'] == 1 else 'were'} blocked outright and the "
-                f"rest were caught and reported to us. As we finish strengthening your protection, attempts "
-                f"like these get stopped automatically.")
-    return (f"{base}. They were caught and reported to us, though not blocked outright yet -- strengthening "
-            f"your protection to full strength is what stops attempts like these from reaching anyone at all.")
+        outcome = " Not one reached anyone -- your protection blocked them all. This is exactly what it's there for."
+    elif data["blocked"]:
+        outcome = (f" {data['blocked']} {'was' if data['blocked'] == 1 else 'were'} stopped cold before it "
+                   f"reached anyone, and the rest were seen and logged. Finishing the upgrade to your "
+                   f"protection is what stops the rest the same way.")
+    else:
+        outcome = (" We saw and logged every one, but your protection isn't turned up far enough yet to stop "
+                   "them before they arrive -- turning it up further is what will.")
+    return base + detail + outcome
 
 
 def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, end_date: str, prev_start_date: str):
@@ -1158,12 +1169,26 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         # motivating fact. Gated on a real volume floor on BOTH sides so a
         # tiny prior period (e.g. 2 emails) doesn't produce a misleading "10x
         # growth" claim.
+        #
+        # The trailing "not a sign of anything good or bad on its own" line was
+        # added in a Chapter 4 Jev audit (jev/DECISIONS_LOG.md): the bare
+        # up-from/down-from sentence scored only 51-56% accurately_calibrated
+        # on honesty_calibration -- Jev read stating a volume change without
+        # saying whether it matters as implicitly overstating its own
+        # significance (same trap as vague-and-alarming language, just from
+        # the other direction: unexplained "signal" instead of unexplained
+        # "problem"). Explicitly framing it as neutral context moved that to
+        # ~58-62%.
         if prev_total and prev_total >= 20 and total >= 20:
             growth = (total - prev_total) / prev_total
             if growth > 0.15:
-                deliverability += f" You also sent more email this time -- about {total}, up from about {prev_total} last time."
+                deliverability += (f" You also sent more email this time -- about {total}, up from about "
+                                    f"{prev_total} last time. That's just extra context for the number above, "
+                                    f"not something you need to do anything about.")
             elif growth < -0.15:
-                deliverability += f" You sent less email this time -- about {total}, down from about {prev_total} last time."
+                deliverability += (f" You sent less email this time -- about {total}, down from about "
+                                    f"{prev_total} last time. That's just extra context for the number above, "
+                                    f"not something you need to do anything about.")
     else:
         deliverability = "We didn't get enough information about your emails this time to say how they're doing. Nothing to worry about, we'll know more next time."
 
