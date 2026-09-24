@@ -366,6 +366,63 @@ already right for its real audience. Added an explicit scope note to `jev/CRITER
 
 ---
 
-*(Next entry: Chapter 9 — section G (deciding what dashboard-only data should ever cross into a client
-report at all) has real candidate data and hasn't been touched; section D's remaining items (streak-bucket
-repetition, health-trajectory wording) also have real multi-month data available now.)*
+## 2026-09-24 — Chapter 9: a real SPF miscategorization found investigating section G
+
+**Context:** Went in to test use case G.63 (should the SPF-lookup-budget detail — which `include:` spends
+the DNS-lookup budget — ever cross into a client report). Checking real domains with an open
+`spf_lookup_limit` item to pull real detail first (same discipline as Chapters 5, 7, 8: check what the real
+data actually says before testing any wording) turned up a different, more fundamental bug before G.63's
+actual question was ever reached.
+
+**Correction to the Chapter 8 queue note:** section D's "remaining items now have real multi-month data" was
+wrong — checked before starting, and no domain has a real 3-point `_health_timeline` yet (the tool is
+~2 months old), and no domain has crossed `_pass_rate_streak_days`' 30-day threshold yet (max real streak:
+18 days, on 6 different domains). D stays dormant for now; the queue note should have been verified before
+being written, not assumed.
+
+**The bug:** `_run_spf()` in `app/compliance.py` raised category `spf_lookup_limit` for BOTH `status ==
+"over_limit"` (a real SPF record with too many DNS lookups) AND `status == "missing"` (no SPF record at
+all) — two completely different real-world problems sharing one category, and therefore one client-facing
+story: *"the settings that prove your emails really come from you had grown too complicated for some mail
+systems to finish checking."* That sentence is simply false for a domain with no SPF record at all — there
+is nothing "too complicated," there's nothing there.
+
+**Confirmed live on real data:** tinkerhub.org and olimalarfoundation.org both have `spf_lookup_limit` open
+right now, and both are genuinely missing SPF entirely (`spf_checks.status='missing'`,
+`note='no SPF (v=spf1) record found at...'`) — not a hypothetical edge case, the wrong story for both real
+domains that currently have this category open.
+
+**A second discovery while fixing it:** `spf_missing` — the correct category for this case — already
+exists, fully built (`_PROBLEM_STORY`, `_TIP_LIBRARY`, `_WHY_IT_MATTERS` in `domain_report.py`,
+`CATEGORY_REMEDIATION` in `labels.py`), but **no code anywhere actually raised it**. Dead infrastructure,
+presumably built in anticipation of exactly this case and then never wired up.
+
+**Fix:** split `_run_spf()`'s branch by status — `"missing"` now raises `spf_missing` (dismissing any stale
+`spf_lookup_limit` for the same target), `"over_limit"` keeps raising `spf_lookup_limit` (dismissing any
+stale `spf_missing`), and the catch-all cleanup on recovery now dismisses both categories. Added the
+missing `CATEGORY_LABELS`/`CATEGORY_HELP`/`CATEGORY_PRIORITY_ORDER` entries for `spf_missing` in
+`labels.py` (previously only `CATEGORY_REMEDIATION` existed — the rest of the dashboard-facing
+infrastructure was as unfinished as the code path that would have raised it).
+
+**Jev's role here was secondary, not primary** — this is a logic/categorization bug, not a wording problem,
+and a `honesty_calibration` check on the wrong sentence against a stated "genuinely has no SPF record"
+fact came back 79% `accurately_calibrated`, missing it: the criterion is built to catch claims that
+overstate/understate real evidence in tone (e.g. "blocked" vs. "detected"), not to catch "this is a
+category-level factual mismatch, the wrong explanation entirely." Worth remembering going forward:
+structural/categorization bugs are found by checking real code and data directly (same method as Chapters
+5, 7, and now 9), not by running content through the checklist — Jev judges wording quality once the
+underlying fact is already right, it doesn't independently verify the fact.
+
+**Shipped in** `app/compliance.py::_run_spf`, `app/labels.py`. Verified live: forced a re-check
+(`recheck_hours=0`) against both real domains — old `spf_lookup_limit` items auto-dismissed, new
+`spf_missing` items raised with correct titles; `preview_domain_report()` for tinkerhub.org confirmed the
+real report now shows "your website was missing a security setting that helps stop people from faking your
+emails" instead of the "too complicated" text. Service restarted, confirmed healthy.
+
+**G.63 itself, still open:** whether the specific SPF-lookup-budget detail (which include spends it) should
+ever cross into a client report wasn't reached this chapter — queued for Chapter 10.
+
+---
+
+*(Next entry: Chapter 10 — G.63 (deferred from this chapter), plus the rest of section G now that G's
+discovery method just paid off once already.)*

@@ -448,13 +448,14 @@ def _run_spf(conn, settings, recheck_hours, warn_threshold, verbose):
     for (domain_id, spf_domain) in by_target:
         valid_by_domain.setdefault(domain_id, set()).add(spf_domain)
     for it in conn.execute(
-        "SELECT DISTINCT domain_id, ref_key FROM action_items WHERE category='spf_lookup_limit' AND status='open'"
+        "SELECT DISTINCT domain_id, ref_key, category FROM action_items "
+        "WHERE category IN ('spf_lookup_limit', 'spf_missing') AND status='open'"
     ).fetchall():
         if it["ref_key"] not in valid_by_domain.get(it["domain_id"], set()):
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
-                   WHERE category='spf_lookup_limit' AND status='open' AND domain_id=? AND ref_key=?""",
-                (it["domain_id"], it["ref_key"]),
+                   WHERE category=? AND status='open' AND domain_id=? AND ref_key=?""",
+                (it["category"], it["domain_id"], it["ref_key"]),
             )
 
     to_check = [
@@ -487,15 +488,40 @@ def _run_spf(conn, settings, recheck_hours, warn_threshold, verbose):
         )
         if verbose:
             print(f"[SPF] {spf_domain} ({domain_name}): {status} -- {note}")
-        if status in ("over_limit", "missing"):
+        # "missing" (no SPF record at all) and "over_limit" (a real SPF record
+        # with too many DNS lookups) used to share the SAME category and
+        # therefore the SAME client-facing story -- "the settings...had grown
+        # too complicated" -- which is simply false for a domain with no SPF
+        # record at all. A Jev-informed fix (jev/DECISIONS_LOG.md Chapter 9):
+        # found live on tinkerhub.org and olimalarfoundation.org, both
+        # genuinely missing SPF entirely but reported as "too complicated".
+        # Routes "missing" to the existing, already-built spf_missing category
+        # instead (previously defined in domain_report.py/labels.py but never
+        # actually raised by any code path -- dead infrastructure, now live).
+        if status == "missing":
+            upsert_system_action(
+                conn, domain_id, "spf_missing", spf_domain,
+                f"{domain_name}: no SPF record found at {spf_domain}", note,
+            )
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='spf_lookup_limit' AND ref_key=? AND status='open'""",
+                (spf_domain,),
+            )
+        elif status == "over_limit":
             upsert_system_action(
                 conn, domain_id, "spf_lookup_limit", spf_domain,
                 f"{domain_name}: SPF record at {spf_domain} has a problem", note,
             )
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category='spf_missing' AND ref_key=? AND status='open'""",
+                (spf_domain,),
+            )
         else:
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
-                   WHERE category='spf_lookup_limit' AND ref_key=? AND status='open'""",
+                   WHERE category IN ('spf_lookup_limit', 'spf_missing') AND ref_key=? AND status='open'""",
                 (spf_domain,),
             )
 
