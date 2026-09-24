@@ -300,12 +300,20 @@ def volume_bar_chart(series, width: int = 640, height: int = 140) -> str:
 
 
 def disposition_donut_chart(pass_count: int, quarantine_count: int, reject_count: int,
-                             width: int = 150, height: int = 150) -> str:
+                             width: int = 150, height: int = 150, colors: dict | None = None) -> str:
     """Donut chart of DMARC disposition mix -- what actually happened to mail
     that was evaluated, not just the pass-rate percentage already shown
     elsewhere. Same disp_none/disp_quarantine/disp_reject counts
     analysis.provider_breakdown() already sums (callers should pass the
-    domain-window totals across all providers), just visualized."""
+    domain-window totals across all providers), just visualized.
+
+    `colors`, when given, overrides the default currentColor/var(--x) theming
+    (which relies on the dashboard's live stylesheet, unavailable in an
+    emailed HTML file) with literal hex from the caller -- keys "ink"/"ok"/
+    "warn"/"bad"/"muted". Text labels also switch from CSS classes to inline
+    styles in that case, since email clients don't reliably load a <style>
+    block in <head>. Default (None) is byte-identical to the pre-existing
+    behavior, so every dashboard/client_report.html call site is untouched."""
     total = pass_count + quarantine_count + reject_count
     cx, cy = width / 2, height / 2
     # stroke_w is a fraction of r, so the ring's OUTER edge is r + stroke_w/2,
@@ -320,16 +328,24 @@ def disposition_donut_chart(pass_count: int, quarantine_count: int, reject_count
     stroke_w = r * stroke_fraction
     circumference = 2 * math.pi * r
 
+    ink = colors["ink"] if colors else "currentColor"
+    ok_c = colors["ok"] if colors else "var(--ok)"
+    warn_c = colors["warn"] if colors else "var(--warn)"
+    bad_c = colors["bad"] if colors else "var(--bad)"
+    muted_c = colors["muted"] if colors else "var(--muted)"
+    label_attr = f'style="font-size:16px; font-weight:700; fill:{ink};"' if colors else 'class="donut-center-label"'
+    sublabel_attr = f'style="font-size:10px; fill:{muted_c};"' if colors else 'class="donut-center-sublabel"'
+
     if total <= 0:
         return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">'
-                f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="currentColor" '
+                f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" fill="none" stroke="{ink}" '
                 f'stroke-opacity="0.15" stroke-width="{stroke_w:.1f}"/>'
-                f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" class="donut-center-sublabel">no data</text></svg>')
+                f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" {sublabel_attr}>no data</text></svg>')
 
     segments = [
-        (pass_count, "var(--ok)", "delivered"),
-        (quarantine_count, "var(--warn)", "quarantined"),
-        (reject_count, "var(--bad)", "rejected"),
+        (pass_count, ok_c, "delivered"),
+        (quarantine_count, warn_c, "quarantined"),
+        (reject_count, bad_c, "rejected"),
     ]
     arcs = []
     cumulative = 0.0
@@ -349,8 +365,8 @@ def disposition_donut_chart(pass_count: int, quarantine_count: int, reject_count
     pass_rate = pass_count / total
     return f'''<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
   {''.join(arcs)}
-  <text x="{cx}" y="{cy - 2}" text-anchor="middle" class="donut-center-label">{pass_rate:.0%}</text>
-  <text x="{cx}" y="{cy + 15}" text-anchor="middle" class="donut-center-sublabel">delivered</text>
+  <text x="{cx}" y="{cy - 2}" text-anchor="middle" {label_attr}>{pass_rate:.0%}</text>
+  <text x="{cx}" y="{cy + 15}" text-anchor="middle" {sublabel_attr}>delivered</text>
 </svg>'''
 
 

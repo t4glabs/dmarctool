@@ -1162,3 +1162,47 @@ Service restarted, healthy. No email sent or triggered.
 ---
 
 *(Next entry: Round 2 — the delivered-safely ring, the first real chart in the email report.)*
+
+## Chapter 24 — Email report visual/UI redesign, Round 2: the delivered-safely ring
+
+First real chart in the email report. Proved the email-safe SVG mechanism on exactly one function
+(`disposition_donut_chart`) before touching the other 3 planned for later rounds, per the plan's own
+sequencing.
+
+**`app/charts.py`**: added an optional `colors: dict | None = None` param to `disposition_donut_chart`.
+Default (`None`) is byte-identical to the prior behavior (`currentColor`/`var(--ok)` etc, CSS-class-based
+text labels) — every existing dashboard/`client_report.html` call site is untouched, confirmed by leaving
+`app/web.py`'s `/domain/{name}/client_view` route's own `disposition_donut_chart(...)` call unmodified.
+When `colors` is passed, arcs use the literal hex from the dict and text labels switch from CSS classes
+(`donut-center-label`/`-sublabel`, which have no effect without `client_report.html`'s loaded stylesheet)
+to inline `style=` attributes — a real detail the plan's Plan-agent pass hadn't fully spelled out until
+implementation: the SVG's *text* theming needed the same treatment as its *arc* theming, not just the
+strokes.
+
+**`app/domain_report.py`**: new `_EMAIL_CHART_COLORS` constant (hex matching `app/static/style.css`'s
+`:root` tokens exactly — ink `#1F2421`, ok `#1A7F37`, warn `#9A6400`, bad `#C0392B`, accent `#7358B3`,
+muted `#7A746B`) and `_email_charts(conn, domain_id, period_start, period_end)`, called from
+`_build_context()` so `send_report_now()`/`preview_domain_report()` always agree, exactly like every text
+section already does. Sums `analysis.provider_breakdown()`'s `disp_none`/`disp_quarantine`/`disp_reject`
+across all providers for the current period (broader-reach data than any history-based chart — works for
+any domain with any report data this period, not just 3+ points, which is why this ships before the
+trend charts) and builds two sizes from the same counts: a 110×110 for Zone D beside the `deliverability`
+paragraph, and a 64×64 for KPI Tile 1 (replacing the plain percentage number — the donut already renders
+the percentage in its own center text, so showing both would restate the same fact twice, the same trap
+`build_domain_report()`'s own impersonation/blocklist mutual-exclusion logic already guards against
+elsewhere).
+
+**No Jev call this round** — no new prose, the chart pairs with `deliverability`'s already-approved
+sentence and doesn't add a caption of its own.
+
+**Verified against the full real portfolio**: all 33 domains render with zero Jinja errors. 22 domains
+have real current-period disposition data (donut renders); 11 have none and fall back cleanly to
+`deliverability`'s existing "we didn't get enough information" text with no leftover chart markup. Live
+HTTP 200 checks confirm the real rendered SVG on aikyamjobs.org (100% pass, single green arc, hex colors
+confirmed in the raw output, not `currentColor`) and the clean text-only fallback on catsofkochi.com (a
+real zero-report domain). Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: Round 3 — spam-rate and bounce/complaint trend charts, the richest real historical data in
+the whole portfolio.)*

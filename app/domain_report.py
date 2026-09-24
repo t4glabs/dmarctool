@@ -2080,6 +2080,52 @@ def run_report_emails(conn, verbose: bool = True) -> None:
                          cc_email=row["cc_email"])
 
 
+# Fixed hex palette for every chart embedded in the emailed HTML report --
+# charts.py's default currentColor/var(--x) theming relies on the dashboard's
+# live stylesheet, which isn't available in an emailed HTML file, so every
+# email chart call passes this instead via charts.py's colors= param. Kept
+# here (not in charts.py, which stays palette-agnostic) since it's a brand
+# decision, not a chart-drawing one -- values match app/static/style.css's
+# :root tokens exactly, so the emailed report reads as the same organization
+# as the dashboard/client_report.html.
+_EMAIL_CHART_COLORS = {
+    "ink": "#1F2421", "ok": "#1A7F37", "warn": "#9A6400", "bad": "#C0392B",
+    "accent": "#7358B3", "muted": "#7A746B",
+}
+
+
+def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
+    """Every chart SVG the email report needs, built with the fixed
+    _EMAIL_CHART_COLORS palette instead of charts.py's dashboard-only
+    currentColor/var() theming. Each key is None when there isn't enough
+    real data to show anything -- same None-means-omit convention every
+    other _xxx() helper in this file already uses, so the template's
+    existing {% if %} gating pattern just works. Called from _build_context()
+    so send_report_now() and preview_domain_report() always agree."""
+    from app import analysis, charts
+
+    start_epoch = int(period_start.timestamp())
+    end_epoch = int(period_end.timestamp())
+    providers = analysis.provider_breakdown(conn, domain_id, start_epoch, end_epoch)
+    disp_none = sum(p["disp_none"] for p in providers)
+    disp_quarantine = sum(p["disp_quarantine"] for p in providers)
+    disp_reject = sum(p["disp_reject"] for p in providers)
+
+    if disp_none + disp_quarantine + disp_reject > 0:
+        pass_rate_donut_svg = charts.disposition_donut_chart(
+            disp_none, disp_quarantine, disp_reject, width=110, height=110, colors=_EMAIL_CHART_COLORS)
+        pass_rate_donut_svg_small = charts.disposition_donut_chart(
+            disp_none, disp_quarantine, disp_reject, width=64, height=64, colors=_EMAIL_CHART_COLORS)
+    else:
+        pass_rate_donut_svg = None
+        pass_rate_donut_svg_small = None
+
+    return {
+        "pass_rate_donut_svg": pass_rate_donut_svg,
+        "pass_rate_donut_svg_small": pass_rate_donut_svg_small,
+    }
+
+
 def _build_context(conn, domain_id: int, domain_name: str, recipient_label: str,
                     period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
     """The full template context for one report -- shared by send_report_now()
@@ -2087,6 +2133,7 @@ def _build_context(conn, domain_id: int, domain_name: str, recipient_label: str,
     what a real send would render, including the current branding settings."""
     settings = ensure_default_settings(conn)
     sections = build_domain_report(conn, domain_id, domain_name, period_start, period_end)
+    charts_ctx = _email_charts(conn, domain_id, period_start, period_end)
     return {
         "domain_name": domain_name,
         "recipient_label": recipient_label or domain_name,
@@ -2094,6 +2141,7 @@ def _build_context(conn, domain_id: int, domain_name: str, recipient_label: str,
         "period_end": period_end.date().isoformat(),
         "signoff_name": settings["report_signoff_name"],
         **sections,
+        **charts_ctx,
     }
 
 
