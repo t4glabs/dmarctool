@@ -253,6 +253,52 @@ eventually produce is now validated.
 
 ---
 
-*(Next entry: Chapter 7 — continuing section C (C.22 Postmaster complianceStatus wording, C.28-30 DKIM
-weak-key/SPF-lookup/MTA-STS tips), or section F (dkim_alignment_gap's own rollout re-examined as a "new
-detector" case study) — whichever has more real current data when picked up.)*
+## 2026-09-24 — Chapter 7: a real key-mismatch bug in Postmaster requirement wording (use case C.22)
+
+**Context:** Continuing section C. Went in to Jev-test the real `_postmaster_story()` sentence for real
+open `postmaster_compliance` items (aikyamjobs.org, climatekhoj.com both have real ones). Before running
+any Jev call, checking which real requirement types were live turned up a straightforward code bug, not a
+wording issue — same discovery method as Chapter 5's `_health_comparison` find (read the real code path
+before testing content, not just the eventual sentence).
+
+**The bug:** `_POSTMASTER_REQUIREMENT_STORY` (the dict `_postmaster_story()` looks curated wording up in)
+had a key `"SPAM_RATE"`. Google's Postmaster API's real requirement value is `"USER_REPORTED_SPAM_RATE"` —
+confirmed from `postmaster.py`'s own logic, which checks that exact string (`requirement ==
+"USER_REPORTED_SPAM_RATE"`). The dict key could never match, so any domain whose relevant open item was a
+spam-rate compliance flag silently fell back to the generic `"Google flagged one of its sender
+requirements for your domain"` filler — precisely the "anxious and useless" pattern the 2026-09-23 fix for
+this exact function was built to prevent, regressed by one wrong string. The dict was also completely
+missing `"DMARC_POLICY"`, a second real, currently-live requirement value distinct from `"DMARC_ALIGNMENT"`
+(alignment is about one message's "from" address; policy is about the protective setting's own strength).
+
+**Real, live impact, checked before writing any fix:** of 8 real domains with an open
+`postmaster_compliance` item, **4 (aikyam.space, captains.ngo, climatekhoj.com, makestories.space) were
+hitting the generic fallback right now**, in the report they'd actually receive next — not a hypothetical
+edge case or a dormant code path like Chapters 5-6's findings, a live regression affecting half the
+domains with any open Postmaster issue.
+
+**Jev-validated the replacement wording** (draft 1 used the word "DMARC" directly, which the report's own
+voice rule bars — a real self-inflicted miss, caught on the first test):
+- Generic fallback baseline: `usefulness` 0.74/4, `audience_fit` 90% needs-plain-language-pass.
+- Draft 1 (used "DMARC policy" literally): `usefulness` 1.29/4 (better), `audience_fit` 81% needs-pass,
+  19% `too_technical_reader_will_skip` — the jargon violation shows up as real audience_fit cost.
+- Draft 2 (rewritten using the same "protective setting" analogy `dns_drift` already established, no
+  DMARC/policy words): `usefulness` 1.44/4, `audience_fit` 73% needs-pass, 2%
+  `too_technical_reader_will_skip`. Shipped.
+
+**Shipped in** `app/domain_report.py::_POSTMASTER_REQUIREMENT_STORY` — renamed `"SPAM_RATE"` →
+`"USER_REPORTED_SPAM_RATE"` (existing, already-fine wording — the text itself wasn't the problem), added
+`"DMARC_POLICY"` (draft-2 wording). Verified live: all 4 previously-affected domains now return a real
+story instead of `None`/the generic fallback; `preview_domain_report()` for climatekhoj.com confirmed the
+generic filler text no longer appears anywhere in its real rendered report.
+
+**Worth flagging for a future chapter, not chased today:** `DMARC_POLICY`'s meaning was inferred from
+context (Google's exact distinction from `DMARC_ALIGNMENT` isn't confirmed against their API docs, just
+against what's safely inferable and consistent with the observed `reason`/`status` data), and it may
+overlap with the dashboard's own independent `dns_missing`/`dns_drift` findings for the same domain — worth
+a `contradiction_check` pass once a domain has both open at once in real data.
+
+---
+
+*(Next entry: Chapter 8 — the DMARC_POLICY/dns_drift overlap check flagged above, and section F using
+dkim_alignment_gap as a "new detector rollout" case study.)*

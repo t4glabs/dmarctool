@@ -893,10 +893,26 @@ _POSTMASTER_REQUIREMENT_STORY = {
     "ONE_CLICK_UNSUBSCRIBE": ("your newsletters were missing the one-click unsubscribe button it now requires of "
                                "anyone sending in volume"),
     "HONOR_UNSUBSCRIBE": "it wasn't satisfied that unsubscribe requests were being acted on quickly enough",
-    "SPAM_RATE": ("more of your recipients marked your mail as spam than its guidance allows -- the one number "
-                   "that most directly decides whether you reach the inbox"),
+    # Was keyed "SPAM_RATE" -- a real bug (jev/DECISIONS_LOG.md Chapter 7), not
+    # a wording issue: Google's actual API value is "USER_REPORTED_SPAM_RATE"
+    # (see postmaster.py's own docstring/logic, which uses that exact string),
+    # so this entry could never match and silently fell back to the generic
+    # "Google flagged one of its sender requirements" filler -- the same class
+    # of bug the 2026-09-23 fix was meant to prevent. Confirmed live: 4 of 8
+    # real domains with an open postmaster_compliance item (aikyam.space,
+    # captains.ngo, climatekhoj.com, makestories.space) were hitting the
+    # generic fallback because of this and the missing DMARC_POLICY key below.
+    "USER_REPORTED_SPAM_RATE": ("more of your recipients marked your mail as spam than its guidance allows -- the "
+                                 "one number that most directly decides whether you reach the inbox"),
     "DELIVERABILITY": ("it isn't yet confident about your mail overall, most often because it simply hasn't seen "
                         "enough steady sending from your domain to judge it yet"),
+    # Added alongside the USER_REPORTED_SPAM_RATE fix above -- a real,
+    # currently-live requirement value with no story at all before now.
+    # Distinct from DMARC_ALIGNMENT (a specific message's "from" address not
+    # matching who actually sent it): this is about the protective setting
+    # itself not being strong/complete enough, not about any one message.
+    "DMARC_POLICY": ("it wants a stronger version of the protective setting that decides what happens to a fake "
+                      "email pretending to be you, not just any version of it"),
 }
 
 
