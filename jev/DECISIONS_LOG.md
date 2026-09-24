@@ -1038,5 +1038,49 @@ needing the most Jev iteration given real accusation-risk).
 
 ---
 
-*(Next entry: Round 5 — content_scoring specific-phrase detail, the last of the five. After that, resume
-the paused em-dash sweep and the paused general USE_CASES.md chapter cadence.)*
+## 2026-09-24 — Chapter 22: Round 5, the last of the five — content_scoring specific-phrase detail
+
+**Flagged from the start (the plan) as needing the most care**: naming a specific flagged phrase risks
+reading as an accusation rather than a helpful explanation, more than any of the other 4 rounds.
+
+**Design**: `_content_risk_phrase()` translates one real `app.content_scoring.score_text()` flag into a
+plain clause, and `_content_risk_detail()` re-derives the flag list by calling `score_text()` directly
+against the domain's most recent real campaign subject/body — same "re-derive, don't re-parse the
+already-joined stored detail text" pattern Round 4 established for display names (the real stored detail
+here has the identical `" ".join(flags)` fragility). Only names ONE concrete example (the first real
+flag), not an exhaustive dump — one clear, real example over a list, matching this audience's needs.
+
+**Jev-tested, 2 iterations**: draft 1 ("...used the phrase 'act now', which spam filters are trained to
+watch for -- not a judgment...") scored `honesty_calibration` 87%, `audience_fit` 56% clear. Draft 2
+(simplified the "trained to watch for" clause) moved `audience_fit` to 60% and `honesty_calibration` to
+89% — the explicit "not a judgment on your newsletter, just something that can make spam filters more
+suspicious" hedge is what keeps this category's honesty score high, the same lesson Round 3's
+`safe_browsing` detail already taught (stating a filter's pattern-match as settled fact overstates it).
+
+**Verified via an in-memory test DB** (never touching real production data): "act now" (a real high-risk
+phrase), "ALL CAPS SHOUTING HEADLINE" both correctly detected and translated. Verified against real data:
+aikyamjobs.org's real, currently-clean newsletters correctly return `None` — no crash, no false positive.
+
+**Shipped in** `app/domain_report.py::_content_risk_phrase` + `_content_risk_detail`, wired into
+`_still_open_items` for both `content_spam_risk` (body) and `subject_spam_risk` (subject). Service
+restarted, healthy, confirmed live at the user's request so the change is visible in the running tool.
+
+## All 5 rounds of the comprehensive report expansion — summary
+
+| Round | What | Outcome |
+|---|---|---|
+| 1 | `campaign_score.py` → named standout send | Shipped (Ch.20) — real data reshaped the design mid-build |
+| 2 | `source_classification.py` → source-mix reassurance | **Not shipped** (Ch.21) — real, honest limitation: any confident claim on hedged inference data overstates it |
+| 3 | `safe_browsing.py` → threat-type detail | Shipped (Ch.21), dormant |
+| 4 | `display_name_checks.py` → specific-issue detail (2 categories) | Shipped (Ch.21), dormant, best first-draft scores of the session |
+| 5 | `content_scoring.py` → specific-phrase detail (2 categories) | Shipped (Ch.22), dormant, most-scrutinized per the plan |
+
+4 of 5 rounds shipped real content; the 1 that didn't ship has a documented, real reason rather than being
+forced through. The comprehensive-rebuild priority is now substantially complete for this pass — remaining
+open threads are the paused general `USE_CASES.md` sweep and the paused em-dash/AI-voice prose sweep
+(`jev/DECISIONS_LOG.md` Chapters 17-19), both explicitly kept as "a plan for later, don't forget."
+
+---
+
+*(Next entry: resume the paused em-dash sweep, or the paused general USE_CASES.md chapter cadence —
+whichever the user asks for next.)*
