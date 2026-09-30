@@ -29,6 +29,7 @@ no new dependency.
 import argparse
 import datetime
 import re
+from collections import Counter
 
 from app.analysis import (cached_whois_org, current_policy_run, domain_window_stats, ensure_default_settings,
                            epoch_day, guess_sender_identity, recent_campaigns, sending_cadence)
@@ -992,8 +993,77 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
             history = None
         elif history:
             seen_histories.add(history)
-        items.append({"story": story, "detail": detail, "why": _why_it_matters(category), "history": history})
+        items.append({"story": story, "detail": detail, "why": _why_it_matters(category), "history": history,
+                      "category": category, "first_seen": _first_seen_date(conn, domain_id, category),
+                      "short_label": _still_open_short_label(category, story)})
     return items
+
+
+def _first_seen_date(conn, domain_id: int, category: str):
+    """Earliest date this category was ever raised for this domain, as a
+    short 'Mon D' string, or None -- PDF-only content (jev workflow Ch.39):
+    powers the compact still-open reference table's "SINCE" column. Same
+    underlying data as _incident_recurrence's own duration prose, queried
+    directly rather than parsed back out of that sentence."""
+    row = conn.execute(
+        "SELECT MIN(created_at) d FROM action_items WHERE domain_id=? AND category=? AND created_at IS NOT NULL",
+        (domain_id, category),
+    ).fetchone()
+    if not row or not row["d"]:
+        return None
+    return datetime.datetime.strptime(row["d"][:10], "%Y-%m-%d").strftime("%b %-d")
+
+
+# Short, plain-language labels for the still-open reference table -- NOT
+# app.labels.category_label(), which is written for the dashboard's more
+# technical operator audience (raw terms like "PTR", "SPF", "DKIM",
+# "MTA-STS"). This report's whole voice is deliberately jargon-free (see
+# this module's own docstring), so the table needs its own short phrasing at
+# the same plain-language register as _PROBLEM_STORY. Falls back to
+# _plain_problem()'s own long-form story, truncated, for any category this
+# dict doesn't cover -- never a raw category key or the dashboard's jargon.
+_STILL_OPEN_SHORT_LABEL = {
+    "dns_drift": "Protection setting drifted",
+    "dns_policy_weakened": "Protection got weaker",
+    "dns_missing": "Missing protection setting",
+    "spf_missing": "Missing sender authorization",
+    "dkim_missing": "Missing email signature",
+    "blocklist": "On a public blocklist",
+    "ptr_issue": "Sending computer unlabeled",
+    "mailgun_reputation": "Rising bounce/complaint rate",
+    "ses_reputation": "Rising bounce/complaint rate",
+    "ses_reputation_watch": "Bounce/complaint rate to watch",
+    "ses_rejected": "Some mail blocked outright",
+    "new_sender": "New sender to review",
+    "failure_investigation": "Sender failing checks",
+    "borrowed_sending_identity": "Mail sent via another account",
+    "safe_browsing_flagged": "Website flagged unsafe",
+    "postmaster_compliance": "Google compliance verdict",
+    "display_name_issue": "\"From\" name needs attention",
+    "content_spam_risk": "Newsletter wording risk",
+    "subject_spam_risk": "Subject line wording risk",
+    "sending_cadence_irregular": "Irregular sending rhythm",
+    "domain_expiring_soon": "Domain renewal coming up",
+    "spf_lookup_limit": "Sender authorization budget",
+    "dkim_weak_key": "Weak email signature key",
+    "dkim_alignment_gap": "Signature rarely matches",
+    "mta_sts_broken": "Delivery encryption issue",
+    "campaign_compliance_issue": "Missing unsubscribe link",
+    "display_name_inconsistent": "Inconsistent \"from\" name",
+    "lookalike_domain": "Look-alike address registered",
+    "chronic_transient_bounce": "Addresses stuck bouncing",
+}
+
+
+def _still_open_short_label(category: str, fallback_story: str) -> str:
+    if category in _STILL_OPEN_SHORT_LABEL:
+        return _STILL_OPEN_SHORT_LABEL[category]
+    label = _capitalize_first_word(fallback_story)
+    return label if len(label) <= 40 else label[:39].rstrip() + "…"
+
+
+def _capitalize_first_word(s: str) -> str:
+    return s[0].upper() + s[1:] if s else s
 
 
 def _contact_aikyam_cta(still_open_categories: set):
@@ -1239,6 +1309,40 @@ def _chronic_bounce_count_in_period(conn, domain_id: int, start_str: str, end_st
     return int(m.group(1)) if m else 0
 
 
+def _bounce_reason_breakdown(conn, domain_id: int, start_str: str, end_str: str, limit: int = 5, min_volume: int = 5):
+    """Real bounce reasons for this period, categorized via
+    app.bounce_reasons.categorize_bounce and ranked most-common first, as
+    [(category, count), ...] -- or None below `min_volume` total categorized
+    bounces (same "don't manufacture signal from noise" floor as every other
+    volume-gated number in this report; a chart built from 1-2 stray bounces
+    would be noise dressed up as a finding). PDF-only content (jev workflow
+    Ch.39): `_list_hygiene()` already tells the reader HOW MANY addresses
+    stopped accepting mail, but never WHY -- this is real, already-computed
+    categorization (used elsewhere for the chronic-bounce detector) that had
+    no reader-facing surface until now. Both `ses_suppressions` and
+    `mailgun_suppressions` are pooled since a domain can have either or both
+    depending on which ESP config set matched (see AWS_SES_ONBOARDING.md)."""
+    from app.bounce_reasons import categorize_bounce
+
+    counts = Counter()
+    for row in conn.execute(
+        """SELECT reason, bounce_type FROM ses_suppressions
+           WHERE domain_id=? AND kind='bounce' AND first_seen_at BETWEEN ? AND ?""",
+        (domain_id, start_str, end_str),
+    ):
+        counts[categorize_bounce(row["reason"], row["bounce_type"])] += 1
+    for row in conn.execute(
+        """SELECT reason FROM mailgun_suppressions
+           WHERE domain_id=? AND kind='bounce' AND first_seen_at BETWEEN ? AND ?""",
+        (domain_id, start_str, end_str),
+    ):
+        counts[categorize_bounce(row["reason"])] += 1
+
+    if sum(counts.values()) < min_volume:
+        return None
+    return counts.most_common(limit)
+
+
 def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
     """Addresses that stopped accepting mail in this window, across both
     Mailgun and SES, as one plain story. Its own section (see _resolved_items
@@ -1443,6 +1547,44 @@ def _newsletter_rates(items: list):
     return opened / delivered, clicked / delivered, bounced / delivered, complained / delivered
 
 
+def _campaign_table(conn, domain_id: int, start_date: str, end_date: str, limit: int = 8):
+    """Per-newsletter real numbers for this period, most recent first --
+    [{"subject", "send_day", "delivered", "open_pct", "click_pct"}, ...] or
+    None if no newsletters went out this window (mirrors
+    _newsletter_engagement_bars' gating so the PDF's table and email's
+    aggregate bars stay consistent about when there's newsletter content at
+    all). PDF-only content (jev workflow Ch.39) -- the email's aggregate-only
+    bars were the email-space-budget compromise; the PDF's print space
+    finally allows a real per-send breakdown so a reader can see which
+    specific newsletter did well or badly, not just the period average.
+
+    Uses unique_open_rate/unique_click_rate (real people who opened/clicked),
+    never the raw opened/clicked event counts recent_campaigns() also
+    returns -- those are known to overstate engagement, sometimes past 100%
+    (see recent_campaigns' own docstring) -- same "correct rate
+    denominators" discipline as every other engagement number in this
+    report. Subject lines are truncated, never wrapped, to keep the table to
+    one line per row -- a real subject is often much longer than a table
+    column can hold."""
+    campaigns = recent_campaigns(conn, domain_id, limit=200)
+    this_period = [c for c in campaigns if c["send_day"] and start_date <= c["send_day"] <= end_date]
+    if not this_period:
+        return None
+    rows = []
+    for c in this_period[:limit]:
+        subject = c["subject"]
+        if len(subject) > 52:
+            subject = subject[:51].rstrip() + "…"
+        rows.append({
+            "subject": subject,
+            "send_day": c["send_day"],
+            "delivered": c["delivered"],
+            "open_pct": round(c["unique_open_rate"] * 100) if c["unique_open_rate"] is not None else None,
+            "click_pct": round(c["unique_click_rate"] * 100) if c["unique_click_rate"] is not None else None,
+        })
+    return rows
+
+
 def _newsletter_engagement_bars(conn, domain_id: int, start_date: str, end_date: str):
     """Opened/clicked rates for this period's newsletters as [(label, fraction),
     ...] for the email report's table-bar visual -- the same _newsletter_rates()
@@ -1637,6 +1779,9 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     newsletter_bars = _newsletter_engagement_bars(
         conn, domain_id, period_start.date().isoformat(), period_end.date().isoformat(),
     )
+    campaign_table = _campaign_table(
+        conn, domain_id, period_start.date().isoformat(), period_end.date().isoformat(),
+    )
 
     headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end),
                                   period_start)
@@ -1645,6 +1790,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     health_trend = _health_trend(conn, domain_id, period_start)
     health_timeline = _health_timeline(conn, domain_id)
     list_hygiene = _list_hygiene(conn, domain_id, start_str, end_str)
+    bounce_reasons = _bounce_reason_breakdown(conn, domain_id, start_str, end_str)
     protection_tightened = _protection_tightened(conn, domain_id, period_start)
     spam_trend = _spam_rate_trend(conn, domain_id, period_end)
     risk_warning = _risk_warning(conn, domain_id, period_end)
@@ -1675,12 +1821,14 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "health_trend": health_trend,
         "health_timeline": health_timeline,
         "list_hygiene": list_hygiene,
+        "bounce_reasons": bounce_reasons,
         "resolved": resolved,
         "still_open": still_open,
         "deliverability": deliverability,
         "protection": protection,
         "newsletter": newsletter,
         "newsletter_bars": newsletter_bars,
+        "campaign_table": campaign_table,
         "blocklist_good_news": blocklist_good_news,
         "impersonation_good_news": impersonation_good_news,
         "protection_tightened": protection_tightened,

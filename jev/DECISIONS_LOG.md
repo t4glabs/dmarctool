@@ -1904,3 +1904,54 @@ there is no longer a backlog of untested existing text.
 Verified against all 33 real domains (zero errors), PDF re-compiled clean for 3 real domains (including
 `pattic.org`, which exercises the newly-touched bounce/DNS categories), service restarted and healthy.
 No email sent.
+
+---
+
+## Chapter 39 — PDF-era content expansion, 3 real additions
+
+Surveyed what real, already-computed data has no reader-facing surface yet, given the PDF's print space
+freedom versus even the "no space limit" email rebuild ([[dmarctool_comprehensive_report_rebuild]]).
+Ruled out a health-score history chart -- checked live, zero real domains have 3+ months of score
+history yet (the scoring formula was only reworked the week before), so it would ship empty everywhere.
+Presented 3 real, data-backed candidates to the user; all 3 approved.
+
+**1. Per-newsletter table.** `_campaign_table()` (`app/domain_report.py`) + `_campaign_table_typst()`
+(`app/pdf_report.py`): subject/sent-date/delivered/opened%/clicked% for each real newsletter sent this
+period, below the existing aggregate open/click bars. Real data: 25 real campaigns across 2 domains
+(aikyamjobs.org, pattic.org). Uses `unique_open_rate`/`unique_click_rate` (real people), never the raw
+event-count rates `recent_campaigns()` also returns -- those are documented as overstating engagement,
+sometimes past 100%. Verified visually: aikyamjobs.org's 4-campaign table and pattic.org's 1-campaign
+table both render correctly, real numbers match the underlying query.
+
+**2. Bounce-reason breakdown.** `_bounce_reason_breakdown()` + a new `category-bars()` Typst primitive
+(ranked horizontal bars, not a 0..1 fraction like `segment-gauge` -- there's no natural "100%" for a
+ranked category list). Reuses `bounce_reasons.categorize_bounce()`, already built and tuned for the
+chronic-bounce detector, with no reader-facing surface until now. Gated on a 5-bounce minimum (same
+"don't manufacture signal from noise" floor as every other volume-gated number in this report). Real
+data: 762 SES + 706 Mailgun categorized suppressions; pattic.org alone has 117 in-period, breaking down
+into 5 real categories (mailbox-full 67, provider-fault 26, unknown 7, no-such-user 5, no-answer 5).
+Verified visually on pattic.org's real breakdown.
+
+**A real, confirmed Typst bug caught before it could ship silently**: `((label, value))` in Typst is NOT
+a 1-element array of one pair -- parens are pure grouping, so it flattens to the 2-element array
+`(label, value)` itself, and `.at(0)` returns `label` (a string), not a pair. Confirmed with a real
+minimal compile test (`.len()` returned 2, not 1). This was a LATENT bug in `_typst_series()` since
+Round A (Chapter 30) -- dormant only because every existing caller happens to gate on `len >= 2` before
+calling it -- but immediately live for `category-bars()`, which has no such guard (a domain could
+plausibly have all its bounces fall into one category). Fixed `_typst_series()` with a trailing comma
+for the single-element case (Typst's own single-element-array syntax, same as Python's `(x,)`), and
+reused it for `category-bars()`'s input instead of hand-rolling a second array-literal builder.
+
+**3. Compact still-open reference table.** `_still_open_short_label()` + `_first_seen_date()`
+(`app/domain_report.py`) + `_still_open_table_typst()` (`app/pdf_report.py`): a scannable issue/since
+table above the existing prose bullets, gated on 2+ open items. New short-label dict deliberately does
+NOT reuse `app.labels.category_label()` -- that's written for the dashboard's more technical operator
+audience (raw terms like "PTR", "SPF", "MTA-STS"), while this report's whole voice is jargon-free by its
+own module docstring, so the table needed its own plain-language phrasing at the same register as
+`_PROBLEM_STORY`. Verified on `tinybridge.in`'s real 4-item case -- table and prose bullets both show
+consistent real dates, no duplication introduced.
+
+**Verified against the full real portfolio, both paths**: `render_domain_report_pdf()` for all 33 real
+domains (zero errors) and `preview_domain_report()` (the email path, confirming the 3 new item-dict keys
+don't disturb Jinja rendering) for all 33 (zero errors). Service restarted, `/report_pdf` returns 200 on
+3 real domains. No email sent.

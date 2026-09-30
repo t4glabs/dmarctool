@@ -123,6 +123,35 @@ _PREAMBLE = '''
   ]
 }
 
+// Ranked category bars -- data: array of (label, count) pairs, already
+// sorted descending by the caller. Bars are scaled relative to the largest
+// count (not a 0..1 fraction like segment-gauge, which is for a single
+// share-of-100% number) -- built for the bounce-reason breakdown (jev
+// workflow Ch.39), where the categories are the whole point and there's no
+// natural "100%" for any one of them.
+#let category-bars(data) = {
+  let max-val = data.at(0).at(1)
+  for d in data {
+    if d.at(1) > max-val { max-val = d.at(1) }
+  }
+  let rows = data.map(d => {
+    let (label, count) = d
+    let frac = if max-val > 0 { count / max-val } else { 0 }
+    [
+      #text(font: body-font, size: 9.5pt, fill: ink, label)
+      #v(0.12cm)
+      #grid(columns: (1fr, 2.4em), column-gutter: 8pt, align: (left, right + horizon),
+        box(width: 100%, height: 11pt, fill: tile-bg, radius: 5pt, clip: true, stroke: none,
+          rect(width: frac * 100%, height: 100%, fill: accent, radius: 5pt, stroke: none)
+        ),
+        text(font: body-font, size: 9.5pt, weight: "bold", fill: accent, str(count))
+      )
+      #v(0.35cm)
+    ]
+  })
+  rows.join()
+}
+
 // Native-primitive line chart (no cetz -- see jev/DECISIONS_LOG.md Chapter
 // 30/32 for why: Typst has no arc/path support for true donuts, but
 // connected-point line charts work cleanly with place()/line()/circle()).
@@ -289,8 +318,18 @@ def _short_date(day) -> str:
 
 def _typst_series(points: list) -> str:
     """points: [(label, value), ...] (value already numeric, no Nones).
-    Returns a Typst array-of-pairs literal for line-chart()."""
+    Returns a Typst array-of-pairs literal for line-chart(). A trailing
+    comma is required for a real, confirmed reason: Typst's `((a, b))` does
+    NOT make a 1-element array of one pair -- parens are just grouping, so
+    it flattens to the 2-element array (a, b) itself, and `.at(0)` on it
+    returns `a` (not a pair), a real compile-time-silent, runtime type
+    mismatch. `((a, b),)` is the correct 1-element array, exactly like
+    Python's own single-element tuple syntax. Currently dormant for
+    line-chart's own callers (all gated on len>=2 before calling this), but
+    real for category_bars_typst() below, which has no such guard."""
     pairs = ", ".join(f"({_typst_str(label)}, {value})" for label, value in points)
+    if len(points) == 1:
+        pairs += ","
     return f"({pairs})"
 
 
@@ -318,6 +357,41 @@ def _resolved_item(item: dict) -> str:
     if item.get("history"):
         parts.append(f' #text(fill: muted)[#{_typst_str(item["history"])}]')
     return "".join(parts)
+
+
+def _still_open_table_typst(items: list) -> str:
+    """A compact issue/since reference table above the existing prose detail
+    -- PDF-only content (jev workflow Ch.39): print space allows a scannable
+    at-a-glance summary the email never had room for. Real content is
+    unchanged (the prose bullets below still carry the full story/why); this
+    is purely an additional, denser index into the same real items. Gated on
+    2+ items -- a single open item doesn't need a reference table pointing
+    at its own one bullet."""
+    if len(items) < 2:
+        return ""
+    header = (
+        '[#text(weight: "bold", size: 8.5pt, fill: muted)[ISSUE]], '
+        '[#text(weight: "bold", size: 8.5pt, fill: muted)[SINCE]]'
+    )
+    body_rows = []
+    for item in items:
+        since = item.get("first_seen") or "--"
+        body_rows.append(
+            f'[#text(size: 9pt)[#{_typst_str(item["short_label"])}]], '
+            f'[#text(size: 9pt, fill: muted)[#{_typst_str(since)}]]'
+        )
+    all_rows = ",\n    ".join([header] + body_rows)
+    return f'''
+#table(
+  columns: (1fr, auto),
+  stroke: none,
+  column-gutter: 10pt,
+  row-gutter: 6pt,
+  table.hline(y: 1, stroke: (paint: border-color, thickness: 0.6pt)),
+  {all_rows}
+)
+#v(0.4cm)
+'''
 
 
 def _still_open_item(item: dict) -> str:
@@ -375,6 +449,7 @@ def _action_ledger(context: dict) -> str:
         bullets = [_still_open_item(item) for item in context["still_open"]]
         parts.append(f'''
 #section-title("What we're still working on")
+{_still_open_table_typst(context["still_open"])}
 {_bullet_list(bullets)}
 #v(0.3cm)
 We're already working through all of this, and we'll let you know as each one clears.
@@ -430,6 +505,8 @@ def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
 
     if context.get("list_hygiene"):
         parts.append(f'\n#v(0.4cm)\n#eyebrow("Keeping your list clean")\n#v(0.15cm)\n#{_typst_str(context["list_hygiene"])}.\n')
+        if context.get("bounce_reasons"):
+            parts.append(f'\n#v(0.35cm)\n#category-bars({_typst_series(context["bounce_reasons"])})\n')
 
     bounce_points = [(_short_date(d), num / den) for d, num, den in chart_data["bounce_points"] if den]
     if len(bounce_points) >= 2:
@@ -466,6 +543,53 @@ def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
     return "\n".join(parts)
 
 
+def _campaign_table_typst(rows: list) -> str:
+    """A real per-newsletter table -- subject/sent/delivered/opened/clicked
+    for each real send this period. PDF-only content (jev workflow Ch.39):
+    the email report only ever had room for a period-wide aggregate; print
+    space is what finally allows a real per-send breakdown. Minimalist
+    table styling (stroke: none + one hline under the header) matches this
+    project's own print design-system note, not a new decision."""
+    header = (
+        '[#text(weight: "bold", size: 8.5pt, fill: muted)[SUBJECT]], '
+        '[#text(weight: "bold", size: 8.5pt, fill: muted)[SENT]], '
+        '[#text(weight: "bold", size: 8.5pt, fill: muted)[DELIVERED]], '
+        '[#text(weight: "bold", size: 8.5pt, fill: muted)[OPENED]], '
+        '[#text(weight: "bold", size: 8.5pt, fill: muted)[CLICKED]]'
+    )
+    body_rows = []
+    for r in rows:
+        # Real dynamic content (subject, formatted date) goes through
+        # #{_typst_str(...)} -- forces one code-mode string evaluation inside
+        # markup, the same escaping discipline every other dynamic string in
+        # this module uses, never raw-interpolated into a `[...]` block.
+        # Delivered/open%/click% are Python-formatted ASCII (digits, "%",
+        # commas) with no markup-special characters, safe to interpolate
+        # directly like every other pre-formatted number elsewhere in this
+        # file (e.g. stat-tile's value arguments).
+        open_cell = f'{r["open_pct"]}%' if r["open_pct"] is not None else "--"
+        click_cell = f'{r["click_pct"]}%' if r["click_pct"] is not None else "--"
+        body_rows.append(
+            f'[#text(size: 9pt)[#{_typst_str(r["subject"])}]], '
+            f'[#text(size: 9pt, fill: muted)[#{_typst_str(_short_date(r["send_day"]))}]], '
+            f'[#text(size: 9pt)[{r["delivered"]:,}]], '
+            f'[#text(size: 9pt)[{open_cell}]], '
+            f'[#text(size: 9pt)[{click_cell}]]'
+        )
+    all_rows = ",\n    ".join([header] + body_rows)
+    return f'''
+#v(0.4cm)
+#table(
+  columns: (1fr, auto, auto, auto, auto),
+  stroke: none,
+  column-gutter: 10pt,
+  row-gutter: 7pt,
+  table.hline(y: 1, stroke: (paint: border-color, thickness: 0.6pt)),
+  {all_rows}
+)
+'''
+
+
 def _newsletter_and_closing(context: dict) -> str:
     """newsletter (+ its real open/click segment gauges, re-derived from the
     exact same newsletter_bars data Chapter 26's email table-bars use -- same
@@ -479,6 +603,8 @@ def _newsletter_and_closing(context: dict) -> str:
                 f'#segment-gauge({_typst_str(label)}, {frac})' for label, frac in context["newsletter_bars"]
             )
             parts.append(f'\n#v(0.3cm)\n{gauges}\n')
+        if context.get("campaign_table"):
+            parts.append(_campaign_table_typst(context["campaign_table"]))
 
     if context.get("tips"):
         bullets = [f'#{_typst_str(tip)}' for tip in context["tips"]]
