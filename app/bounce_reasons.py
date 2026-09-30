@@ -100,6 +100,23 @@ _PHRASE_CATEGORIES = [
      "Bad address syntax"),
     (("recipient rejected", "blocked", "blacklist", "access denied", "recipient address rejected"),
      "Rejected/blocked by recipient's mail server"),
+    # Microsoft 365/Exchange's own internal routing bug (a misconfigured
+    # "Internal Relay" vs "Authoritative" domain setting, or a missing
+    # hybrid on-prem connector, on the RECIPIENT's tenant) -- confirmed live
+    # 2026-09-30 on a real recurring case (aikyamjobs.org, sclogistics.com)
+    # where the same address bounced this way on 2 separate campaigns while
+    # ALSO opening and clicking both times, proving the mailbox is real and
+    # receiving mail -- this bounce says nothing about the sender's own
+    # SPF/DKIM/DMARC setup, even though the message's later internal Exchange
+    # hops can show DKIM re-verification failing (a side effect of the loop
+    # itself re-processing the message, not evidence the original send was
+    # unauthenticated). Was falling into "Other / unrecognized" before this,
+    # which gave no hint that this is the recipient's infrastructure, not
+    # the sender's. Wording Jev-tested (3 candidates): this phrasing scored
+    # 70% clear_as_is / 71% accurately_calibrated, the best balance of the
+    # set -- a first, dash-heavy draft tested at only 39%/33%.
+    (("hop count exceeded", "possible mail loop"),
+     "Recipient's email provider has a technical fault"),
 ]
 
 
