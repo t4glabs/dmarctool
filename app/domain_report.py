@@ -2144,6 +2144,38 @@ _EMAIL_CHART_COLORS = {
 }
 
 
+def chart_data(conn, domain_id: int, period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
+    """The RAW numbers behind every chart in the client-facing reports --
+    disposition totals, and the 3 real daily series (spam/bounce/pass-rate)
+    -- with no rendering baked in. Shared by _email_charts() (renders SVG via
+    charts.py) and app.pdf_report (renders Typst-native shapes) so both
+    surfaces query the database exactly once and can never disagree about
+    the same underlying number. Public (no leading underscore) since
+    app.pdf_report is a different module that needs this directly.
+
+    Returns {"disp_none": int, "disp_quarantine": int, "disp_reject": int,
+    "spam_series": [(date, rate|None), ...], "bounce_points": [(date, num,
+    den), ...], "bounce_warn_threshold": float, "pass_rate_series": [(date,
+    total, passed, rate), ...]}."""
+    from app import analysis
+
+    start_epoch = int(period_start.timestamp())
+    end_epoch = int(period_end.timestamp())
+    providers = analysis.provider_breakdown(conn, domain_id, start_epoch, end_epoch)
+    mailgun_series = analysis.mailgun_daily_series(conn, domain_id, days=60)
+    settings = ensure_default_settings(conn)
+
+    return {
+        "disp_none": sum(p["disp_none"] for p in providers),
+        "disp_quarantine": sum(p["disp_quarantine"] for p in providers),
+        "disp_reject": sum(p["disp_reject"] for p in providers),
+        "spam_series": analysis.postmaster_daily_series(conn, domain_id, days=60),
+        "bounce_points": [(r["day"], r["bounce_num"], r["bounce_den"]) for r in mailgun_series],
+        "bounce_warn_threshold": float(settings["mailgun_bounce_rate_warn"]),
+        "pass_rate_series": analysis.daily_pass_series(conn, domain_id, days=60),
+    }
+
+
 def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
     """Every chart SVG the email report needs, built with the fixed
     _EMAIL_CHART_COLORS palette instead of charts.py's dashboard-only
@@ -2152,14 +2184,10 @@ def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_
     other _xxx() helper in this file already uses, so the template's
     existing {% if %} gating pattern just works. Called from _build_context()
     so send_report_now() and preview_domain_report() always agree."""
-    from app import analysis, charts
+    from app import charts
 
-    start_epoch = int(period_start.timestamp())
-    end_epoch = int(period_end.timestamp())
-    providers = analysis.provider_breakdown(conn, domain_id, start_epoch, end_epoch)
-    disp_none = sum(p["disp_none"] for p in providers)
-    disp_quarantine = sum(p["disp_quarantine"] for p in providers)
-    disp_reject = sum(p["disp_reject"] for p in providers)
+    data = chart_data(conn, domain_id, period_start, period_end)
+    disp_none, disp_quarantine, disp_reject = data["disp_none"], data["disp_quarantine"], data["disp_reject"]
 
     if disp_none + disp_quarantine + disp_reject > 0:
         pass_rate_donut_svg = charts.disposition_donut_chart(
@@ -2176,7 +2204,7 @@ def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_
         pass_rate_donut_svg = None
         pass_rate_donut_svg_small = None
 
-    spam_series = analysis.postmaster_daily_series(conn, domain_id, days=60)
+    spam_series = data["spam_series"]
     if any(rate is not None for _, rate in spam_series):
         spam_rate_chart_svg = charts.spam_rate_sparkline(
             spam_series, width=520, height=120, colors=_EMAIL_CHART_COLORS)
@@ -2188,18 +2216,15 @@ def _email_charts(conn, domain_id: int, period_start: datetime.datetime, period_
     # line; bounce rate is the one _list_hygiene() already narrates counts
     # for without ever showing the rate those counts sit inside, so this
     # chart is genuinely new information, not a restatement.
-    mailgun_series = analysis.mailgun_daily_series(conn, domain_id, days=60)
-    bounce_points = [(r["day"], r["bounce_num"], r["bounce_den"]) for r in mailgun_series]
+    bounce_points = data["bounce_points"]
     if any(den for _, _, den in bounce_points):
-        settings = ensure_default_settings(conn)
-        bounce_warn = float(settings["mailgun_bounce_rate_warn"])
         bounce_rate_chart_svg = charts.metric_trend_chart(
-            bounce_points, thresholds=[(bounce_warn, "warn", _EMAIL_CHART_COLORS["bad"])],
+            bounce_points, thresholds=[(data["bounce_warn_threshold"], "warn", _EMAIL_CHART_COLORS["bad"])],
             width=520, height=150, colors=_EMAIL_CHART_COLORS)
     else:
         bounce_rate_chart_svg = None
 
-    pass_rate_series = analysis.daily_pass_series(conn, domain_id, days=60)
+    pass_rate_series = data["pass_rate_series"]
     if len(pass_rate_series) >= 2 and any(p[3] is not None for p in pass_rate_series):
         pass_rate_trend_svg = charts.pass_rate_sparkline(
             pass_rate_series, width=520, height=120, colors=_EMAIL_CHART_COLORS)

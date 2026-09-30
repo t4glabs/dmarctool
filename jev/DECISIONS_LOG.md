@@ -1565,3 +1565,47 @@ correctly-non-duplicated "no action needed" callout). Service restarted, healthy
 ---
 
 *(Next entry: Round C -- protection/deliverability + the 3 real Typst-native trend charts.)*
+
+## Chapter 32 — PDF report, Round C: protection/deliverability + the 3 real trend charts
+
+The core visual payoff of the whole PDF initiative: real vector line charts, something the email report
+could never safely show (Chapter 28/[[dmarctool_email_svg_gmail_gap]]).
+
+**Real architectural refactor first**: `app/domain_report.py::_email_charts()` used to fetch data AND
+render SVG in one step. Extracted the data-fetching half into a new public `chart_data()` function
+(disposition totals, the 3 real daily series) that both `_email_charts()` (SVG, unchanged behavior --
+re-verified against the full email-path portfolio sweep, zero regressions) and the new PDF path call --
+one database query each, never two independent ones that could silently drift apart. This is the
+"re-derive, don't duplicate" discipline applied at the architecture level, planned explicitly in Round A's
+own spec rather than discovered as an afterthought.
+
+**A real Typst line-chart function, hand-validated before use** (not assumed from the Round A spike's
+6-point toy example): built and test-compiled directly via the `typst` CLI before writing any Python
+around it -- grid lines, an optional dashed threshold line (folded into the y-scale exactly like
+`charts.py::metric_trend_chart`'s own reference lines), an end-point accent dot, and first/last date
+labels. No cetz, no external package.
+
+**A real bug found immediately on first real-data test**: `_short_date()` crashed on
+`daily_pass_series()`'s real output -- `analysis.daily_pass_series()` returns real `date` objects for its
+date field (matching how `charts.py::pass_rate_sparkline` already calls `.strftime()` directly on it),
+while `postmaster_daily_series()`/`mailgun_daily_series()` return ISO strings for theirs. Same
+inconsistency `charts.py` already quietly works around per-function; fixed by handling both shapes in one
+helper rather than assuming a single format.
+
+**Shipped**: `_protection_and_deliverability()` -- deliverability + a segment gauge for the current-period
+delivered-safely percentage, protection prose, spam_trend prose + a real Google spam-rate line chart,
+list_hygiene prose, a real bounce-rate line chart (thresholded against the real
+`mailgun_bounce_rate_warn` setting), a real pass-rate history line chart, and the
+impersonation/blocklist good-news callouts closing the zone -- same section order as the email version.
+
+**Verified against the full real portfolio**: zero Typst errors on all 33 domains, email path re-verified
+unaffected by the `chart_data()` refactor. Visually confirmed on aikyamjobs.org: a real 100% delivered-
+safely gauge, a real spam-rate chart showing an honest late-period spike above the dashed threshold (not
+smoothed over), a real bounce-rate chart with a real above-threshold spike, and a near-flat 100%
+delivery-rate history line -- all three charts rendering cleanly on real, sometimes-messy data, not just
+a clean toy example. Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: Round D -- newsletter zone, tips, closing, the new /report_pdf preview route, and full
+single-PDF assembly.)*

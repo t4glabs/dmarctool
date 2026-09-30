@@ -12,6 +12,7 @@ packages (no cetz) -- charts are hand-rolled from rect/line/circle, matching
 this project's own "no charting library" precedent from app/charts.py.
 """
 
+import datetime
 import os
 import subprocess
 import tempfile
@@ -110,6 +111,55 @@ _PREAMBLE = '''
     #v(0.5cm)
   ]
 }
+
+// Native-primitive line chart (no cetz -- see jev/DECISIONS_LOG.md Chapter
+// 30/32 for why: Typst has no arc/path support for true donuts, but
+// connected-point line charts work cleanly with place()/line()/circle()).
+// `data`: array of (label, value) pairs, value already on a real 0..N scale
+// (not necessarily 0..1 -- ymax is derived from the data itself, with an
+// optional `threshold` line folded into the scale like charts.py's own
+// metric_trend_chart does for its dashed reference lines).
+#let line-chart(data, height: 120pt, threshold: none) = {
+  let n = data.len()
+  let plot-h = height - 16pt
+  let max-val = data.at(0).at(1)
+  for d in data {
+    if d.at(1) > max-val { max-val = d.at(1) }
+  }
+  if threshold != none and threshold > max-val { max-val = threshold }
+  let ymax = calc.max(max-val * 1.2, 0.001)
+  let last = data.at(n - 1)
+
+  box(width: 100%, height: height + 14pt, fill: tile-bg, radius: 4pt, clip: false, inset: 0pt,
+    {
+      for i in range(0, 4) {
+        let frac = i / 3
+        place(top + left, dy: (1 - frac) * plot-h + 8pt, line(length: 100%, stroke: (paint: border-color, thickness: 0.5pt)))
+      }
+      if threshold != none {
+        let ty = (1 - threshold / ymax) * plot-h + 8pt
+        place(top + left, dy: ty, line(length: 100%, stroke: (paint: bad-color, thickness: 0.7pt, dash: "dashed")))
+      }
+      if n > 1 {
+        for i in range(n - 1) {
+          let (label1, val1) = data.at(i)
+          let (label2, val2) = data.at(i + 1)
+          let x1 = (i / (n - 1)) * 100%
+          let y1 = (1 - val1 / ymax) * plot-h + 8pt
+          let x2 = ((i + 1) / (n - 1)) * 100%
+          let y2 = (1 - val2 / ymax) * plot-h + 8pt
+          place(top + left, dx: x1, dy: y1,
+            line(start: (0pt, 0pt), end: (x2 - x1, y2 - y1), stroke: (paint: accent, thickness: 1.6pt))
+          )
+        }
+      }
+      let ly = (1 - last.at(1) / ymax) * plot-h + 8pt
+      place(top + left, dx: 100%, dy: ly, place(center + horizon, circle(radius: 2.6pt, fill: accent, stroke: none)))
+      place(top + left, dx: 0pt, dy: plot-h + 12pt, text(font: body-font, size: 8pt, fill: muted, data.at(0).at(0)))
+      place(top + right, dx: 0pt, dy: plot-h + 12pt, text(font: body-font, size: 8pt, fill: muted, last.at(0)))
+    }
+  )
+}
 '''
 
 
@@ -179,6 +229,27 @@ def _masthead_and_kpi(context: dict) -> str:
 ''')
 
     return "\n".join(parts)
+
+
+def _short_date(day) -> str:
+    """Accepts either a real date/datetime (analysis.daily_pass_series'
+    own convention) or an ISO date string (postmaster_daily_series/
+    mailgun_daily_series's convention) -- charts.py's pass_rate_sparkline
+    hits the same inconsistency and handles it the same way, by just
+    calling strftime directly on whichever it already has."""
+    if isinstance(day, (datetime.date, datetime.datetime)):
+        return day.strftime("%b %-d")
+    try:
+        return datetime.date.fromisoformat(day).strftime("%b %-d")
+    except ValueError:
+        return str(day)
+
+
+def _typst_series(points: list) -> str:
+    """points: [(label, value), ...] (value already numeric, no Nones).
+    Returns a Typst array-of-pairs literal for line-chart()."""
+    pairs = ", ".join(f"({_typst_str(label)}, {value})" for label, value in points)
+    return f"({pairs})"
 
 
 def _capitalize_first(s: str) -> str:
@@ -288,20 +359,88 @@ We're already working through all of this, and we'll let you know as each one cl
     return "\n".join(parts)
 
 
+def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
+    """deliverability + protection + spam_trend + list_hygiene, plus the 3
+    real trend charts (delivered-safely gauge, spam-rate/bounce-rate/
+    pass-rate line charts) -- re-derived from the SAME chart_data() the email
+    report's _email_charts() uses (app/domain_report.py), never a second
+    independent query, so a chart here and the email's version of it can
+    never disagree. impersonation/blocklist good-news callouts close the
+    zone, matching the email's own section order."""
+    parts = ['#section-title("Getting through, and staying protected")']
+
+    total = chart_data["disp_none"] + chart_data["disp_quarantine"] + chart_data["disp_reject"]
+    parts.append(f'\n#eyebrow("How your emails are arriving")\n#v(0.15cm)\n#{_typst_str(context["deliverability"])}\n')
+    if total > 0:
+        frac = chart_data["disp_none"] / total
+        parts.append(f'\n#v(0.3cm)\n#segment-gauge("Delivered safely", {frac})\n')
+
+    parts.append(f'\n#eyebrow("Protection from fake emails")\n#v(0.15cm)\n')
+    if context.get("protection_tightened"):
+        parts.append(f'#text(weight: "bold")[#{_typst_str(context["protection_tightened"])}]\n\n')
+    parts.append(f'#{_typst_str(context["protection"])}\n')
+
+    spam_points = [(_short_date(d), r) for d, r in chart_data["spam_series"] if r is not None]
+    if context.get("spam_trend"):
+        parts.append(f'\n#v(0.4cm)\n#eyebrow("Google\'s own view of your mail")\n#v(0.15cm)\n#{_typst_str(context["spam_trend"])}\n')
+        if len(spam_points) >= 2:
+            parts.append(f'\n#v(0.3cm)\n#line-chart({_typst_series(spam_points)}, threshold: 0.001)\n')
+
+    if context.get("list_hygiene"):
+        parts.append(f'\n#v(0.4cm)\n#eyebrow("Keeping your list clean")\n#v(0.15cm)\n#{_typst_str(context["list_hygiene"])}.\n')
+
+    bounce_points = [(_short_date(d), num / den) for d, num, den in chart_data["bounce_points"] if den]
+    if len(bounce_points) >= 2:
+        parts.append(f'''
+#v(0.4cm)
+#eyebrow("Your bounce rate over time")
+#v(0.15cm)
+#line-chart({_typst_series(bounce_points)}, threshold: {chart_data["bounce_warn_threshold"]})
+''')
+
+    pass_points = [(_short_date(d), r) for d, total_, passed_, r in chart_data["pass_rate_series"] if r is not None]
+    if len(pass_points) >= 2:
+        parts.append(f'''
+#v(0.4cm)
+#eyebrow("Your delivery rate over time")
+#v(0.15cm)
+#line-chart({_typst_series(pass_points)})
+''')
+
+    if context.get("impersonation_good_news"):
+        parts.append(f'''
+#v(0.4cm)
+#rect(fill: rgb("#EAF4EC"), stroke: none, radius: 8pt, inset: 16pt, width: 100%,
+  text(fill: ok-color)[#{_typst_str(context["impersonation_good_news"])}]
+)
+''')
+    elif context.get("blocklist_good_news"):
+        parts.append(f'''
+#v(0.4cm)
+#rect(fill: rgb("#EAF4EC"), stroke: none, radius: 8pt, inset: 16pt, width: 100%,
+  text(fill: ok-color)[#{_typst_str(context["blocklist_good_news"])}]
+)
+''')
+    return "\n".join(parts)
+
+
 def render_domain_report_pdf(conn, domain_id: int, domain_name: str, recipient_label: str,
                               period_start, period_end) -> bytes:
-    """Renders the full domain report as PDF bytes. Round B scope adds the
-    standing-narrative and action-ledger zones on top of Round A's masthead/
-    KPI/headline -- protection/deliverability + charts, newsletter, and tips
-    are added in Rounds C-D, reusing this same function's context dict, not
-    a new one."""
+    """Renders the full domain report as PDF bytes. Round C scope adds the
+    protection/deliverability zone + its 3 real trend charts on top of
+    Round A/B's masthead/KPI/headline/narrative/ledger -- newsletter and
+    tips are added in Round D, reusing this same function's context dict,
+    not a new one."""
     from app.domain_report import _build_context
+    from app.domain_report import chart_data as _get_chart_data
 
     context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
+    cdata = _get_chart_data(conn, domain_id, period_start, period_end)
     body = "\n".join([
         _masthead_and_kpi(context),
         _standing_narrative(context),
         _action_ledger(context),
+        _protection_and_deliverability(context, cdata),
     ])
     typ_source = _PREAMBLE + _page_setup(domain_name) + body
     return _compile_typst(typ_source)
