@@ -1642,3 +1642,62 @@ gaps). Service restarted, healthy. No email sent.
 
 *(Next entry: Round E -- the Jev-validated teaser email, wired into send_report_now(), closing out the
 5-round PDF initiative.)*
+
+## Chapter 34 — PDF report, Round E: the teaser email, and the initiative closes out
+
+The user's central requirement for this whole initiative: a short email whose only job is making the
+reader eager to open the attached PDF, without duplicating its content -- "they should 100% feel eager to
+read pdf attached." Per the standing [[dmarctool_jev_every_decision]] instruction, iterated through Jev
+rather than shipping a first draft.
+
+**13 candidates tested, a real pattern found and then fixed**: early drafts (generic reassurance +
+bulleted "Inside:" list, matching common marketing-email structure) scored `natural_voice` as
+`reads_like_generated_boilerplate` every single time, `emotional_resonance` as low as 0.7/4. Anchoring
+the opening sentence on real, concrete numbers (this period's real resolved/still-open counts, the real
+health score -- re-derived, never invented) plus one sentence naming *why* it matters (protecting the
+reader's relationship with their own donors/supporters, not a technical checkbox) was what first crossed
+to `reads_like_a_person`. **A real gap found mid-iteration**: that winning version never actually said
+"PDF" or "attached" anywhere -- "explained in full inside" is genuinely ambiguous about whether "inside"
+means the email body or an attachment, which directly violates the user's own explicit requirement.
+Adding an explicit PDF mention initially cost the `natural_voice` gain back (dropped to boilerplate again)
+until reframed as personal ("we made you a proper PDF instead of just an email") rather than transactional
+("the report is attached") -- recovered `reads_like_a_person` while keeping the explicit, unambiguous
+mention. Final scores on the real generated text: `usefulness` 3.06/4, `emotional_resonance` 2.14/4,
+`audience_fit` clear, `natural_voice` reads_like_a_person -- the best of every candidate tested.
+
+**Shipped**: new `_teaser_hook()` (`app/domain_report.py`) building the opening sentence from real,
+re-derived numbers (health score, this period's resolved/still-open counts) with a genuine fallback for
+domains with none of that data. `email_report.html`/`.txt` rewritten entirely as the short teaser (hook +
+an explicit visually-highlighted "Your full report is attached (PDF)" callout, separately Jev-tested +
+the mission-framing paragraph + signoff) -- the old rich 21-section content these files carried since
+Chapter 1 now lives exclusively in the PDF. `send_report_now()` wired to generate the real PDF and attach
+it via `app/mailgun.py`'s Round A attachment support.
+
+**Verified against the full real portfolio**: zero errors on all 33 domains for the teaser
+`.html`/`.txt` render AND the PDF generation together. Live-confirmed via the real service on
+aikyamsolve.org: both `/report_preview` (the real generated teaser, matching the tested wording exactly)
+and `/report_pdf` return 200. **`send_report_now()` itself was never called** -- per the standing rule,
+verification stops at generating what a send would produce, never triggering one. Service restarted,
+healthy. No email sent.
+
+## All 5 rounds of the PDF initiative -- summary
+
+| Round | What | Outcome |
+|---|---|---|
+| A | Typst pipeline, Mailgun attachment support, design system | Shipped (Ch.30) |
+| B | Standing narrative + action ledger, zero new content | Shipped (Ch.31) |
+| C | Protection/deliverability + 3 real trend charts (the core visual payoff) | Shipped (Ch.32) |
+| D | Newsletter + tips + closing + `/report_pdf` route + full assembly | Shipped (Ch.33) |
+| E | The teaser email, 13 Jev-tested candidates | Shipped (Ch.34) |
+
+All 5 rounds shipped real, working content, verified against the full 33-domain real portfolio at every
+step, with two genuinely load-bearing bugs caught only by actually looking at rendered output or hitting
+the real live route rather than trusting "did it compile"/"did it import": the Typst markup-vs-code-mode
+string-escaping bug (Ch.30) and the launchd-PATH-has-no-Homebrew bug (Ch.33). The email report and its
+PDF attachment are now a genuinely different medium from what this whole session started with --
+real charts, real fonts, no email-client rendering ceiling -- while never re-litigating a single
+Chapters-1-22 content or voice decision along the way.
+
+---
+
+*(Next entry: whatever the user prioritizes next.)*

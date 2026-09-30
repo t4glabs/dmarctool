@@ -1,76 +1,10 @@
 Hi {{ recipient_label }},
 
-Here's how {{ domain_name }}'s emails have been doing lately ({{ period_start }} to {{ period_end }}), in plain terms. No technical jargon, just what happened and what we did about it.
-{% if delivery_rate_pct is not none %}
-Delivered safely: {{ delivery_rate_pct }}%{% endif %}{% if health_score_value is not none %}
-Health score: {{ health_score_value }}/100{% endif %}{% if health_timeline_delta is not none %}
-Since {{ health_timeline_since }}: {{ '+' if health_timeline_delta > 0 else '' }}{{ health_timeline_delta }}{% endif %}
-{% if headline %}
-{{ headline }}
-{% endif %}{% if care_ledger %}
-{{ care_ledger }}
-{% endif %}{% if health_trend %}
-{{ health_trend }}
-{% endif %}{% if health_timeline %}
-{{ health_timeline }}
-{% endif %}{% if whats_working %}
-WHAT'S ALREADY WORKING FOR YOU
-{% for item in whats_working %}
-- {{ item }}
-{% endfor %}{% endif %}
-{%- if resolved %}
-WHAT WE SORTED OUT FOR YOU
-{% for item in resolved %}
-- {{ item.story[0]|upper }}{{ item.story[1:] }}. We've taken care of it.{% if item.why %} {{ item.why }}{% endif %}{% if item.impact %} The payoff: {{ item.impact }}.{% endif %}{% if item.history %} {{ item.history }}{% endif %}
-{% endfor %}{% endif %}
-{%- if still_open %}
-WHAT WE'RE STILL WORKING ON
-{% for item in still_open %}
-- {{ item.story[0]|upper }}{{ item.story[1:] }}.{% if item.detail %} {{ item.detail }}.{% endif %}{% if item.why %} {{ item.why }}{% endif %}{% if item.history %} {{ item.history }}{% endif %}
-{% endfor %}
-We're already working through all of this, and we'll let you know as each one clears.
-{% if contact_cta %}
-{{ contact_cta }}
-{% endif %}{% endif %}
-{%- if not resolved and not still_open and not headline %}
-Nothing needed fixing this time, everything's running smoothly.
-{% endif %}
-{%- if risk_warning %}
-HEADS UP
-{{ risk_warning }}
-{% endif %}
-GETTING THROUGH, AND STAYING PROTECTED
+{{ teaser_hook }} This time we made you a proper PDF instead of just an email -- real charts, plain language, the full story of what happened and what we did about it, attached to this message.
 
-How your emails are arriving:
-{{ deliverability }}
+Your full report is attached (PDF). Open it for your health score trend, every issue we caught and fixed, and your newsletter's real reach.
 
-Protection from fake emails:
-{% if protection_tightened %}{{ protection_tightened }}
-{% endif %}{{ protection }}
-{% if spam_trend %}
-Google's own view of your mail:
-{{ spam_trend }}
-{% endif %}
-{%- if list_hygiene %}
-Keeping your list clean:
-{{ list_hygiene }}.
-{% endif %}
-{%- if impersonation_good_news %}
-{{ impersonation_good_news }}
-{% endif %}
-{%- if blocklist_good_news %}
-{{ blocklist_good_news }}
-{% endif %}
-{%- if newsletter %}
-YOUR NEWSLETTER'S REACH
-{{ newsletter }}
-{% endif %}
-{%- if tips %}
-TIPS FOR THE NEXT FEW WEEKS
-{% for tip in tips %}
-- {{ tip }}
-{% endfor %}{% endif %}
-This might look like a lot to take in, but it really matters. These are the things that decide whether people actually see your emails, and whether someone could try to impersonate your organization using your name. Please take a moment to read through it, and reply any time if anything's unclear. We're always happy to walk through it with you.
+We did it because keeping your emails trustworthy is what protects your relationship with your donors and supporters, not just a technical checkbox. Have a look when you get a chance, and reply any time if anything's unclear.
 
 With care,
 {{ signoff_name }}
