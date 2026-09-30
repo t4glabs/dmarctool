@@ -5,8 +5,8 @@ DMARC/SPF/DKIM authentication, DNS and blocklist health, ESP (Mailgun/SES) reput
 data, impersonation and look-alike-domain threats, and Listmonk newsletter quality — and turns all of it
 into one prioritized, plain-language action list. It doesn't stop at watching: it also writes and sends
 the periodic plain-language report a non-technical domain owner actually reads (email + a real PDF), and
-can send a one-click "please clean your mailing list" email with the exact addresses to remove, attached
-and explained — no hopping between provider consoles, and no manually drafting client emails by hand.
+can send a one-click list-cleanup email with the exact addresses to remove, attached and explained — no
+hopping between provider consoles, and no manually drafting client emails by hand.
 
 ## What this is, in one line
 
@@ -63,7 +63,7 @@ just repeat the same sentence verbatim every cycle.
   impersonation attempts with concrete examples (the fake address used, when, and — via WHOIS — roughly
   where from).
 - A cross-domain source view: one sending IP or identity's activity across every tracked domain at once,
-  with a plain "what is this and what should I do about it" guide per source.
+  with a plain explanation and next steps for each source.
 
 ### Newsletter & list quality
 - Per-campaign, real engagement stats (opens/clicks by unique person, not raw event counts, which can
@@ -82,9 +82,9 @@ just repeat the same sentence verbatim every cycle.
 - A periodic, jargon-free email report to each domain's own owner, with a full, minimalist-designed PDF
   attachment (real charts, real typography, generated on the fly) covering their health score, what
   changed, what was fixed, and what's still being watched — written for someone who's never heard of SPF.
-- A one-click "notify client to clean their list" email: attaches the confirmed-dead and likely-dead
-  address lists as two clearly-labeled, appropriately-hedged files, explains in plain terms why removing
-  them protects their sender reputation, and remembers what's already been sent so nothing goes out twice.
+- A one-click list-cleanup email: attaches the confirmed-dead and likely-dead address lists as two
+  clearly-labeled, appropriately-hedged files, explains in plain terms why removing them protects their
+  sender reputation, and remembers what's already been sent so nothing goes out twice.
 
 ### One unified action list
 - Every check above feeds one deduplicated, prioritized action list per domain, with plain-language
