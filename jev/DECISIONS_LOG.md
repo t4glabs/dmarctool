@@ -1822,3 +1822,39 @@ and `aikyamsolve.org` (the standing test domain) -- all 3 compile clean. Service
 *(Next entry: the em-dash/AI-voice sweep, then the general USE_CASES.md D/H sweep, then the PDF-era
 content expansion. The item-assembly-structure fusion redesign found this chapter is a new, real
 candidate for its own future round.)*
+
+---
+
+## Chapter 37 — Line charts had no y-axis, so a real 100% pass rate looked like a broken chart
+
+User caught this from a real generated PDF screenshot: "Your delivery rate over time" showed a flat line
+with dates on the x-axis but no numbers anywhere -- no way to tell if it meant 100% (great) or a broken/
+empty chart. Asked directly: "is this normal? does ppl get idea after seeing it?"
+
+**Confirmed real, on both counts.** Checked `analysis.daily_pass_series()` across the real portfolio:
+several domains (aikyamfellows.org, aikyamsolve.org, others) genuinely hold a flat 100% DMARC pass rate
+for their whole window -- the flat line was real, honest data, not a bug. But `line-chart()`
+(`app/pdf_report.py`) truly had zero y-axis value labels -- only x-axis start/end dates -- confirmed by
+reading the function, not assumed. A reader has no way to distinguish "100%, every day, genuinely
+perfect" from "this chart isn't rendering anything." Answer to "do people get an idea": no, not as
+shipped.
+
+**Fixed**: `line-chart()` now takes `scale`/`unit` (default 100/"%", matching all 3 real callers --
+spam/bounce/pass-rate, all stored as 0..1 fractions) and reserves a left axis gutter with a value label
+at each of the 4 gridlines, plus a bold endpoint label next to the current-value dot so the single most
+important number never depends on a reader eyeballing an unlabeled line against a gridline.
+
+**A real bug caught while visually verifying, not shipped blind**: the first version's number formatter
+rounded to 1 decimal place, which collapsed the spam-rate chart's sub-1% gridlines (0.04%/0.08%/0.12%)
+into duplicate "0.1%, 0.1%, 0%" labels -- the exact confusing thing this axis exists to fix, just moved
+one level down. Fixed with 2-decimal precision specifically for sub-1% values (where Google's own 0.1%
+threshold lives), 1-decimal/whole-number for everything else.
+
+**Verified visually, not just compiled**: re-rendered `aikyamfellows.org`'s real PDF (the flat-100%
+case) and PNG-exported it before and after -- confirmed the exact reported problem (unlabeled flat line)
+and the fix (now reads "100%" clearly, endpoint bold-labeled). Also confirmed the bounce-rate chart's
+real endpoint value (14.3%) now reads directly off the chart instead of requiring an eyeball estimate
+against the gridlines.
+
+**Full real portfolio**: all 33 domains recompile with zero errors. Service restarted, `/report_pdf`
+returns 200. No email sent.

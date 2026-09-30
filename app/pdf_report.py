@@ -130,9 +130,21 @@ _PREAMBLE = '''
 // (not necessarily 0..1 -- ymax is derived from the data itself, with an
 // optional `threshold` line folded into the scale like charts.py's own
 // metric_trend_chart does for its dashed reference lines).
-#let line-chart(data, height: 120pt, threshold: none) = {
+//
+// `scale`/`unit`: raw values are fractions (0..1) for every current caller
+// (spam/bounce/pass rate), so the default (scale: 100, unit: "%") displays
+// them as percentages on the axis and the endpoint label. Added after a real
+// report screenshot showed a chart with dates on the x-axis but no numbers
+// anywhere -- a flat line at the top (a domain's genuine 100% pass rate, not
+// a bug) was indistinguishable from a broken/empty chart with no axis to
+// read it against. `axis-w` reserves a left gutter for the 4 gridline
+// labels; the endpoint's real current value is called out in bold next to
+// its dot so the single most important number never depends on the reader
+// eyeballing a gridline.
+#let line-chart(data, height: 120pt, threshold: none, scale: 100, unit: "%") = {
   let n = data.len()
   let plot-h = height - 16pt
+  let axis-w = 28pt
   let max-val = data.at(0).at(1)
   for d in data {
     if d.at(1) > max-val { max-val = d.at(1) }
@@ -140,24 +152,40 @@ _PREAMBLE = '''
   if threshold != none and threshold > max-val { max-val = threshold }
   let ymax = calc.max(max-val * 1.2, 0.001)
   let last = data.at(n - 1)
+  let fmt(v) = {
+    let shown = v * scale
+    if calc.abs(shown) < 1 and shown != 0 {
+      // Sub-1% values (spam rate lives around Google's 0.1% threshold) need
+      // 2 decimal places -- 1 collapses 0.04%/0.08%/0.12% into duplicate
+      // "0.1%, 0.1%, 0%" gridline labels, exactly the confusing thing this
+      // axis exists to prevent.
+      str(calc.round(shown * 100) / 100) + unit
+    } else if calc.round(shown) == shown {
+      str(calc.round(shown)) + unit
+    } else {
+      str(calc.round(shown * 10) / 10) + unit
+    }
+  }
 
   box(width: 100%, height: height + 14pt, fill: tile-bg, radius: 4pt, clip: false, inset: 0pt,
     {
       for i in range(0, 4) {
         let frac = i / 3
-        place(top + left, dy: (1 - frac) * plot-h + 8pt, line(length: 100%, stroke: (paint: border-color, thickness: 0.5pt)))
+        let gy = (1 - frac) * plot-h + 8pt
+        place(top + left, dx: axis-w, dy: gy, line(length: 100% - axis-w, stroke: (paint: border-color, thickness: 0.5pt)))
+        place(top + left, dx: 0pt, dy: gy, box(width: axis-w - 4pt, place(right + horizon, text(font: body-font, size: 7.5pt, fill: muted, fmt(frac * ymax)))))
       }
       if threshold != none {
         let ty = (1 - threshold / ymax) * plot-h + 8pt
-        place(top + left, dy: ty, line(length: 100%, stroke: (paint: bad-color, thickness: 0.7pt, dash: "dashed")))
+        place(top + left, dx: axis-w, dy: ty, line(length: 100% - axis-w, stroke: (paint: bad-color, thickness: 0.7pt, dash: "dashed")))
       }
       if n > 1 {
         for i in range(n - 1) {
           let (label1, val1) = data.at(i)
           let (label2, val2) = data.at(i + 1)
-          let x1 = (i / (n - 1)) * 100%
+          let x1 = axis-w + (i / (n - 1)) * (100% - axis-w)
           let y1 = (1 - val1 / ymax) * plot-h + 8pt
-          let x2 = ((i + 1) / (n - 1)) * 100%
+          let x2 = axis-w + ((i + 1) / (n - 1)) * (100% - axis-w)
           let y2 = (1 - val2 / ymax) * plot-h + 8pt
           place(top + left, dx: x1, dy: y1,
             line(start: (0pt, 0pt), end: (x2 - x1, y2 - y1), stroke: (paint: accent, thickness: 1.6pt))
@@ -165,8 +193,11 @@ _PREAMBLE = '''
         }
       }
       let ly = (1 - last.at(1) / ymax) * plot-h + 8pt
+      let label-above = ly > 16pt
       place(top + left, dx: 100%, dy: ly, place(center + horizon, circle(radius: 2.6pt, fill: accent, stroke: none)))
-      place(top + left, dx: 0pt, dy: plot-h + 12pt, text(font: body-font, size: 8pt, fill: muted, data.at(0).at(0)))
+      place(top + left, dx: 100%, dy: if label-above { ly - 15pt } else { ly + 7pt },
+        place(right + horizon, text(font: body-font, size: 8.5pt, weight: "bold", fill: accent, fmt(last.at(1)))))
+      place(top + left, dx: axis-w, dy: plot-h + 12pt, text(font: body-font, size: 8pt, fill: muted, data.at(0).at(0)))
       place(top + right, dx: 0pt, dy: plot-h + 12pt, text(font: body-font, size: 8pt, fill: muted, last.at(0)))
     }
   )
