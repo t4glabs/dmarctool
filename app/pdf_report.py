@@ -181,16 +181,127 @@ def _masthead_and_kpi(context: dict) -> str:
     return "\n".join(parts)
 
 
+def _capitalize_first(s: str) -> str:
+    return s[0].upper() + s[1:] if s else s
+
+
+def _bullet_list(item_bodies: list) -> str:
+    """item_bodies: list of already-Typst-safe content strings (built via
+    #{_typst_str(...)} escaping, never raw interpolation). Renders as a
+    native Typst bullet list."""
+    if not item_bodies:
+        return ""
+    joined = ",\n  ".join(f"[{body}]" for body in item_bodies)
+    return f"#list(spacing: 0.55cm, marker: [#text(fill: accent)[•]],\n  {joined}\n)"
+
+
+def _resolved_item(item: dict) -> str:
+    story = _capitalize_first(item["story"]) + "."
+    parts = [f'#{_typst_str(story)} ', '#text(weight: "bold")[We’ve taken care of it.]']
+    if item.get("why"):
+        parts.append(f' #text(fill: muted)[#{_typst_str(item["why"])}]')
+    if item.get("impact"):
+        parts.append(f' The payoff: #{_typst_str(item["impact"])}.')
+    if item.get("history"):
+        parts.append(f' #text(fill: muted)[#{_typst_str(item["history"])}]')
+    return "".join(parts)
+
+
+def _still_open_item(item: dict) -> str:
+    story = _capitalize_first(item["story"]) + "."
+    parts = [f'#{_typst_str(story)}']
+    if item.get("detail"):
+        parts.append(f' #{_typst_str(item["detail"])}.')
+    if item.get("why"):
+        parts.append(f' #text(fill: muted)[#{_typst_str(item["why"])}]')
+    if item.get("history"):
+        parts.append(f' #text(fill: muted)[#{_typst_str(item["history"])}]')
+    return "".join(parts)
+
+
+def _standing_narrative(context: dict) -> str:
+    """care_ledger, health_trend/timeline, whats_working -- reuses the exact
+    same prose Chapters 1-22 already Jev-validated for the email, just given
+    real print typography and room to breathe. No new content decisions."""
+    parts = []
+    if context.get("care_ledger"):
+        parts.append(f'\n#{_typst_str(context["care_ledger"])}\n')
+    if context.get("health_trend"):
+        parts.append(f'\n#section-title("Where you stand")\n#{_typst_str(context["health_trend"])}\n')
+        if context.get("health_timeline"):
+            parts.append(f'\n#v(0.3cm)\n#text(fill: muted)[#{_typst_str(context["health_timeline"])}]\n')
+    if context.get("whats_working"):
+        bullets = [f'#{_typst_str(item)}' for item in context["whats_working"]]
+        parts.append(f'''
+#v(0.4cm)
+#rect(fill: rgb("#EAF4EC"), stroke: none, radius: 8pt, inset: 16pt, width: 100%,
+  [
+    #text(font: heading-font, weight: "bold", size: 12pt, fill: ok-color)[What's already working for you]
+    #v(0.3cm)
+    {_bullet_list(bullets)}
+  ]
+)
+''')
+    return "\n".join(parts)
+
+
+def _action_ledger(context: dict) -> str:
+    """resolved + still_open (+ contact_cta) + risk_warning, and the
+    "nothing needed fixing" fallback -- gated on `not headline` exactly like
+    the email template's own Chapter 29 fix, so a true all-clear domain never
+    shows the same "nothing to worry about" message twice (once in the
+    masthead headline, once here)."""
+    parts = []
+    if context.get("resolved"):
+        bullets = [_resolved_item(item) for item in context["resolved"]]
+        parts.append(f'''
+#section-title("What we sorted out for you")
+{_bullet_list(bullets)}
+''')
+    if context.get("still_open"):
+        bullets = [_still_open_item(item) for item in context["still_open"]]
+        parts.append(f'''
+#section-title("What we're still working on")
+{_bullet_list(bullets)}
+#v(0.3cm)
+We're already working through all of this, and we'll let you know as each one clears.
+''')
+        if context.get("contact_cta"):
+            parts.append(f'\n#v(0.2cm)\n#{_typst_str(context["contact_cta"])}\n')
+    if not context.get("resolved") and not context.get("still_open") and not context.get("headline"):
+        parts.append('''
+#rect(fill: rgb("#EAF4EC"), stroke: none, radius: 8pt, inset: 16pt, width: 100%,
+  text(fill: ok-color)[Nothing needed fixing this time, everything's running smoothly.]
+)
+''')
+    if context.get("risk_warning"):
+        parts.append(f'''
+#v(0.4cm)
+#rect(fill: rgb("#FBEBE8"), stroke: (paint: rgb("#EAC6C1"), thickness: 1pt), radius: 8pt, inset: 16pt, width: 100%,
+  [
+    #text(font: heading-font, weight: "bold", size: 12pt, fill: bad-color)[Heads up]
+    #v(0.25cm)
+    #text(fill: bad-color)[#{_typst_str(context["risk_warning"])}]
+  ]
+)
+''')
+    return "\n".join(parts)
+
+
 def render_domain_report_pdf(conn, domain_id: int, domain_name: str, recipient_label: str,
                               period_start, period_end) -> bytes:
-    """Renders the full domain report as PDF bytes. Round A scope: masthead +
-    KPI tiles + headline only -- the rest of build_domain_report()'s sections
-    (care_ledger, whats_working, resolved, still_open, protection/
-    deliverability + charts, newsletter, tips) are added in Rounds B-D,
-    reusing this same function's context dict, not a new one."""
+    """Renders the full domain report as PDF bytes. Round B scope adds the
+    standing-narrative and action-ledger zones on top of Round A's masthead/
+    KPI/headline -- protection/deliverability + charts, newsletter, and tips
+    are added in Rounds C-D, reusing this same function's context dict, not
+    a new one."""
     from app.domain_report import _build_context
 
     context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
-    body = _masthead_and_kpi(context)
+    body = "\n".join([
+        _masthead_and_kpi(context),
+        _standing_narrative(context),
+        _action_ledger(context),
+    ])
     typ_source = _PREAMBLE + _page_setup(domain_name) + body
     return _compile_typst(typ_source)

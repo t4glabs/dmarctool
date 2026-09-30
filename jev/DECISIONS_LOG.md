@@ -1537,3 +1537,31 @@ directly, no re-implementation) and aikyamsolve.org (headline shown correctly, r
 ---
 
 *(Next entry: Round B -- the standing narrative and action ledger zones, ported into the PDF template.)*
+
+## Chapter 31 — PDF report, Round B: standing narrative + action ledger
+
+Ports `care_ledger`/`health_trend`/`health_timeline`/`whats_working`/`resolved`/`still_open`/
+`contact_cta`/`risk_warning` into the Typst template. Zero new content or wording decisions -- every
+sentence rendered here is the exact same Jev-validated prose from Chapters 1-22, just given real print
+typography and room to breathe.
+
+**Shipped**: `_bullet_list()` (native Typst `#list()` with an accent-colored bullet marker),
+`_resolved_item()`/`_still_open_item()` (rebuild each item's rich inline formatting -- bold "we've taken
+care of it," muted why/impact/history clauses -- matching the email template's own structure exactly),
+`_standing_narrative()` and `_action_ledger()`.
+
+**A real design decision carried forward deliberately, not re-derived**: the "nothing needed fixing"
+fallback box is gated on `not context.get("headline")`, exactly mirroring the Chapter 29 fix in
+`email_report.html`/`.txt` -- a true all-clear domain would otherwise show the same "nothing to worry
+about" message twice (once as the masthead's green headline callout, once again here). Confirmed this
+matters for real: since `_masthead_and_kpi()` and `_action_ledger()` both read the identical `headline`
+key from the same `_build_context()` call, this gating is automatically correct with no extra plumbing.
+
+**Verified against the full real portfolio**: zero Typst errors on all 33 domains. Visually confirmed on
+aikyamfellows.org (4 real still-open items across 2 full pages, correct pagination, correct muted-clause
+styling) and aikyam.school (2 real resolved items, the whats_working green box, and the single
+correctly-non-duplicated "no action needed" callout). Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: Round C -- protection/deliverability + the 3 real Typst-native trend charts.)*
