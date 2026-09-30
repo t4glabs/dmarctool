@@ -93,7 +93,7 @@ def _csv_bytes(header: list, rows: list, row_fn) -> bytes:
 
 
 def build_notification(conn, domain_id: int, domain_name: str, recipient_label: str,
-                        min_occurrences: int, min_days: int):
+                        min_occurrences: int, min_days: int, signoff_name: str = None):
     """Returns (subject, text_body, attachments, hard_count, chronic_count),
     or None if there's nothing new/pending to notify about (both counts
     zero) -- callers must treat None as "don't send", not as an error.
@@ -101,7 +101,11 @@ def build_notification(conn, domain_id: int, domain_name: str, recipient_label: 
     for app.mailgun.send_message()'s list-of-attachments support. Content
     (subject/body) is Jev-validated wording (jev/DECISIONS_LOG.md Ch.40),
     not invented fresh here without review -- see that chapter before
-    changing this copy."""
+    changing this copy. `signoff_name` should be the SAME
+    `settings["report_signoff_name"]` the periodic report closes with
+    ("With care, {signoff_name}") -- caught missing entirely on the first
+    version of this feature (Ch.41): every other outbound email from this
+    tool ends the same way, this one just forgot to."""
     since = _last_notified_at(conn, domain_id)
     hard_rows = _hard_bounce_rows(conn, domain_id, since)
     chronic_rows = chronic_transient_bounces(conn, domain_id, min_occurrences, min_days)
@@ -114,8 +118,10 @@ def build_notification(conn, domain_id: int, domain_name: str, recipient_label: 
     body_parts = [
         f"Hi {greeting},",
         "",
-        f"We found some email addresses that have stopped accepting mail from {domain_name}. Removing "
-        "them from your subscriber list helps keep your emails out of spam and in the inbox.",
+        f"We found some email addresses that have stopped accepting mail from {domain_name}. Repeatedly "
+        "sending to dead addresses is one of the biggest reasons mailbox providers like Gmail start "
+        "treating a sender as spammy -- removing them protects your reputation and keeps your real "
+        "emails landing in the inbox.",
         "",
     ]
 
@@ -182,6 +188,9 @@ def build_notification(conn, domain_id: int, domain_name: str, recipient_label: 
         "",
         "Once you have removed what you're comfortable with, just reply and let us know -- we will mark "
         "this as done on our end.",
+        "",
+        "With care,",
+        signoff_name or "The aikyam Team",
     ]
     subject = f"A few addresses to remove from your {domain_name} mailing list"
     text_body = "\n".join(body_parts)

@@ -2034,3 +2034,38 @@ and confirming the dashboard's pending-count and "last notified" display both up
 **Also this chapter**: the user retired the hosted-artifact-sync step of this whole workflow (see
 `jev/WORKFLOW.md`'s "Relationship to the hosted artifact" section) -- `DECISIONS_LOG.md` is now the sole
 record, no more parallel artifact updates.
+
+---
+
+## Chapter 41 — Ch.40 consistency fixes + a "why it matters" reasoning gap
+
+User caught 2 real consistency gaps right after Ch.40 shipped: the notify email had no "With care, {signoff}"
+closing (every other outbound email from this tool has one) and used the bare sender email as the From
+address instead of the configured display name ("Domain Health", `settings["report_sender_name"]") --
+both simply missed on the first pass, not a design decision. Fixed: `build_notification()` now takes
+`signoff_name` (the same `report_signoff_name` the periodic report uses) and closes with it; the route now
+builds `from_header` the same way `send_report_now()` does.
+
+**A second, real content gap, also user-raised**: the opening paragraph said removing dead addresses
+"helps keep your emails out of spam" but never explained the actual mechanism (repeated sends to dead
+addresses erode sender reputation, which is what triggers spam-folder treatment) -- the "why" a
+non-technical reader needs to actually feel the urgency. Rewrote and Jev-tested against real pattic.org
+numbers: **this became the best-scoring wording of the entire feature** -- `audience_fit` 43%->55%
+`clear_as_is` (the highest this feature has ever reached), `honesty_calibration` 65%, `natural_voice` 78%,
+`actionability` 100%. Explaining the real mechanism (reputation/spam-folder cause-and-effect) made the
+copy clearer AND better calibrated at the same time, not a trade-off between them.
+
+**Important operational note, not a bug**: while building this chapter's fixes, found 2 REAL notification
+sends already logged in `bounce_notification_sends` -- pattic.org (2026-09-30 10:39, 327+36 addresses, to
+pooja@aikyamfellows.org/shemeer@aikyamhq.com) and ilabindia.org (2026-09-30 10:41, 54+0, to
+info@ilabindia.org). These went out via the real button on the live dashboard, most likely the user
+testing the just-shipped Chapter 40 feature themselves -- not triggered by Claude (the standing
+never-send-a-real-email-during-development rule was not broken; these predate this chapter's fixes).
+Correctly reflects that BOTH real sends used the pre-fix wording (no signoff, bare From address, no
+reputation reasoning) -- flagged to the user directly rather than silently reconciled, since the two
+recipients already received the older version and the watermark now correctly shows 0 new hard bounces
+for pattic.org as a result.
+
+Verified: full 33-domain `build_notification()` sweep (zero errors) with the final wording, live page
+re-checked for ilabindia.org showing its real prior send correctly. Service restarted, healthy. No new
+email sent by Claude.

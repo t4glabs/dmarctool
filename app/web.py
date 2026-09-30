@@ -1459,7 +1459,8 @@ def notify_bounce_cleanup(name: str):
     settings = ensure_default_settings(conn)
     min_occ = int(settings["chronic_transient_min_occurrences"])
     min_days = int(settings["chronic_transient_min_days"])
-    built = build_notification(conn, domain_id, name, settings_row["recipient_label"], min_occ, min_days)
+    built = build_notification(conn, domain_id, name, settings_row["recipient_label"], min_occ, min_days,
+                                signoff_name=settings["report_signoff_name"])
     if built is None:
         return RedirectResponse(f"/domain/{name}?flash=Nothing new to notify about right now.#deliverability", status_code=303)
     subject, text_body, attachments, hard_count, chronic_count = built
@@ -1473,11 +1474,13 @@ def notify_bounce_cleanup(name: str):
             status_code=303,
         )
     reply_to = settings.get("report_reply_to") or None
+    sender_name = settings["report_sender_name"]
+    from_header = f"{sender_name} <{sender_email}>" if sender_name else sender_email
     html_body = "<div style=\"font-family:sans-serif;font-size:15px;line-height:1.6;\">" + \
         "".join(f"<p style=\"margin:0 0 12px 0;\">{_html_escape(line)}</p>" if line else "<br>" for line in text_body.split("\n")) + \
         "</div>"
     _, err = send_message(
-        sender_domain, api_key, sender_email, settings_row["recipient_email"], subject, text_body, html_body,
+        sender_domain, api_key, from_header, settings_row["recipient_email"], subject, text_body, html_body,
         cc_addr=settings_row["cc_email"], reply_to=reply_to, attachment=attachments,
     )
     status = "failed" if err else "sent"
