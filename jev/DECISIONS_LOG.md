@@ -1609,3 +1609,36 @@ a clean toy example. Service restarted, healthy. No email sent.
 
 *(Next entry: Round D -- newsletter zone, tips, closing, the new /report_pdf preview route, and full
 single-PDF assembly.)*
+
+## Chapter 33 — PDF report, Round D: newsletter, tips, closing, and full single-document assembly
+
+Completes the content -- every section from `build_domain_report()` now has a home in the PDF. Ships
+`_newsletter_and_closing()` (newsletter prose + real open/click segment gauges re-derived from the exact
+same `newsletter_bars` data Chapter 26's email table-bars use -- same number, different render; tips as a
+green bulleted box matching whats_working's treatment; the closing paragraph/signoff, exact established
+wording, zero new content) and the new `GET /domain/{name}/report_pdf` route (`app/web.py`, same
+read-only/no-side-effects contract as `/report_preview` -- this is how the PDF gets verified, by me and by
+the user, without ever triggering a real or test send).
+
+**A real, load-bearing bug found only by testing the actual live route, not my own shell scripts**: every
+prior round's verification ran `render_domain_report_pdf()` directly via `./venv/bin/python3`, where the
+interactive shell's own `PATH` includes Homebrew's prefix. The new `/report_pdf` route, run through the
+real launchd-managed service, hit `FileNotFoundError: typst` -- launchd's PATH is minimal (no Homebrew),
+and `_compile_typst()` was calling bare `"typst"`. `dig` (`app/compliance.py`) gets away with this because
+it lives at `/usr/bin/dig`, a default system path always on launchd's PATH; Typst is Homebrew-installed
+at `/opt/homebrew/bin/typst`, which isn't. Fixed by hardcoding the absolute path. **A real lesson for the
+rest of this session and beyond**: a script run from my own shell is not the same execution environment
+as the real service -- the very last verification step (hitting the actual live route) is not optional,
+even after 3 rounds of "zero errors" from direct Python calls.
+
+**Verified against the full real portfolio**: zero errors, all 33 domains, via both direct calls and the
+real live route. Visually confirmed the complete 3-page assembly on aikyamjobs.org (real newsletter
+segment gauges matching the prose numbers exactly -- 30% opened, 4% clicked -- the real standout-campaign
+note, correct closing/signoff) and the graceful-degradation case on solidaritycir.com (the real emptiest
+domain in the portfolio -- no KPI tiles, no charts, no newsletter, a single clean page, no crash, no ugly
+gaps). Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: Round E -- the Jev-validated teaser email, wired into send_report_now(), closing out the
+5-round PDF initiative.)*

@@ -1441,6 +1441,28 @@ def preview_domain_report_html(request: Request, name: str):
     return templates.TemplateResponse(request, "email_report.html", context)
 
 
+@app.get("/domain/{name}/report_pdf")
+def preview_domain_report_pdf(name: str):
+    """Read-only: renders the real Typst-generated PDF report and streams it
+    back as application/pdf -- no Mailgun call, no sending, no attachment
+    actually built for delivery, safe to open any time. This is how the PDF
+    design gets verified (by me, and by the user) without ever triggering a
+    real or test send -- same access level and same read-only guarantee as
+    /report_preview."""
+    from app.pdf_report import render_domain_report_pdf
+
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        return HTMLResponse(f"Unknown domain: {name}", status_code=404)
+    domain_id = domain["id"]
+    settings_row = get_report_settings(conn, domain_id)
+    period_start, period_end = report_period_for_domain(conn, domain_id)
+    recipient_label = settings_row["recipient_label"] if settings_row else None
+    pdf_bytes = render_domain_report_pdf(conn, domain_id, name, recipient_label, period_start, period_end)
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
 @app.get("/domain/{name}/client_view", response_class=HTMLResponse)
 def client_report_view(request: Request, name: str):
     """Read-only, interactive version of the same plain-language owner report

@@ -33,6 +33,17 @@ def _typst_str(value) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+# Absolute path, not a bare "typst" -- launchd runs this service with a
+# minimal PATH (no Homebrew prefix; that only exists in an interactive
+# shell's own PATH via `brew shellenv`). `dig` (app/compliance.py) gets away
+# with a bare name because it lives at /usr/bin/dig, a default system path
+# always on launchd's PATH -- Typst, a Homebrew install, is not. Found this
+# the hard way: worked from every one of this round's own shell-run test
+# scripts, then 500'd with FileNotFoundError the first time it ran through
+# the real launchd-managed service.
+_TYPST_BIN = "/opt/homebrew/bin/typst"
+
+
 def _compile_typst(typ_source: str) -> bytes:
     """Compiles a Typst source string to PDF bytes via the real `typst`
     CLI. Raises RuntimeError with the compiler's own stderr on failure --
@@ -44,7 +55,7 @@ def _compile_typst(typ_source: str) -> bytes:
         with open(typ_path, "w") as f:
             f.write(typ_source)
         result = subprocess.run(
-            ["typst", "compile", typ_path, pdf_path],
+            [_TYPST_BIN, "compile", typ_path, pdf_path],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
@@ -424,13 +435,54 @@ def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
     return "\n".join(parts)
 
 
+def _newsletter_and_closing(context: dict) -> str:
+    """newsletter (+ its real open/click segment gauges, re-derived from the
+    exact same newsletter_bars data Chapter 26's email table-bars use -- same
+    number, different render), tips, and the closing paragraph/signoff.
+    Closing wording is the exact established text, not a new decision."""
+    parts = []
+    if context.get("newsletter"):
+        parts.append(f'#section-title("Your newsletter\'s reach")\n#{_typst_str(context["newsletter"])}\n')
+        if context.get("newsletter_bars"):
+            gauges = "\n".join(
+                f'#segment-gauge({_typst_str(label)}, {frac})' for label, frac in context["newsletter_bars"]
+            )
+            parts.append(f'\n#v(0.3cm)\n{gauges}\n')
+
+    if context.get("tips"):
+        bullets = [f'#{_typst_str(tip)}' for tip in context["tips"]]
+        parts.append(f'''
+#v(0.4cm)
+#rect(fill: rgb("#EAF4EC"), stroke: none, radius: 8pt, inset: 16pt, width: 100%,
+  [
+    #text(font: heading-font, weight: "bold", size: 12pt, fill: ok-color)[Tips for the next few weeks]
+    #v(0.3cm)
+    {_bullet_list(bullets)}
+  ]
+)
+''')
+
+    parts.append(f'''
+#v(0.6cm)
+This might look like a lot to take in, but it really matters. These are the things that decide whether
+people actually see your emails, and whether someone could try to impersonate your organization using
+your name. Please take a moment to read through it, and reply any time if anything's unclear. We're
+always happy to walk through it with you.
+
+#v(0.4cm)
+With care, \\
+#text(weight: "bold")[#{_typst_str(context["signoff_name"])}]
+''')
+    return "\n".join(parts)
+
+
 def render_domain_report_pdf(conn, domain_id: int, domain_name: str, recipient_label: str,
                               period_start, period_end) -> bytes:
-    """Renders the full domain report as PDF bytes. Round C scope adds the
-    protection/deliverability zone + its 3 real trend charts on top of
-    Round A/B's masthead/KPI/headline/narrative/ledger -- newsletter and
-    tips are added in Round D, reusing this same function's context dict,
-    not a new one."""
+    """Renders the full domain report as PDF bytes -- Round D scope, the
+    complete single-document assembly: masthead/KPI/headline (Round A),
+    standing narrative + action ledger (Round B), protection/deliverability
+    + charts (Round C), newsletter + tips + closing (Round D). One shared
+    context dict throughout, zero new content decisions anywhere."""
     from app.domain_report import _build_context
     from app.domain_report import chart_data as _get_chart_data
 
@@ -441,6 +493,7 @@ def render_domain_report_pdf(conn, domain_id: int, domain_name: str, recipient_l
         _standing_narrative(context),
         _action_ledger(context),
         _protection_and_deliverability(context, cdata),
+        _newsletter_and_closing(context),
     ])
     typ_source = _PREAMBLE + _page_setup(domain_name) + body
     return _compile_typst(typ_source)
