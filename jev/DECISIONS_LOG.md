@@ -1481,3 +1481,59 @@ No email sent.
 
 *(Next entry: whatever the user prioritizes next -- continuing the sentence-by-sentence prose sweep this
 chapter's numbers point toward, or something new.)*
+
+## Chapter 30 — The email report becomes a PDF (Typst), Round A: pipeline infrastructure
+
+New initiative, directly resolving the accepted-but-unresolved gap from [[dmarctool_email_svg_gmail_gap]]:
+real Gmail testing proved inline SVG charts actively leak garbled text rather than degrading gracefully.
+The user's own plan all along was to wait for a Typst-based PDF export; that work starts now. The PDF
+becomes the real rich report (unconstrained by any email-client limit); the email body becomes a short
+teaser pointing to the attachment (Round E).
+
+**Full plan-mode cycle first**, given the scale (new toolchain, new attachment mechanism, a full second
+design pass): one Explore-agent technical spike (not codebase research -- a hands-on validation of real
+Typst 0.15.1 syntax, actually compiling test `.typ` files rather than trusting remembered syntax) plus
+direct verification of Mailgun's real attachment API. Plan saved at
+`/Users/jinsoraj/.claude/plans/splendid-tumbling-summit.md` (overwritten from the completed visual-
+redesign plan -- a different task).
+
+**Real findings from the spike, not guessed**: Typst's native primitives (no cetz, no external package,
+no network dependency at compile time -- matching `app/charts.py`'s own "no charting library" precedent)
+fully support horizontal progress-bars and connected-point line charts (grid/axis/markers via
+`place()`/`line()`/`circle()`), but **cannot do true arc/donut charts** without an external package.
+Adopted fallback: horizontal segment gauges for any percentage that was a donut in the email/dashboard
+version -- a deliberate substitution, arguably more minimalist, and sidesteps the exact "text crammed
+inside a small ring" bug class fixed in Chapter 28. PNG export (`typst compile file.typ file.png`) gives
+a real way to visually inspect generated output -- something the email work never had (could only read
+raw HTML/text).
+
+**Shipped**: new `app/pdf_report.py` (`_typst_str()` escaping helper -- guards every dynamic string
+against Typst's markup-mode special characters; `_compile_typst()`, a `subprocess`/`tempfile` wrapper
+around the real `typst` CLI, stdlib only; a design-system `_PREAMBLE` -- New York serif for headings/
+wordmark, Helvetica Neue sans for body/data, a white/near-white print page carrying the established brand
+hue forward, `stat-tile()`/`segment-gauge()`/`eyebrow()`/`section-title()` helper functions; `_masthead_
+and_kpi()` + `render_domain_report_pdf()`, reusing `_build_context()` directly -- zero new content
+decisions, matching the user's explicit instruction not to re-run the same logic). `app/mailgun.py::
+send_message()` gained an optional `attachment` param (hand-rolled multipart/form-data, stdlib `urllib`,
+Mailgun's real `attachment` field name confirmed against their docs) -- default `None` keeps the one real
+call site (`send_report_now()`) byte-identical to before.
+
+**Two real bugs caught via actual visual inspection, not just "did it compile"**: (1) the footer showed
+literal quote marks around the domain name (`"aikyamsolve.org"`) -- a real Typst gotcha: a bare string
+literal placed directly in markup content (`[...]`) is NOT parsed as code, the quote characters just
+render as text; fixed by prefixing with `#` to force one code-mode expression. (2) the page counter
+showed `1 / (1,)` -- `#counter(page).final()` returns an array/tuple, needs `.first()` to get the actual
+number; the same untested pattern was in the spike's own reference doc, caught here by actually looking
+at the rendered PNG rather than trusting "no compile error" as sufficient. Also fixed the same
+raw-string-in-markup risk in the greeting/domain-name lines (was using a quote-slicing hack instead of
+the correct `#{...}` pattern) before it could bite on a name containing a markup-special character.
+
+**Verified against the full real portfolio**: all 33 real domains compile with zero Typst errors.
+Visually confirmed via PNG on aikyamjobs.org (headline correctly omitted -- the still-open item isn't
+urgent, inheriting Chapter 29's contradiction fix automatically since this reuses `_build_context()`
+directly, no re-implementation) and aikyamsolve.org (headline shown correctly, real "Hi Jinso," real
+92/86 health scores, real smart-quote typography). Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: Round B -- the standing narrative and action ledger zones, ported into the PDF template.)*
