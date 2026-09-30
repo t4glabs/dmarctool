@@ -77,14 +77,14 @@ _PROBLEM_STORY = {
     "mailgun_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo, a full inbox, or an address that no longer exists)",
     "ses_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo, a full inbox, or an address that no longer exists)",
     "new_sender": ("we noticed a computer sending email using your website's name that we hadn't seen before. "
-                   "It's worth knowing about, since this can be a sign that someone else is using your "
-                   "organization's name without your knowledge"),
+                   "Most new senders turn out to be something ordinary, but it's also exactly what we'd see "
+                   "first if someone else started using your name without asking"),
     "failure_investigation": ("a computer sending email using your website's name was having trouble passing "
-                               "safety checks. It's worth knowing about, since this can be a sign that someone "
-                               "else is using your organization's name without your knowledge"),
+                               "our safety checks. That's often just a misconfigured sender working itself out, "
+                               "but it's the same pattern an unauthorized use of your name would leave behind"),
     "borrowed_sending_identity": ("some of your emails were accidentally being sent through a different website's "
-                                   "account. It's worth knowing about, since mix-ups like this can also be a sign "
-                                   "that someone else is using your organization's name"),
+                                   "account -- ordinarily a shared-vendor mix-up, though it takes the same shape "
+                                   "as someone else borrowing your organization's identity"),
     "spf_missing": "your website was missing a security setting that helps stop people from faking your emails",
     "dns_missing": "your website didn't have the basic protection that stops people from faking your emails",
     "dkim_missing": "your website was missing a kind of digital signature that proves your emails really came from you",
@@ -917,6 +917,7 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
     ).fetchall()
     items = []
     seen_stories = set()
+    seen_histories = set()
     for r in rows:
         category, ref_key = r["category"], r["ref_key"]
         if category in _OPERATOR_ONLY_CATEGORIES:
@@ -961,8 +962,20 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
         if not story or story in seen_stories:
             continue
         seen_stories.add(story)
-        items.append({"story": story, "detail": detail, "why": _why_it_matters(category),
-                      "history": _incident_recurrence(conn, domain_id, category, resolved=False, as_of_str=end_str)})
+        # Several categories can share an identical first-known month (e.g. a
+        # domain onboarded once, several checks all flagging that same week),
+        # which made _incident_recurrence's fixed single-day/30+-days-old
+        # sentence render as an exact word-for-word duplicate across sibling
+        # items in the same document -- its own real repetition source,
+        # separate from (and additive to) the shared _WHY_IT_MATTERS/
+        # _PROBLEM_STORY phrasing fixed in the same pass. Same "never render
+        # the same sentence twice" discipline as seen_stories above.
+        history = _incident_recurrence(conn, domain_id, category, resolved=False, as_of_str=end_str)
+        if history in seen_histories:
+            history = None
+        elif history:
+            seen_histories.add(history)
+        items.append({"story": story, "detail": detail, "why": _why_it_matters(category), "history": history})
     return items
 
 
@@ -1694,11 +1707,11 @@ _WHY_IT_MATTERS = {
     "ses_reputation": "If it keeps climbing, mailbox providers start sending your newsletter to spam instead of the inbox.",
     "ses_reputation_watch": "Worth catching early, because once providers lose confidence it takes a while to earn back.",
     "ses_rejected": "A blocked message never reaches anyone at all, so it's worth understanding why.",
-    "new_sender": "We check these so nobody can quietly use your organization's name to email your supporters.",
-    "failure_investigation": "We check these so nobody can quietly use your organization's name to email your supporters.",
-    "borrowed_sending_identity": "Worth sorting out so your mail is clearly recognisable as yours.",
+    "new_sender": "Catching these early is what keeps someone from quietly using your organization's name to email your supporters.",
+    "failure_investigation": "Catching these early is what keeps someone from quietly using your organization's name to email your supporters.",
+    "borrowed_sending_identity": "Once it's sorted, your mail is unmistakably yours again -- no borrowed identity in the middle.",
     "safe_browsing_flagged": "Visitors get a red warning screen before they reach your site, which costs you trust and donations.",
-    "postmaster_compliance": "This comes straight from Google, so it is worth settling before it affects the inbox.",
+    "postmaster_compliance": "Left unresolved, this is the kind of verdict that starts affecting the inbox -- and it comes straight from Google, not a guess.",
     "display_name_issue": "The \"from\" name is the first thing a reader sees, and it decides whether they trust the email.",
     "content_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
     "subject_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
@@ -1713,7 +1726,7 @@ _WHY_IT_MATTERS = {
     "mta_sts_broken": "It's what stops someone quietly reading or tampering with email sent to your organization.",
     "campaign_compliance_issue": "Mailbox providers increasingly expect this from newsletter senders, and missing it can push your mail toward spam.",
     "display_name_inconsistent": "A consistent \"from\" name is part of how readers decide an email is really you and worth opening.",
-    "lookalike_domain": "A look-alike address is exactly how someone would try to scam your donors in your name, so we watch for them.",
+    "lookalike_domain": "This is the exact tactic used to scam donors out of money in an organization's name -- not a risk worth ignoring.",
 }
 
 

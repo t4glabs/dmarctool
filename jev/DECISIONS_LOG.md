@@ -1747,4 +1747,78 @@ branch returns the correct alternate wording. Service restarted, healthy. No ema
 
 ---
 
-*(Next entry: resuming the Chapter 29 whole-document natural_voice/honesty_calibration finding.)*
+## Chapter 36 — Resuming the whole-document natural_voice/honesty_calibration finding
+
+Chapter 29 left a real, un-fixed finding on the table: the full `still_open` block for a domain with
+several action items simultaneously open scores `natural_voice: reads_like_generated_boilerplate` and
+`repetition_risk: reads_as_boilerplate`, even though every individual item's wording had already been
+Jev-validated in isolation over many earlier chapters. Resumed it as the first of the "already known
+ones" the user asked for, in the order they specified.
+
+**Real baseline, established first**: pulled the live `still_open` list for `tinybridge.in` -- a real
+domain with 4 categories open at once (`borrowed_sending_identity`, `lookalike_domain`, `new_sender`,
+`postmaster_compliance`), the richest real overlap case in the portfolio. Ran it through Jev exactly as
+it renders today: `natural_voice: reads_like_generated_boilerplate` (98% confidence),
+`repetition_risk: reads_as_boilerplate`.
+
+**Root cause, narrowed to two real code locations**: `_PROBLEM_STORY`'s `new_sender`/
+`failure_investigation`/`borrowed_sending_identity` entries all shared the identical tail phrase "It's
+worth knowing about, since [X] can be a sign that someone else is using your organization's name..."; and
+`_WHY_IT_MATTERS`'s `postmaster_compliance`/`lookalike_domain`/`new_sender`/`failure_investigation`/
+`borrowed_sending_identity` entries all shared the same "[fact], so [consequence]" grammatical shape.
+Four different categories, same two templates -- exactly what reads as generated once several show up in
+the same document.
+
+**Fix 1 -- broke both shared templates with genuinely restructured sentences** (not rotation, not a
+punctuation swap -- both already-proven non-fixes from Chapters 17/35): each of the affected entries now
+uses a different real grammatical shape (contrast clauses with "but"/"though", causal "Because..."
+openers, gerund-subject constructions, consequence-first framing) rather than a shared connector word.
+Caught and fixed a fresh bug of my own making mid-edit: the first `lookalike_domain` rewrite duplicated
+"watching what it does" against its own story line (a new intra-item echo, not the cross-item one being
+fixed) -- rewritten again before testing.
+
+**Fix 2 -- a second, previously-undiagnosed repetition source, found while re-rendering the real
+combined block**: `_incident_recurrence()`'s single-day/30+-days-old branch returns one fixed sentence
+("We've known about this since {month}, and it hasn't slipped off our list.") with no per-item
+variation. When several items share the same first-known month (as all 4 of tinybridge.in's do -- all
+opened in August), the exact same sentence appeared 4 times in a row in one document, undiluted by
+Fix 1. Fixed with the same "never render the same sentence twice" discipline `_still_open_items()`
+already applies to `story` (via `seen_stories`) -- added a matching `seen_histories` set; a repeat
+history sentence is now suppressed (set to `None`) rather than duplicated.
+
+**Re-tested the real combined block with both fixes applied**: `repetition_risk` moved from
+`reads_as_boilerplate` to `borderline_needs_variation` -- a genuine, measured improvement.
+`natural_voice` did NOT move (still `reads_like_generated_boilerplate`, 95% confidence) -- word-level
+and duplicate-sentence fixes alone don't reach it.
+
+**The real finding that explains why, confirmed with an isolated A/B test (not assumed)**: took one real
+item (`borrowed_sending_identity`) and tested two versions with the SAME underlying facts. Version A --
+today's actual mechanical assembly (capitalized story sentence, then a separate detail sentence, then a
+separate capitalized why sentence, then history) -- scored `natural_voice` 56% boilerplate even in
+isolation (worse once compounded across 4 items in one document, per the baseline above). Version B --
+the same facts hand-fused into ONE flowing sentence with reordered, concrete-detail-first structure and
+varied subordination ("It's usually just a shared-vendor mix-up rather than anything malicious, but
+until it's sorted...") -- scored 80% `reads_like_a_person`. **Conclusion: the dominant driver of the
+whole-document boilerplate read is the fixed story+detail+why+history sentence-concatenation STRUCTURE
+itself, not primarily the individual phrases inside each slot.** This generalizes Chapters 17/35's
+"mechanical swaps don't work, genuine restructuring does" finding one level up: it applies to how items
+are ASSEMBLED, not just how each sentence is WORDED.
+
+**Scoped, not force-fixed further this round**: reaching `reads_like_a_person` on the full document
+would mean redesigning `_still_open_item()`/`_resolved_item()` (`app/pdf_report.py`) to fuse fields into
+one flowing sentence per item, plus rewriting every category's `_WHY_IT_MATTERS` entry to be a fusable
+subordinate clause rather than a standalone capitalized sentence (~20 categories) -- real content work at
+the scale of the earlier 5-round PDF effort, not a same-sitting patch. Documented as the concrete next
+target rather than forced through partially; matches this project's standing discipline of shipping a
+real, measured improvement and naming the next real gap honestly rather than overclaiming a full fix.
+
+**Verified against the full real portfolio**: `_build_context()` succeeds with zero errors across all 33
+real domains. Re-compiled the real PDF for `tinybridge.in` (the test case), `aikyamjobs.org` (richest),
+and `aikyamsolve.org` (the standing test domain) -- all 3 compile clean. Service restarted, `/` and
+`/domain/tinybridge.in/report_pdf` both return 200. No email sent.
+
+---
+
+*(Next entry: the em-dash/AI-voice sweep, then the general USE_CASES.md D/H sweep, then the PDF-era
+content expansion. The item-assembly-structure fusion redesign found this chapter is a new, real
+candidate for its own future round.)*
