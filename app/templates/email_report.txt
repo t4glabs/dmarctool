@@ -1,6 +1,6 @@
 Hi {{ recipient_label }},
 
-{{ teaser_hook }} This time we made you a proper PDF instead of just an email -- real charts, plain language, the full story of what happened and what we did about it, attached to this message.
+{{ teaser_hook }} {{ pdf_intro }}
 
 Your full report is attached (PDF). Open it for your health score trend, every issue we caught and fixed, and your newsletter's real reach.
 

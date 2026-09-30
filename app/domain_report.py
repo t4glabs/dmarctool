@@ -2277,6 +2277,46 @@ def _teaser_hook(domain_name: str, resolved: list, still_open: list, health_scor
     return ", ".join(parts) + "."
 
 
+def _pdf_intro_line(pdf_intro_shown: bool) -> str:
+    """The sentence introducing the PDF attachment, in the teaser email.
+    Chapter 35 (jev/DECISIONS_LOG.md) found and fixed a real repetition-
+    dishonesty bug: the original single version ("This time we made you a
+    proper PDF instead of just an email...") would repeat that "this time"
+    novelty claim every month forever, which stops being true after the
+    first real send. Real Jev testing on the repeat case found something
+    more fundamental than a wording fix could solve: even a well-worded
+    single repeat sentence, and even a version EXPLICITLY framed as one of
+    several deterministic monthly-rotating variants (matching this file's
+    own _ALL_CLEAR_PHRASES technique), still scored repetition_risk as
+    reads_as_boilerplate and natural_voice as reads_like_generated_
+    boilerplate -- real evidence answering a previously-open question
+    (jev/USE_CASES.md use case #35: does phrase rotation actually reduce
+    repetition_risk, or do variants still read as interchangeable to Jev?).
+    For a deliberately short, consistent teaser email, apparently not.
+    Rather than force further rotation that testing shows doesn't work,
+    this ships the one real, honest fix (no false novelty claim) and
+    accepts the residual boilerplate read as an inherent property of a
+    short recurring transactional email, not a wording defect -- the same
+    "don't force a fix that doesn't work" discipline as Round 2 of the
+    Chapter 20-22 rebuild.
+
+    Both lines below still use "--" (flagged for the paused em-dash sweep,
+    task/Chapter 36+) -- tested a naive dash-to-colon swap on the first-time
+    line specifically and it REGRESSED natural_voice from reads_like_a_person
+    to reads_like_generated_boilerplate, the same "mechanical punctuation
+    swap isn't the fix by itself" lesson Chapter 17 already found once.
+    Shipping the empirically-best-tested wording now rather than a worse
+    version just to avoid a dash; a proper full-sentence rewrite (not a
+    punctuation swap) is the right way to revisit this when that sweep
+    resumes."""
+    if not pdf_intro_shown:
+        return ("This time we made you a proper PDF instead of just an email -- real charts, plain "
+                 "language, the full story of what happened and what we did about it, attached to this "
+                 "message.")
+    return ("Your full report is attached as a PDF, same as always -- real charts, plain language, "
+            "everything that happened and what we did about it.")
+
+
 def _build_context(conn, domain_id: int, domain_name: str, recipient_label: str,
                     period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
     """The full template context for one report -- shared by send_report_now()
@@ -2287,9 +2327,14 @@ def _build_context(conn, domain_id: int, domain_name: str, recipient_label: str,
     charts_ctx = _email_charts(conn, domain_id, period_start, period_end)
     teaser_hook = _teaser_hook(domain_name, sections.get("resolved"), sections.get("still_open"),
                                 sections.get("health_score_value"))
+    pdf_intro_row = conn.execute(
+        "SELECT pdf_intro_shown FROM domain_report_settings WHERE domain_id=?", (domain_id,)
+    ).fetchone()
+    pdf_intro = _pdf_intro_line(bool(pdf_intro_row and pdf_intro_row["pdf_intro_shown"]))
     return {
         "domain_name": domain_name,
         "recipient_label": recipient_label or domain_name,
+        "pdf_intro": pdf_intro,
         "period_start": period_start.date().isoformat(),
         "period_end": period_end.date().isoformat(),
         "signoff_name": settings["report_signoff_name"],
@@ -2362,7 +2407,8 @@ def send_report_now(conn, domain_id: int, domain_name: str, recipient_email: str
 
     if mark_sent:
         conn.execute(
-            "UPDATE domain_report_settings SET last_sent_at=datetime('now') WHERE domain_id=?", (domain_id,)
+            "UPDATE domain_report_settings SET last_sent_at=datetime('now'), pdf_intro_shown=1 "
+            "WHERE domain_id=?", (domain_id,)
         )
         conn.commit()
     if verbose:

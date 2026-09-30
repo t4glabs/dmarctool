@@ -57,6 +57,13 @@ def init_db(conn: sqlite3.Connection) -> None:
     })
     _ensure_columns(conn, "domain_report_settings", {
         "cc_email": "TEXT DEFAULT 'jinso@aikyamfellows.org'",
+        # Set after the first real send that included the new PDF attachment
+        # (Chapter 30-34) -- distinct from last_sent_at, which many domains
+        # already had populated from their old plain-email sends before the
+        # PDF existed. Lets the teaser email's PDF-introduction framing
+        # ("this time we made you a proper PDF...") show only once instead
+        # of claiming novelty every month forever (Chapter 35).
+        "pdf_intro_shown": "INTEGER NOT NULL DEFAULT 0",
     })
     _ensure_columns(conn, "mailgun_identity_stats", {
         "retried_ok": "INTEGER NOT NULL DEFAULT 0",

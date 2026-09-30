@@ -1700,4 +1700,51 @@ Chapters-1-22 content or voice decision along the way.
 
 ---
 
-*(Next entry: whatever the user prioritizes next.)*
+## Chapter 35 — Fixing the teaser's "this time" repetition/honesty bug, and a real answer to use case #35
+
+User, reviewing pending work after the PDF initiative shipped, asked me to audit "anything Jev can be
+used for" across the project. Found this myself while re-reading the just-shipped teaser: "**This time**
+we made you a proper PDF instead of just an email" is a static string that would repeat verbatim every
+month forever -- "this time" only honestly describes the very first PDF a domain ever gets. Exactly what
+`jev/USE_CASES.md` use case #40 warns about: "before adding ANY new recurring status line, does a
+projected 6-cycle simulation of its wording pass repetition_risk before it ships" -- a check that didn't
+happen when Chapter 34 shipped.
+
+**Fixed with a real distinguishing signal, not a guess**: new `domain_report_settings.pdf_intro_shown`
+column (`app/db.py`), set only after a real successful send (`mark_sent=True`, mirroring `last_sent_at`'s
+own gating exactly). Deliberately NOT reusing `last_sent_at IS NULL` as the signal -- many real domains
+already have a non-null `last_sent_at` from their old plain-email sends, before the PDF existed, so that
+alone can't distinguish "first report ever" from "first PDF ever." New `_pdf_intro_line(pdf_intro_shown)`
+returns the original tested "this time" wording only when `pdf_intro_shown` is falsy, and a real
+non-novelty-claiming alternative otherwise.
+
+**A genuinely important negative finding, not forced past**: tried to make the repeat-case wording
+resistant to becoming stale over many months, first with a single well-worded alternative, then --
+suspecting the issue was really about repetition, not wording -- with a version EXPLICITLY told to Jev
+that it was one of several deterministic monthly-rotating variants (the exact technique
+`_ALL_CLEAR_PHRASES` already uses elsewhere in this file). **Both still scored `repetition_risk` as
+reads_as_boilerplate and `natural_voice` as reads_like_generated_boilerplate.** This is real evidence
+answering `jev/USE_CASES.md` use case #35, open since it was written: "Does the `_ALL_CLEAR_PHRASES`
+rotation actually reduce repetition_risk in practice, or do the 3 variants still read as interchangeable
+to Jev?" -- for a short, structurally-fixed template like this teaser, rotation alone does not fix it.
+Shipped the single honest fix (no false novelty claim) rather than force further rotation the evidence
+says doesn't work, matching this project's own "don't force a fix that doesn't work" precedent (Round 2,
+Chapters 20-22).
+
+**A second, smaller negative finding, confirming an older lesson rather than contradicting it**: tried
+swapping the shipped wording's "--" for a colon, expecting no real effect (pure punctuation, same
+words) -- and it REGRESSED `natural_voice` from reads_like_a_person to reads_like_generated_boilerplate
+on the first-time line specifically. Same lesson Chapter 17 already found once: a mechanical
+dash-removal isn't the fix by itself, only a genuine sentence-restructure is. Shipped the empirically-best
+wording (with its "--") rather than a worse version just to avoid a dash; flagged both new lines in code
+comments for the paused em-dash sweep to properly rewrite later, not swap.
+
+**Verified against the full real portfolio**: zero errors on all 33 domains for both template renders.
+Confirmed live via `/report_preview` on aikyamsolve.org (correctly shows the "first time" framing, since
+no real domain has actually received a PDF-attached send yet -- `pdf_intro_shown` is genuinely 0
+everywhere right now, an honest, accurate state, not a bug). Directly verified the repeat-case function
+branch returns the correct alternate wording. Service restarted, healthy. No email sent.
+
+---
+
+*(Next entry: resuming the Chapter 29 whole-document natural_voice/honesty_calibration finding.)*
