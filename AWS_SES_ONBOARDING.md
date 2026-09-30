@@ -74,6 +74,36 @@ naming rule loosely instead of mechanically, and broke it.
 - If nothing shows up after a real send, the most likely cause is the naming mismatch in step 2 --
   double check the configuration set name character-for-character against the domain.
 
+## Why you sometimes get a raw MAILER-DAEMON bounce email directly
+
+If a bounce/complaint notification ever lands as an actual email in your own inbox (a `MAILER-DAEMON@...amazonses.com` message with an SMTP transcript), that's a SEPARATE AWS feature from the
+SNS/SQS pipeline above, not a sign anything is broken.
+
+**AWS SES's "Email Feedback Forwarding" is ON for every identity in this account** (confirmed live,
+2026-09-30 -- all 14: every tracked domain plus `shemeer@aikyamhq.com`, `hello@aikyamjobs.org`,
+`hello@aikyamfellows.org`, `hello@pattic.org`, `hello@aikyam.space`, `hello@aikyam.school`). This is
+AWS's out-of-the-box default for a verified identity: whenever a message sent through that identity
+bounces or gets a spam complaint, SES emails a raw copy of the bounce/complaint to the identity's
+registered contact address -- completely independent of, and in addition to, the SNS event this same
+bounce also generates (which is what `ses_events.py` drains into `ses_suppressions`/
+`ses_campaign_recipients`).
+
+Both channels fire for the same event. **DMARCTool's own pipeline already has it** -- check
+`ses_suppressions`/the domain page's suppression counts, or the `suppressions_new.csv` export, rather
+than manually acting on the raw email. One real quirk to know about: SES's own `bounceType`
+classification on the SNS side (Permanent/Transient) can occasionally disagree with what the raw SMTP
+code in the email actually says (e.g. a `550 5.2.1` -- a permanent/hard-bounce code by RFC convention --
+showing up tagged `Transient` with no diagnostic text captured). When that happens, trust the raw SMTP
+code in the email over SES's own classification.
+
+**Deliberately left ON** (decided 2026-09-30, not a gap to fix): it's a real safety net if the
+SNS/SQS pipeline itself ever silently breaks (already happened once for real -- see the misnamed
+`aikyam-fellows` config set above) -- the raw email would still tell you a bounce happened even if
+DMARCTool never saw it. To check/change per identity: SES console -> Identities -> (identity) ->
+Notifications tab -> "Feedback forwarding". To reduce inbox noise without losing the safety net, set up
+your own mail-client filter on the `MAILER-DAEMON@...amazonses.com` sender rather than disabling this
+in AWS.
+
 ## Fixing a wrongly-named configuration set (can't rename in AWS SES)
 
 AWS SES configuration sets can't be renamed. If you named one wrong (like `aikyam-fellows` instead of
