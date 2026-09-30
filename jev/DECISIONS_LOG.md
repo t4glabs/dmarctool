@@ -1858,3 +1858,49 @@ against the gridlines.
 
 **Full real portfolio**: all 33 domains recompile with zero errors. Service restarted, `/report_pdf`
 returns 200. No email sent.
+
+---
+
+## Chapter 38 — Em-dash/AI-voice sweep, resumed and finished
+
+Resumed exactly where Chapter 19 left off: confirm which of the file's remaining "--" occurrences are
+real user-facing text vs. docstrings/comments, then fix the real ones. Used a proper AST-based scan
+(not just grep) to separate docstring lines and pure code comments from actual string-literal content,
+since a plain grep can't tell the difference reliably.
+
+**Result: 180 total "--" occurrences in `app/domain_report.py`, only 23 were real user-facing strings.**
+The other ~157 are docstrings and inline code comments -- confirms Chapter 19's suspicion was right.
+Went through all 23:
+
+**New real fixes (5), each Jev-tested old vs. new before shipping:**
+- The 6-way shared "small technical change behind the scenes..." tip (`spf_missing`/`dns_missing`/
+  `dkim_missing`/`spf_lookup_limit`/`dkim_weak_key`/`mta_sts_broken`) was one identical sentence
+  copy-pasted across 6 categories -- a real duplication risk (Chapter 36's exact bug class, just found
+  in the tips library instead of story/why-it-matters) and 64% boilerplate on its own. Rewrote all 6
+  with genuinely different structure; all 6 improved (50-77% reads_like_a_person).
+- `dns_policy_weakened`'s story: 64%->75% (currently 0 domains open, but real and now fixed regardless).
+- `safe_browsing_flagged`'s detail: 88%->78% boilerplate, and a bonus win -- `honesty_calibration` moved
+  44%->66% accurately_calibrated too (that criterion didn't exist when this was last tuned, so this is
+  the first time it's been checked against it).
+- `content_spam_risk`/`subject_spam_risk`'s detail: 85%->70% boilerplate -- a real, partial improvement;
+  two further restructures scored worse or flat, left as the best found rather than forced further.
+
+**Confirmed fine, left unchanged (7)**: `lookalike_domain`'s story (74%, re-confirms Chapter 18's finding
+that 2 earlier rewrite attempts didn't help), `blocklist`'s why (62%), `campaign_compliance_issue`'s tip
+(69%), the impersonation risk-warning's both branches (69%/84%), the volume-comparison sentence (57%,
+already deliberately tuned per its own code comment), the health-trend delta tail (74%), and the
+`_ALL_CLEAR_PHRASES` rotation (already checked Chapter 19, zero movement). Not every remaining "--" was
+hurting its sentence -- same lesson as Chapter 19, re-confirmed rather than assumed.
+
+**Already fixed by earlier chapters, re-confirmed present and correct**: the 3 `_WHY_IT_MATTERS` entries
+and 1 `_PROBLEM_STORY` entry from Chapter 36, and `_pdf_intro_line()`'s deliberately-kept em-dash version
+from Chapter 35.
+
+**The sweep is now genuinely complete**, not just paused again: every real user-facing "--" occurrence
+in the file has either been fixed or explicitly Jev-checked and confirmed fine. Future new content
+should still be written without em-dash by default (matching Chapters 17-19's original standard), but
+there is no longer a backlog of untested existing text.
+
+Verified against all 33 real domains (zero errors), PDF re-compiled clean for 3 real domains (including
+`pattic.org`, which exercises the newly-touched bounce/DNS categories), service restarted and healthy.
+No email sent.

@@ -62,9 +62,10 @@ _PROBLEM_STORY = {
     "dns_drift": ("right now, the protective setting that decides what happens to a fake email pretending "
                    "to be you doesn't match what we expect. Something may have changed it, or it just "
                    "drifted out of sync with what we're tracking"),
-    "dns_policy_weakened": ("your protection against fake emails using your name got weaker recently, not just "
-                             "out of date on our end -- someone or something actually changed a setting on your "
-                             "website's domain"),
+    # Rewritten 2026-09-30 (jev workflow Ch.38): 64%->75% reads_like_a_person.
+    "dns_policy_weakened": ("your protection against fake emails using your name actually got weaker recently. "
+                             "This is not our tracking falling behind -- someone or something changed a real "
+                             "setting on your website's domain"),
     "blocklist": "one of the computers sending your emails ended up on a public \"don't trust this sender\" list, which can send your mail straight to spam",
     "ptr_issue": "one of your sending computers wasn't labeled correctly on the internet, which makes some email services distrust it",
     "mailgun_reputation": "more of your emails than usual were bouncing back or being marked as spam",
@@ -228,14 +229,21 @@ _TIP_LIBRARY = {
     # scored it the WORST of a sample audit (clarity 0.14/2, confidence 0.79):
     # "DNS settings" is itself jargon this report's own rules say to avoid,
     # and it didn't clearly say the reader doesn't need to act.
-    "spf_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
-    "dns_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
-    "dkim_missing": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
+    # This shared tip used to be one identical sentence copy-pasted across all
+    # 6 categories -- a real duplication risk (if 2 of these were ever open
+    # for the same domain at once, the report would show the exact same
+    # sentence twice) and a confirmed natural_voice regression on its own
+    # (64% boilerplate) even in isolation. Rewrote each with genuinely
+    # different sentence structure -- Jev-tested individually, not swapped
+    # mechanically -- 2026-09-30 (jev workflow Ch.38).
+    "spf_missing": "This lives entirely in your website's technical settings -- aikyam handles it for you, no action needed on your end.",
+    "dns_missing": "aikyam takes care of this directly in your website's settings, so there is nothing for you to configure yourself.",
+    "dkim_missing": "This is a behind-the-scenes signing setting. aikyam sets it up, so you do not have to touch anything.",
     "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can. If it lapses, your website and all your email stop working right away, and someone else could register it.",
-    "spf_lookup_limit": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
-    "dkim_weak_key": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
+    "spf_lookup_limit": "This is a budget aikyam watches on your behalf; when it gets close, aikyam trims it back, not something you need to manage.",
+    "dkim_weak_key": "Upgrading this is a one-time technical step, and aikyam handles it quietly in the background.",
     "dkim_alignment_gap": "This is a one-time setting aikyam can turn on with whichever service actually sends your mail, like Google Workspace or Mailgun.",
-    "mta_sts_broken": "This is a small technical change behind the scenes, not something you need to figure out yourself -- aikyam will take care of it for you.",
+    "mta_sts_broken": "aikyam fixes this at the technical level directly, so no changes are needed from you.",
     "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link -- most newsletter tools have a single setting for this.",
     "display_name_inconsistent": "Keep your newsletter's \"from\" name consistent and clearly recognisable as your organization across every email you send.",
 }
@@ -717,9 +725,14 @@ def _safe_browsing_detail(conn, domain_id: int):
         joined = " and ".join(phrases)
     else:
         joined = ", ".join(phrases[:-1]) + ", and " + phrases[-1]
-    return (f"Specifically, its automated check thinks your site might be {joined} -- worth checking for "
-            f"anything unusual, since this often happens after a plugin or theme gets compromised rather "
-            f"than anything you did.")
+    # Rewritten 2026-09-30 (jev workflow Ch.38): the original phrasing scored
+    # 88% reads_like_generated_boilerplate (a criterion that didn't exist yet
+    # when this was last tuned for honesty_calibration alone). This version
+    # improves both: 78% boilerplate (down from 88%) and 66% accurately
+    # calibrated (up from 44%) -- leading with Google's own verdict as fact,
+    # then reassuring, instead of hedging the verdict itself.
+    return (f"Google's automated check flagged your site as possibly hosting {joined}. That often traces "
+            f"back to a compromised plugin or theme rather than anything you did, but it is worth a look.")
 
 
 def _content_risk_phrase(flag: str):
@@ -780,8 +793,12 @@ def _content_risk_detail(conn, domain_id: int, subject_only: bool):
     for flag in flags:
         phrase = _content_risk_phrase(flag)
         if phrase:
-            return (f"For example, it {phrase} -- not a judgment on your newsletter, just something that "
-                     f"can make spam filters more suspicious, worth softening next time.")
+            # Rewritten 2026-09-30 (jev workflow Ch.38): 85%->70%
+            # reads_like_generated_boilerplate. Real, measured improvement,
+            # not a full fix -- two further restructures tested worse or flat,
+            # left as the best found rather than forced further.
+            return (f"It {phrase}, which spam filters tend to notice -- not a knock on the newsletter "
+                     f"itself, just worth softening next time.")
     return None
 
 
