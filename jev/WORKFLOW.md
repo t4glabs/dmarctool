@@ -34,11 +34,8 @@ never renders as text a client reads. Jev judges copy; it has no opinion on impl
    fixing it or explicitly deciding (and noting why, in `DECISIONS_LOG.md`) that the content should ship
    anyway.
 6. **Log it.** Every real Jev-informed decision — finding, verdict, and what actually changed in code —
-   gets an entry in `DECISIONS_LOG.md`, AND (for anything substantial, i.e. worth a reader/owner seeing)
-   a new or updated section in the hosted "Jev findings & improvements" artifact
-   (`https://claude.ai/code/artifact/6bf9c5d4-632b-469d-a0e3-b88bf188478c`) — same pattern as Chapters 1
-   and 2: problem found, Jev's raw output, the actual fix, kept in sync (never left saying "Proposed"
-   once it's shipped).
+   gets an entry in `DECISIONS_LOG.md`. That's the sole record as of 2026-09-30 (see below) — no hosted
+   artifact update needed anymore.
 7. **For a full audit round** (a new "chapter," not a single decision): work through `USE_CASES.md`
    systematically by section, pull real current report content for each check (never synthetic examples
    — this project's own working style requires validating against real data), and produce one new chapter
@@ -64,9 +61,12 @@ workflow for being "too slow or expensive" for routine use; the actual cost of s
 repetition/boredom/contradiction bugs this workflow was built to catch (see `CONTEXT.md`, "Traps already
 learned the hard way").
 
-## Relationship to the hosted artifact
+## Relationship to the hosted artifact (retired 2026-09-30)
 
-The artifact is the reader-facing, narrative record ("book of chapters") — what a human skimming the
-project's history would want to see: problem, evidence, fix, in prose. `DECISIONS_LOG.md` is the
-lower-level, append-only ledger of individual Jev calls and their raw verdicts, useful for tracing exactly
-which criterion caught what. Both get updated together; neither replaces the other.
+Chapters 1-39 kept a hosted "Jev findings & improvements" artifact in sync with `DECISIONS_LOG.md` as a
+reader-facing narrative version of the same record. The user retired this step 2026-09-30: "since you
+already log jev decision log in github md file we can skip the artifcats updations from now onwards i
+guess, i can check github and that log file when required." `DECISIONS_LOG.md` (committed, pushed to
+GitHub) is now the single source of truth — no hosted artifact to keep in sync, no risk of the two
+drifting apart. The old artifact URL is left as historical reference only; do not update it further
+unless the user explicitly asks for it again.

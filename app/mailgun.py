@@ -59,41 +59,46 @@ def _get(url: str, api_key: str, timeout: float = 15.0):
         return None, f"network error: {e}"
 
 
-def _encode_multipart(fields: dict, attachment: tuple) -> tuple:
+def _encode_multipart(fields: dict, attachments: list) -> tuple:
     """Hand-rolled multipart/form-data body (stdlib only, no `requests`
     dependency -- mechanical per RFC 7578, unlike AWS SigV4 which is the
     project's one justified non-stdlib exception). Returns (body_bytes,
-    content_type_header). `attachment` is (filename, content_bytes,
-    content_type) -- Mailgun's real field name for this is `attachment`
-    (confirmed against Mailgun's own docs), not `file` or anything else."""
+    content_type_header). `attachments` is a list of (filename,
+    content_bytes, content_type) tuples -- Mailgun's real field name for
+    each is `attachment` (confirmed against Mailgun's own docs, not `file`
+    or anything else), repeated once per file for multiple attachments
+    (also confirmed against Mailgun's docs -- same form field name,
+    multiple parts)."""
     boundary = "----DMARCToolBoundary" + base64.b16encode(email.utils.make_msgid().encode()).decode()[:16]
     parts = []
     for name, value in fields.items():
         parts.append(
             f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
         )
-    filename, content, content_type = attachment
-    parts.append(
-        (f'--{boundary}\r\nContent-Disposition: form-data; name="attachment"; filename="{filename}"\r\n'
-         f'Content-Type: {content_type}\r\n\r\n').encode() + content + b"\r\n"
-    )
+    for filename, content, content_type in attachments:
+        parts.append(
+            (f'--{boundary}\r\nContent-Disposition: form-data; name="attachment"; filename="{filename}"\r\n'
+             f'Content-Type: {content_type}\r\n\r\n').encode() + content + b"\r\n"
+        )
     parts.append(f"--{boundary}--\r\n".encode())
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
 def send_message(mailgun_domain: str, api_key: str, from_addr: str, to_addr: str,
                   subject: str, text: str, html: str, cc_addr: str = None,
-                  reply_to: str = None, timeout: float = 20.0, attachment: tuple = None):
+                  reply_to: str = None, timeout: float = 20.0, attachment=None):
     """Sends a single email via Mailgun's Messages API (POST {domain}/messages),
     same auth/base-URL conventions as every read-only call in this file --
     used by app.domain_report for the periodic plain-language owner reports.
     `to_addr`/`cc_addr` accept Mailgun's own comma-separated multi-address
     format directly. `reply_to`, when set, becomes the Reply-To header so
     replies reach a monitored inbox even though the From address isn't one.
-    `attachment`, when given, is (filename, content_bytes, content_type) --
-    e.g. the generated PDF report -- and switches the request to
-    multipart/form-data; when None (every call site before this), behavior
-    is byte-identical to before. Returns (message_id, error)."""
+    `attachment`, when given, is either a single (filename, content_bytes,
+    content_type) tuple -- e.g. the generated PDF report -- or a list of
+    such tuples (e.g. app.bounce_notify's separate hard-bounce/chronic
+    CSVs), and switches the request to multipart/form-data; when None
+    (every call site before multi-attachment support existed), behavior is
+    byte-identical to before. Returns (message_id, error)."""
     url = f"{API_BASE}/{mailgun_domain}/messages"
     fields = {"from": from_addr, "to": to_addr, "subject": subject, "text": text, "html": html}
     if cc_addr:
@@ -102,7 +107,8 @@ def send_message(mailgun_domain: str, api_key: str, from_addr: str, to_addr: str
         # Mailgun sets arbitrary message headers via h:<Header-Name> fields.
         fields["h:Reply-To"] = reply_to
     if attachment:
-        data, content_type = _encode_multipart(fields, attachment)
+        attachments = attachment if isinstance(attachment, list) else [attachment]
+        data, content_type = _encode_multipart(fields, attachments)
     else:
         data = urllib.parse.urlencode(fields).encode()
         content_type = "application/x-www-form-urlencoded"

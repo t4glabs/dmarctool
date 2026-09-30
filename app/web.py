@@ -12,6 +12,7 @@ after each ingest.
 
 import csv
 import email.utils
+from html import escape as _html_escape
 import io
 import json as _json
 import re
@@ -59,10 +60,11 @@ from app.domain_report import (
 )
 from app.listmonk import run_listmonk_content_sync, run_listmonk_blocklist_sync
 from app.lookalike import findings_for_domain, run_lookalike_checks
-from app.mailgun import run_mailgun_checks, _suppression_watermark as _mailgun_suppression_watermark
+from app.mailgun import run_mailgun_checks, send_message, _suppression_watermark as _mailgun_suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
+from app.bounce_notify import build_notification, last_notification, pending_notify_counts, record_notification_sent
 from app.email_verifier import verify_email
 from app.known_bad import known_bad_map, known_bad_counts
 from app.ses_account import run_ses_account_checks
@@ -784,6 +786,10 @@ def domain_detail(request: Request, name: str, flash: str = None):
             "count": len(chronic_transient), "chronic": True,
             "download_url_full": f"/domain/{name}/chronic_transient.csv",
         })
+    bounce_notify_hard_count, bounce_notify_chronic_count = pending_notify_counts(
+        conn, domain_id, int(settings["chronic_transient_min_occurrences"]), int(settings["chronic_transient_min_days"]))
+    bounce_notify_last = last_notification(conn, domain_id)
+
     display_names = display_name_summary(conn, domain_id)
     cadence = sending_cadence(conn, domain_id)
 
@@ -883,6 +889,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mailgun_newsletter_campaigns": mailgun_newsletter_campaigns,
         "engagement": engagement,
         "bounce_categories": bounce_categories,
+        "bounce_notify_hard_count": bounce_notify_hard_count,
+        "bounce_notify_chronic_count": bounce_notify_chronic_count,
+        "bounce_notify_last": bounce_notify_last,
         "display_names": display_names,
         "cadence": cadence,
         "ses_account_status": ses_account_status,
@@ -1428,6 +1437,56 @@ def test_domain_report(name: str):
     else:
         flash = f"Test send failed: {err}"
     return RedirectResponse(f"/domain/{name}?flash={flash}#email_updates", status_code=303)
+
+
+@app.post("/domain/{name}/notify_bounce_cleanup")
+def notify_bounce_cleanup(name: str):
+    """Manual, button-triggered send (see app.bounce_notify) -- distinct
+    from the scheduled periodic report. Uses the SAME recipient/cc as the
+    domain's report settings and the SAME global reply-to, per the user's
+    own instruction ("use the same cc fields also here in these notis...
+    reply-to should be jinso@aikyamfellows.org here also")."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    domain_id = domain["id"]
+
+    settings_row = get_report_settings(conn, domain_id)
+    if not settings_row or not settings_row["recipient_email"]:
+        return RedirectResponse(f"/domain/{name}?flash=Save a recipient email first.#deliverability", status_code=303)
+
+    settings = ensure_default_settings(conn)
+    min_occ = int(settings["chronic_transient_min_occurrences"])
+    min_days = int(settings["chronic_transient_min_days"])
+    built = build_notification(conn, domain_id, name, settings_row["recipient_label"], min_occ, min_days)
+    if built is None:
+        return RedirectResponse(f"/domain/{name}?flash=Nothing new to notify about right now.#deliverability", status_code=303)
+    subject, text_body, attachments, hard_count, chronic_count = built
+
+    sender_email = get_secret("REPORT_SENDER_EMAIL")
+    sender_domain = get_secret("REPORT_SENDER_MAILGUN_DOMAIN")
+    api_key = get_secret("MAILGUN_SEND_API_KEY")
+    if not (sender_email and sender_domain and api_key):
+        return RedirectResponse(
+            f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_SEND_API_KEY in secrets.env.#deliverability",
+            status_code=303,
+        )
+    reply_to = settings.get("report_reply_to") or None
+    html_body = "<div style=\"font-family:sans-serif;font-size:15px;line-height:1.6;\">" + \
+        "".join(f"<p style=\"margin:0 0 12px 0;\">{_html_escape(line)}</p>" if line else "<br>" for line in text_body.split("\n")) + \
+        "</div>"
+    _, err = send_message(
+        sender_domain, api_key, sender_email, settings_row["recipient_email"], subject, text_body, html_body,
+        cc_addr=settings_row["cc_email"], reply_to=reply_to, attachment=attachments,
+    )
+    status = "failed" if err else "sent"
+    record_notification_sent(conn, domain_id, settings_row["recipient_email"], hard_count, chronic_count, status, err)
+    if err:
+        flash = f"Notification failed: {err}"
+    else:
+        flash = f"Notified {settings_row['recipient_email']} ({hard_count} + {chronic_count} addresses)."
+    return RedirectResponse(f"/domain/{name}?flash={flash}#deliverability", status_code=303)
 
 
 @app.get("/domain/{name}/report_preview", response_class=HTMLResponse)

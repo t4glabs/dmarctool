@@ -1955,3 +1955,82 @@ consistent real dates, no duplication introduced.
 domains (zero errors) and `preview_domain_report()` (the email path, confirming the 3 new item-dict keys
 don't disturb Jinja rendering) for all 33 (zero errors). Service restarted, `/report_pdf` returns 200 on
 3 real domains. No email sent.
+
+---
+
+## Chapter 40 — New feature: on-demand "notify client to clean their list" email
+
+**The real workflow this replaces**: the user's own words -- "when the pass rate percentage goes down i
+usually check the card and see the increased bounces and download the new bounces, especially very
+correct ones like hard bounces, chronologically appearing bounces which are safe to delete, non existing
+email ids etc and send to them to remove from their email lists... i dont want to intervine in their
+lists... i just realised this can be sent from the tool itself." A real, previously-manual workflow
+(check → download CSV → paste into an email → send → remember to mark done later) automated into one
+button, without DMARCTool ever touching the client's own list directly.
+
+**New module `app/bounce_notify.py`**: reuses `app.bounce_reasons.categorize_bounce`/
+`PERMANENT_CATEGORIES` (the "very correct, hard bounce" bucket) and `app.chronic_bounces.
+chronic_transient_bounces()` (already-built, already-tuned detectors, no new categorization logic
+invented). Two real categories, each with its own certainty level:
+- **Hard bounces** (`_hard_bounce_rows`): scoped to what's NEW since the last successful notification --
+  its own watermark (`bounce_notification_sends.sent_at`), deliberately independent from the dashboard's
+  own mark-done watermark (`app.mailgun._suppression_watermark`). The two must not share one cutoff:
+  marking the dashboard reminder done doesn't mean the client has actually removed anything yet.
+- **Chronic transient bounces**: always the CURRENT full list, same "no new/full split" reasoning as
+  `chronic_transient_bounces()`'s own existing CSV export -- a standing state, not a discrete event.
+
+**New table `bounce_notification_sends`** (append-only, same audit-log shape as the existing
+`report_sends` table for the periodic report) -- `sent_at` doubles as both the audit trail and the
+watermark for "new since we last asked."
+
+**Mailgun multi-attachment support**: `app.mailgun.send_message()`'s `attachment` param now accepts
+either a single tuple (existing PDF-report call site, unchanged) or a list of tuples (this feature's 2
+separate CSVs) -- `_encode_multipart()` loops once per file. Mailgun's own API repeats the `attachment`
+form field per file, confirmed against their docs.
+
+**Real bug caught while reading actual generated output, not assumed correct**: the chronic-bounce CSV
+initially included raw stored email values, which are sometimes a full `"Display Name <addr>"` string
+straight from the original send's To: header (same shape `app.web.download_new_suppressions` already
+handles for its own chronic rows via `_clean_email()`) -- missed on the first pass here, caught by
+actually decoding and reading the generated CSV bytes before wiring up the route.
+
+**Wording, multiple real Jev rounds against real pattic.org numbers (327 hard, 36 chronic)**, criteria
+`audience_fit`/`actionability`/`natural_voice`/`honesty_calibration`:
+- First draft's "these are safe to remove" as a bare opening claim scored 92% `overstates_beyond_the_
+  evidence` in isolation -- the assertion appeared before its own justification. Restructured so each
+  file's safety claim is stated alongside its specific reason, not as a blanket opener.
+- "no longer real" tested meaningfully clearer than "no longer exist"/"permanently stopped accepting
+  mail" (`audience_fit` `clear_as_is` 0.35→0.73 in isolation).
+- **A real, user-raised concern mid-build changed the design**: after the first working draft, the user
+  pointed out the recipients are non-technical and may feel like they're "deleting their own members" --
+  the two files should NOT read as equally urgent. Restructured so the hard-bounce file states its safety
+  plainly (no hedging: "confirmed gone or permanently broken... safe to delete right away") while the
+  chronic file is explicitly framed as less certain and optional to double-check ("very likely dead too,
+  but since we cannot be fully sure, feel free to check them yourself before removing anyone"). This
+  version scored best-balanced across all 4 criteria: `actionability` 100%, `natural_voice` 83%,
+  `honesty_calibration` 69%, `audience_fit` 43%.
+- **`audience_fit` stayed the weakest criterion throughout every round** (peaked ~43% `clear_as_is`
+  combined, despite several genuine restructures, not mechanical swaps) -- shipped as the best found and
+  documented honestly in code comments, not force-fixed further or claimed clean. Matches this project's
+  own established discipline (Chapters 18-19, 35, 38) of reporting a real ceiling rather than overclaiming.
+
+**New route** `POST /domain/{name}/notify_bounce_cleanup` (`app/web.py`) -- same recipient/cc as the
+domain's existing report settings, reply-to from the same global `report_reply_to` setting
+(`jinso@aikyamfellows.org`) already used by the periodic report, per the user's explicit instruction to
+reuse both. Same secrets-check/flash-message pattern as the existing `test_domain_report` route.
+
+**New UI**: a "📧 Notify client about list cleanup" section on the Deliverability & Spam tab, right next
+to the existing "Download suppressions" section (where this exact manual workflow already lived) --
+button shows live pending counts ("327 confirmed + 36 likely"), and once notified, shows "Last notified:
+{date} ({counts}, to {recipient})" or the error if the send failed, so a future visit can't accidentally
+re-notify without seeing that context first.
+
+**Verified without ever sending a real email** (standing rule unchanged): unit-tested `build_notification()`
+directly against real pattic.org/aikyamjobs.org data (single-file and both-file cases), verified the
+watermark behavior end-to-end by inserting and then removing a real test row in `bounce_notification_sends`
+and confirming the dashboard's pending-count and "last notified" display both update correctly. Full
+33-domain page-render sweep against the real live service (zero errors). Service restarted, healthy.
+
+**Also this chapter**: the user retired the hosted-artifact-sync step of this whole workflow (see
+`jev/WORKFLOW.md`'s "Relationship to the hosted artifact" section) -- `DECISIONS_LOG.md` is now the sole
+record, no more parallel artifact updates.

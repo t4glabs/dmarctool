@@ -668,6 +668,27 @@ CREATE TABLE IF NOT EXISTS report_sends (
 
 CREATE INDEX IF NOT EXISTS idx_report_sends_domain ON report_sends(domain_id, sent_at);
 
+-- Audit log of every "notify client about bounce cleanup" email -- a manual,
+-- button-triggered send (see app.bounce_notify), distinct from the scheduled
+-- periodic report_sends above. The last successful row's sent_at is also the
+-- watermark for "new since we last asked them to clean up" -- same
+-- last-handled-cutoff idea as app.mailgun._suppression_watermark, but this
+-- tool's own send is the handling event, not a dashboard mark-done click,
+-- since the two need to stay independent (marking the dashboard reminder
+-- done doesn't mean the client has actually removed anything yet).
+CREATE TABLE IF NOT EXISTS bounce_notification_sends (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    sent_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    recipient_email   TEXT,
+    hard_bounce_count INTEGER NOT NULL DEFAULT 0,
+    chronic_count     INTEGER NOT NULL DEFAULT 0,
+    status            TEXT NOT NULL,      -- 'sent' | 'failed'
+    error_message     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_bounce_notification_sends_domain ON bounce_notification_sends(domain_id, sent_at);
+
 -- One row per domain per calendar day, a derived composite "how healthy is
 -- this domain's email right now" snapshot (see app.analysis.snapshot_domain_health
 -- for the 0-100 scoring formula). Powers two things a live query can't:
