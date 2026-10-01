@@ -1585,6 +1585,81 @@ def _campaign_table(conn, domain_id: int, start_date: str, end_date: str, limit:
     return rows
 
 
+def _newsletter_quality_summary(conn, domain_id: int, start_date: str, end_date: str, settings: dict = None):
+    """PDF-only content (jev workflow Ch.44): a plain-language read of
+    campaign_score.py's per-campaign report card, for domains that send
+    newsletters. Never shows the raw letter grade or 0-100 score -- this
+    report's audience "fears technology" and needs to feel reassured, not
+    graded (see jev/CONTEXT.md) -- but the user's own real point after
+    Ch.39 found the report-card data had zero reader-facing surface: "no
+    point tracking this for them if they never know it." This is the
+    middle path -- a real, honest verdict band (clean count out of total)
+    plus the actual concrete tips, never a number to feel judged by.
+
+    Returns {"status": "ok"|"warn"|"bad", "verdict_text": str,
+    "graded_count": int, "clean_count": int, "tips": [str, ...]} or None
+    if no campaign this period could be graded at all (matches
+    campaign_score.py's own MIN_WEIGHT_TO_GRADE floor -- never fabricates
+    a verdict from data too thin to trust).
+
+    Tips are the real, already-Jev-tested `fix` text from each campaign's
+    worst-first `improvements` list (Ch.43), deduplicated by pillar so the
+    same real issue across several sends only appears once, most recent
+    occurrence first, capped at 2 -- this is a short reassurance email's
+    PDF appendix, not an exhaustive audit."""
+    campaigns = recent_campaigns(conn, domain_id, limit=200, settings=settings)
+    this_period = [c for c in campaigns if c["send_day"] and start_date <= c["send_day"] <= end_date]
+    graded = [c for c in this_period if c["report_card"]["score"] is not None]
+    if not graded:
+        return None
+
+    total = len(graded)
+    clean_count = sum(1 for c in graded if not c["report_card"]["improvements"])
+    avg_score = sum(c["report_card"]["score"] for c in graded) / total
+
+    seen_keys = set()
+    tips = []
+    for c in graded:
+        for p in c["report_card"]["improvements"]:
+            if p["key"] not in seen_keys and p.get("fix"):
+                seen_keys.add(p["key"])
+                tips.append(p["fix"])
+    tips = tips[:2]
+
+    # Singular phrasing when there's only 1 graded campaign -- "All 1 of
+    # your newsletters" reads as a real grammar wart, caught by actually
+    # looking at the rendered PDF for a 1-campaign domain (pattic.org),
+    # not assumed fine from the plural case alone.
+    noun = "newsletter" if total == 1 else "newsletters"
+    if avg_score >= 80:
+        status = "ok"
+        if clean_count == total:
+            verdict_text = (
+                f"Your {noun} this period came back clean -- nothing worth flagging right now." if total == 1
+                else f"All {total} of your {noun} this period came back clean -- nothing worth flagging right now."
+            )
+        else:
+            verdict_text = (
+                f"{clean_count} of your {total} {noun} this period came back clean. The rest had "
+                f"nothing serious, covered below."
+            )
+    elif avg_score >= 60:
+        status = "warn"
+        verdict_text = (
+            f"{clean_count} of your {total} {noun} this period came back clean. The other "
+            f"{total - clean_count} had a few things worth fixing, covered below."
+        )
+    else:
+        status = "bad"
+        verdict_text = (
+            f"Just {clean_count} of your {total} {noun} this period came back clean -- the other "
+            f"{total - clean_count} have real things worth fixing, covered below."
+        )
+
+    return {"status": status, "verdict_text": verdict_text, "graded_count": total,
+            "clean_count": clean_count, "tips": tips}
+
+
 def _newsletter_engagement_bars(conn, domain_id: int, start_date: str, end_date: str):
     """Opened/clicked rates for this period's newsletters as [(label, fraction),
     ...] for the email report's table-bar visual -- the same _newsletter_rates()
@@ -1782,6 +1857,9 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     campaign_table = _campaign_table(
         conn, domain_id, period_start.date().isoformat(), period_end.date().isoformat(),
     )
+    newsletter_quality = _newsletter_quality_summary(
+        conn, domain_id, period_start.date().isoformat(), period_end.date().isoformat(),
+    )
 
     headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end),
                                   period_start)
@@ -1829,6 +1907,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "newsletter": newsletter,
         "newsletter_bars": newsletter_bars,
         "campaign_table": campaign_table,
+        "newsletter_quality": newsletter_quality,
         "blocklist_good_news": blocklist_good_news,
         "impersonation_good_news": impersonation_good_news,
         "protection_tightened": protection_tightened,

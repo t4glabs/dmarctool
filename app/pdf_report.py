@@ -590,6 +590,28 @@ def _campaign_table_typst(rows: list) -> str:
 '''
 
 
+def _newsletter_quality_typst(summary: dict) -> str:
+    """A plain-language verdict box (never the raw letter grade/score) plus
+    the real, concrete tips behind it -- PDF-only content (jev workflow
+    Ch.44). `status` drives the box color the same way every other
+    status-colored box in this module already does (ok/warn/bad), matching
+    campaign_score.py's own status vocabulary one-to-one."""
+    color = {"ok": "ok-color", "warn": "warn-color", "bad": "bad-color"}[summary["status"]]
+    bg = {"ok": "#EAF4EC", "warn": "#FBF3E3", "bad": "#FBEBE8"}[summary["status"]]
+    parts = [f'''
+#v(0.4cm)
+#eyebrow("How your newsletters are doing")
+#v(0.15cm)
+#rect(fill: rgb("{bg}"), stroke: none, radius: 8pt, inset: 16pt, width: 100%,
+  text(fill: {color})[#{_typst_str(summary["verdict_text"])}]
+)
+''']
+    if summary.get("tips"):
+        bullets = [f'#{_typst_str(tip)}' for tip in summary["tips"]]
+        parts.append(f'\n#v(0.3cm)\n{_bullet_list(bullets)}\n')
+    return "\n".join(parts)
+
+
 def _newsletter_and_closing(context: dict) -> str:
     """newsletter (+ its real open/click segment gauges, re-derived from the
     exact same newsletter_bars data Chapter 26's email table-bars use -- same
@@ -605,6 +627,8 @@ def _newsletter_and_closing(context: dict) -> str:
             parts.append(f'\n#v(0.3cm)\n{gauges}\n')
         if context.get("campaign_table"):
             parts.append(_campaign_table_typst(context["campaign_table"]))
+        if context.get("newsletter_quality"):
+            parts.append(_newsletter_quality_typst(context["newsletter_quality"]))
 
     if context.get("tips"):
         bullets = [f'#{_typst_str(tip)}' for tip in context["tips"]]

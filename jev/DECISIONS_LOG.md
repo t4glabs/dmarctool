@@ -2163,3 +2163,49 @@ touches those modules directly, not force-fixed here by rewording only the stati
 
 Verified against all real campaigns for both domains with newsletter data (zero errors). No service
 restart needed (pure Python logic change, no template/route touched).
+
+---
+
+## Chapter 44 — Newsletter quality box in the PDF, the middle path between "never show it" and "a raw grade"
+
+User's framing: "there is no point of i tracking their newsletter numbers for them, but they are not
+knowing it, then what is the use?" -- directly follows Ch.43's rework. Explicit scope: never a raw
+letter grade or 0-100 score (that's still correctly off the table per `jev/CONTEXT.md`'s "audience fears
+technology" principle), but SOME real, plain-language verdict plus understandable numbers plus concrete
+tips, since the reader here is specifically "someone who writes newsletters" for the org, closer to an
+operator of their own tool than the fully non-technical donor-facing reader the rest of the report is
+written for.
+
+**New `_newsletter_quality_summary()`** (`app/domain_report.py`): aggregates `campaign_score.py`'s
+already-computed, already-reworked (Ch.43) report cards across the report period, using the exact same
+period-filtering convention as `_campaign_table()` (Ch.39) for consistency. Three status bands (ok/warn/
+bad, matching this project's own established status vocabulary) driven by average score, with a real
+"clean count out of total" number instead of the raw average -- "3 of your 4 newsletters came back clean"
+is the "understandable numbers metric" the user asked for, not a percentage or score. Tips are the real,
+already-Jev-tested `fix` text from each campaign's worst-first `improvements`, deduplicated by pillar,
+capped at 2.
+
+**Verdict wording, several Jev rounds** (audience_fit/natural_voice/honesty_calibration), landing with the
+same real ceiling pattern seen throughout this whole project -- best combined results around 54-60% on
+each axis, not higher despite multiple genuine rewrites.
+
+**A real grammar bug caught by actually rendering a 1-campaign domain, not assumed fine from the
+multi-campaign case**: "All 1 of your newsletters this period came back clean" is a real wart when
+`total == 1` (pattic.org's real case this period). Added singular/plural branching -- now "Your
+newsletter this period came back clean."
+
+**New PDF rendering** (`_newsletter_quality_typst()`, `app/pdf_report.py`): a colored verdict box (ok/
+warn/bad, same color tokens every other status box in this module already uses) plus the tip bullets
+below it, placed right after the per-campaign table, gated on having newsletter content at all (same
+`_campaign_table` gating).
+
+**Standing note for future tip-writing, from the user mid-session**: "when it comes to suggestions on
+tech side of things... they might feel a correct what to do kind of tip more useful than some broad
+language which makes them confuse... something like opinionated method." Applies going forward to any
+improvement-tip wording, newsletter or otherwise -- prefer a single clear, concrete, opinionated
+recommendation over hedged/vague "consider..." framing.
+
+Verified against all 33 real domains on both render paths (PDF + email context, zero errors either way).
+Visually confirmed on aikyamjobs.org (4 campaigns, 1 improvement) and pattic.org (1 campaign, fully
+clean, singular-phrasing fix). Service restarted, healthy, dev-send guard confirmed still paused through
+the restart. No email sent.
