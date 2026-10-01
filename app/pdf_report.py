@@ -395,14 +395,29 @@ def _still_open_table_typst(items: list) -> str:
 
 
 def _still_open_item(item: dict) -> str:
+    """Rewritten 2026-10-01 (jev workflow Ch.46): previously rendered
+    story/detail/why/history as up to 4 separate, always-present-in-the-
+    same-order sentences -- Ch.36 found this fixed STRUCTURE, not word
+    choice, was the real remaining driver of a whole-document
+    natural_voice/repetition_risk boilerplate read. Why and history are now
+    fused into ONE sentence when both exist (history is already a short
+    fragment like "since August", not its own full sentence -- see
+    _incident_recurrence's fragment mode), using a connector tested across 2
+    real, differently-shaped why-texts (borrowed_sending_identity,
+    postmaster_compliance) without the honesty-overclaim risk a more
+    "poetic" duration phrasing carried on one of them."""
     story = _capitalize_first(item["story"]) + "."
     parts = [f'#{_typst_str(story)}']
     if item.get("detail"):
         parts.append(f' #{_typst_str(item["detail"])}.')
-    if item.get("why"):
-        parts.append(f' #text(fill: muted)[#{_typst_str(item["why"])}]')
-    if item.get("history"):
-        parts.append(f' #text(fill: muted)[#{_typst_str(item["history"])}]')
+    why, history = item.get("why"), item.get("history")
+    if why and history:
+        merged = f"{why} -- this one has been open {history}."
+        parts.append(f' #text(fill: muted)[#{_typst_str(merged)}]')
+    elif why:
+        parts.append(f' #text(fill: muted)[#{_typst_str(why + ".")}]')
+    elif history:
+        parts.append(f' #text(fill: muted)[#{_typst_str(_capitalize_first(history) + ".")}]')
     return "".join(parts)
 
 

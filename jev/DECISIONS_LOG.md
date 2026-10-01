@@ -2238,3 +2238,56 @@ the trend across sends, here's the overall verdict.
 Verified against all 33 real domains (zero errors), visually confirmed on aikyamjobs.org's real data --
 both charts render correctly, including the real click-rate spike. Service restarted, healthy, dev-send
 guard confirmed still paused. No email sent.
+
+---
+
+## Chapter 46 — The item-assembly-structure redesign, round 1 (real progress, not a full fix)
+
+User asked to start the redesign Ch.36 flagged but didn't do: `_still_open_item()` mechanically
+concatenates story/detail/why/history as up to 4 separate, always-present-in-the-same-order sentences,
+and that fixed STRUCTURE (not word choice) was identified as the real remaining driver of a
+whole-document `natural_voice`/`repetition_risk` boilerplate read.
+
+**Scope for this round**: fuse `why` + `history` into ONE sentence (history is already a short fragment
+like "since August", not its own sentence, since Ch.36 -- see `_incident_recurrence`'s new `fragment=True`
+mode) instead of rendering them as 2 separate sentences. Prioritized by real currently-open domain count:
+`postmaster_compliance` (9), `lookalike_domain` (8), `dns_drift` (7, not yet touched this round --
+queued), `spf_missing` (5, queued), `new_sender` (5, already fine), `borrowed_sending_identity` (4).
+
+**A real, previously-uncaught finding, bigger than the structural issue itself**: testing each why-text
+in ISOLATION (not just the combined document) surfaced 2 severe honesty_calibration bugs that had shipped
+since Ch.18/36 without this specific per-line check ever running: `borrowed_sending_identity`'s "your
+mail IS unmistakably yours again" stated the POST-FIX state as present-tense fact for an item that's
+still open (91% `overstates_beyond_the_evidence`), and `lookalike_domain`'s "This IS the exact tactic
+used to scam donors" asserted an unconfirmed look-alike as an active threat (93%). Both rewritten as
+conditional/ongoing, matching what's actually true right now. Real lesson: whole-document testing alone
+doesn't catch everything -- isolated per-line checks on already-shipped text found bugs the combined-
+document score never flagged on its own.
+
+**Connector testing, not assumed**: tried a "poetic" duration phrase ("a pattern that has held since
+August") first -- worked well on `borrowed_sending_identity` (71% `reads_like_a_person`) but caused a
+NEW overclaim on `postmaster_compliance` (66% `overstates_beyond_the_evidence`) by implying an
+escalating risk had already materialized. Settled on a neutral, risk-agnostic connector ("-- this one has
+been open {history}") that tested well on both real, differently-shaped why-texts (65%/62% and 59%/73%)
+without the overclaim risk.
+
+**A second intra-item repetition caught by re-reading the real combined output before shipping, not
+after**: the first `lookalike_domain` rewrite ended "...which is why we keep an eye on it" -- but that
+category's own `story` text already ends "...and we're keeping an eye on what it does." Same phrase,
+same item, caught and fixed before testing the combined block (same lesson Ch.36 already learned once
+for this exact category).
+
+**Real measured result on tinybridge.in's real 4-category combined block** (the same baseline used since
+Ch.36): `honesty_calibration` 79% accurately_calibrated -- a substantial, real improvement (2 of the 4
+items had tested at 91-93% overstating individually). `natural_voice` improved modestly, 95%->89%
+boilerplate -- real but not a flip. `repetition_risk` essentially unchanged (54%->57% borderline).
+
+**Honest accounting of what's NOT yet fixed**: fusing why+history into one sentence per item didn't
+change the fact that every item still follows roughly the same 2-3-sentence shape (opening fact, then a
+consequence/reason), repeated 4 times in one document -- that compounding, not any individual sentence's
+wording, is very likely the real remaining ceiling. 2 of the 6 priority categories (`dns_drift`,
+`spf_missing`) weren't touched this round. Queued for a future round, not forced further here.
+
+Verified against all 33 real domains (zero errors), visually confirmed on tinybridge.in's real PDF --
+merged sentence renders correctly, no duplicate phrases. Service restarted, healthy, scheduled sends
+confirmed active (user resumed them, verified safe, earlier this session). No email sent.

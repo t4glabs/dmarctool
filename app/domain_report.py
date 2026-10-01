@@ -337,7 +337,8 @@ def _care_ledger(conn, domain_id: int):
     return line
 
 
-def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as_of_str: str = None):
+def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as_of_str: str = None,
+                          fragment: bool = False):
     """A short 'this has happened before' clause for an incident's category,
     or None. Counts the distinct DAYS this category was raised for this domain
     -- so several IPs/selectors flagged in one scan count as one incident, not
@@ -356,7 +357,15 @@ def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as
     (the report's own period end, not wall-clock time -- see
     dmarctool_streak_framing on why "now" breaks historical reconstruction)
     lets a long-open item get a duration note instead of silent repetition,
-    once it's been open at least one full report cycle (30 days)."""
+    once it's been open at least one full report cycle (30 days).
+
+    `fragment=True` (jev workflow Ch.46): returns a short lowercase clause
+    fragment ("since August" / "3 times since August") instead of a full
+    standalone sentence, for the PDF's fused still-open rendering --
+    presenting history as its OWN separate sentence was itself part of the
+    mechanical 4-sentence-every-time structure Ch.36 identified as the real
+    driver of the remaining boilerplate read, not just word choice. The
+    fragment gets woven into the end of the why-clause instead."""
     days = sorted({
         r["d"] for r in conn.execute(
             """SELECT substr(created_at, 1, 10) d FROM action_items
@@ -370,6 +379,8 @@ def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as
             as_of_dt = datetime.datetime.strptime(as_of_str, "%Y-%m-%d %H:%M:%S")
             if (as_of_dt - first_dt).days >= 30:
                 first_month = first_dt.strftime("%B")
+                if fragment:
+                    return f"since {first_month}"
                 # Reworded 2026-09-24 (jev workflow, priority 2): the em-dash
                 # version tested fine in isolation but "not forgotten" is a
                 # phrase you'd defend against an accusation nobody made --
@@ -379,6 +390,8 @@ def _incident_recurrence(conn, domain_id: int, category: str, resolved: bool, as
         return None
     first_month = datetime.datetime.strptime(days[0], "%Y-%m-%d").strftime("%B")
     phrase = _times_phrase(len(days))
+    if fragment:
+        return f"{phrase} since {first_month}"
     if resolved:
         # Em-dash removed 2026-09-24 (Chapter 19): natural_voice 80%->87%
         # reads_like_a_person.
@@ -988,7 +1001,7 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
         # separate from (and additive to) the shared _WHY_IT_MATTERS/
         # _PROBLEM_STORY phrasing fixed in the same pass. Same "never render
         # the same sentence twice" discipline as seen_stories above.
-        history = _incident_recurrence(conn, domain_id, category, resolved=False, as_of_str=end_str)
+        history = _incident_recurrence(conn, domain_id, category, resolved=False, as_of_str=end_str, fragment=True)
         if history in seen_histories:
             history = None
         elif history:
@@ -1951,11 +1964,17 @@ _WHY_IT_MATTERS = {
     "ses_reputation": "If it keeps climbing, mailbox providers start sending your newsletter to spam instead of the inbox.",
     "ses_reputation_watch": "Worth catching early, because once providers lose confidence it takes a while to earn back.",
     "ses_rejected": "A blocked message never reaches anyone at all, so it's worth understanding why.",
-    "new_sender": "Catching these early is what keeps someone from quietly using your organization's name to email your supporters.",
-    "failure_investigation": "Catching these early is what keeps someone from quietly using your organization's name to email your supporters.",
-    "borrowed_sending_identity": "Once it's sorted, your mail is unmistakably yours again -- no borrowed identity in the middle.",
+    "new_sender": "Catching these early is what keeps someone from quietly using your organization's name to email your supporters",
+    "failure_investigation": "Catching these early is what keeps someone from quietly using your organization's name to email your supporters",
+    # Rewritten 2026-10-01 (jev workflow Ch.46): the original ("your mail IS
+    # unmistakably yours again") stated the POST-FIX state as present-tense
+    # fact for an item that's still open -- a real, previously-uncaught
+    # honesty_calibration bug (91% overstates_beyond_the_evidence tested in
+    # isolation, not caught when this was last shipped in Ch.36). Reframed
+    # as conditional/ongoing, which is what's actually true right now.
+    "borrowed_sending_identity": "Until this gets sorted, some of your mail could still be mistaken for coming from somewhere else",
     "safe_browsing_flagged": "Visitors get a red warning screen before they reach your site, which costs you trust and donations.",
-    "postmaster_compliance": "Left unresolved, this is the kind of verdict that starts affecting the inbox -- and it comes straight from Google, not a guess.",
+    "postmaster_compliance": "Google is the one telling us this, not a guess on our part, and the longer it sits, the more likely it starts affecting the inbox",
     "display_name_issue": "The \"from\" name is the first thing a reader sees, and it decides whether they trust the email.",
     "content_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
     "subject_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
@@ -1970,7 +1989,19 @@ _WHY_IT_MATTERS = {
     "mta_sts_broken": "It's what stops someone quietly reading or tampering with email sent to your organization.",
     "campaign_compliance_issue": "Mailbox providers increasingly expect this from newsletter senders, and missing it can push your mail toward spam.",
     "display_name_inconsistent": "A consistent \"from\" name is part of how readers decide an email is really you and worth opening.",
-    "lookalike_domain": "This is the exact tactic used to scam donors out of money in an organization's name -- not a risk worth ignoring.",
+    # Rewritten 2026-10-01 (jev workflow Ch.46): the original asserted the
+    # scam as present-tense fact ("This IS the exact tactic used...") for a
+    # domain that's merely registered and being watched, not confirmed in
+    # active use -- another real, previously-uncaught overstatement (93%
+    # tested in isolation). Reframed as conditional, matching this
+    # category's own established honesty rule (CONTEXT.md: a look-alike is
+    # "reviewed," not asserted as an active threat unless it actually is one).
+    # "which is why we keep an eye on it" dropped from the first draft --
+    # the story for this category already ends "...and we're keeping an eye
+    # on what it does," so the original fused draft repeated that phrase
+    # within the same item (caught re-reading the real combined block
+    # before shipping, not after).
+    "lookalike_domain": "Should it ever actually be used, this is exactly the kind of address scammers register to target donors in an organization's name",
 }
 
 
