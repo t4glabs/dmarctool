@@ -2418,14 +2418,27 @@ def chart_data(conn, domain_id: int, period_start: datetime.datetime, period_end
     Returns {"disp_none": int, "disp_quarantine": int, "disp_reject": int,
     "spam_series": [(date, rate|None), ...], "bounce_points": [(date, num,
     den), ...], "bounce_warn_threshold": float, "pass_rate_series": [(date,
-    total, passed, rate), ...]}."""
+    total, passed, rate), ...], "newsletter_engagement_series": [(date,
+    open_rate, click_rate), ...]}."""
     from app import analysis
+    from app.campaign_score import MIN_VOLUME_FOR_RATES
 
     start_epoch = int(period_start.timestamp())
     end_epoch = int(period_end.timestamp())
     providers = analysis.provider_breakdown(conn, domain_id, start_epoch, end_epoch)
     mailgun_series = analysis.mailgun_daily_series(conn, domain_id, days=60)
     settings = ensure_default_settings(conn)
+
+    # Per-send, not per-day (sends aren't daily) -- the last 20 real
+    # campaigns with enough delivered volume to trust a rate (same floor
+    # campaign_score.py's own pillars use), oldest first to match every
+    # other trend series' left-to-right chronological convention.
+    # recent_campaigns() itself returns most-recent-first.
+    newsletter_campaigns = analysis.recent_campaigns(conn, domain_id, limit=20)
+    newsletter_qualifying = [
+        c for c in reversed(newsletter_campaigns)
+        if c["send_day"] and c["delivered"] and c["delivered"] >= MIN_VOLUME_FOR_RATES
+    ]
 
     return {
         "disp_none": sum(p["disp_none"] for p in providers),
@@ -2435,6 +2448,9 @@ def chart_data(conn, domain_id: int, period_start: datetime.datetime, period_end
         "bounce_points": [(r["day"], r["bounce_num"], r["bounce_den"]) for r in mailgun_series],
         "bounce_warn_threshold": float(settings["mailgun_bounce_rate_warn"]),
         "pass_rate_series": analysis.daily_pass_series(conn, domain_id, days=60),
+        "newsletter_engagement_series": [
+            (c["send_day"], c["unique_open_rate"], c["unique_click_rate"]) for c in newsletter_qualifying
+        ],
     }
 
 

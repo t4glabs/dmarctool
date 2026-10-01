@@ -2209,3 +2209,32 @@ Verified against all 33 real domains on both render paths (PDF + email context, 
 Visually confirmed on aikyamjobs.org (4 campaigns, 1 improvement) and pattic.org (1 campaign, fully
 clean, singular-phrasing fix). Service restarted, healthy, dev-send guard confirmed still paused through
 the restart. No email sent.
+
+---
+
+## Chapter 45 — Newsletter engagement trend chart, closing the last Ch.39 survey gap
+
+User approved building the one concrete gap found while answering a question about PDF newsletter
+coverage: bounce rate and pass rate both get a real trend chart across time, but newsletter engagement
+never did -- only this period's 2 aggregate bars and a per-send table. Checked real data first (same
+discipline as every chart added this session): 18 qualifying real campaigns for aikyamjobs.org, 4 for
+pattic.org (volume-floor filtered at `MIN_VOLUME_FOR_RATES`, the same constant `campaign_score.py` already
+uses), confirming genuine variation worth charting, not noise -- aikyamjobs.org's real data showed a
+striking recent spike to 11.2% click rate against a steady ~1-2% baseline, exactly the kind of signal a
+single-period aggregate would hide entirely.
+
+**New `chart_data()` key** (`app/domain_report.py`): `newsletter_engagement_series`, built from
+`recent_campaigns()` (not a new daily-snapshot table -- sends aren't daily, so per-send is the natural
+unit, and this needed zero new data collection). Oldest-first to match every other trend series'
+left-to-right convention (`recent_campaigns()` itself returns most-recent-first).
+
+**Two new charts** (`app/pdf_report.py`, `_newsletter_and_closing()`): open-rate-over-time and
+click-rate-over-time, reusing the existing `line-chart()` Typst primitive as two separate single-line
+charts rather than building multi-series support into that function -- matches this module's own
+one-metric-per-chart convention (spam/bounce/pass-rate are each their own chart too). Placed between the
+per-send table and the quality verdict box, so the narrative reads: here's each individual send, here's
+the trend across sends, here's the overall verdict.
+
+Verified against all 33 real domains (zero errors), visually confirmed on aikyamjobs.org's real data --
+both charts render correctly, including the real click-rate spike. Service restarted, healthy, dev-send
+guard confirmed still paused. No email sent.

@@ -612,7 +612,7 @@ def _newsletter_quality_typst(summary: dict) -> str:
     return "\n".join(parts)
 
 
-def _newsletter_and_closing(context: dict) -> str:
+def _newsletter_and_closing(context: dict, chart_data: dict = None) -> str:
     """newsletter (+ its real open/click segment gauges, re-derived from the
     exact same newsletter_bars data Chapter 26's email table-bars use -- same
     number, different render), tips, and the closing paragraph/signoff.
@@ -627,6 +627,32 @@ def _newsletter_and_closing(context: dict) -> str:
             parts.append(f'\n#v(0.3cm)\n{gauges}\n')
         if context.get("campaign_table"):
             parts.append(_campaign_table_typst(context["campaign_table"]))
+
+        # Per-send trend across the last 20 real newsletters (not just this
+        # period's 2 aggregate bars above) -- jev workflow Ch.45, closing the
+        # real gap Ch.39's content survey found: bounce/pass rate both get a
+        # real trend chart, engagement never did. Two separate single-line
+        # charts, matching this module's own one-metric-per-chart convention
+        # (line-chart has no multi-series support) rather than inventing a
+        # new combined-chart primitive for this alone.
+        series = (chart_data or {}).get("newsletter_engagement_series") or []
+        open_points = [(_short_date(d), r) for d, r, _ in series if r is not None]
+        click_points = [(_short_date(d), r) for d, _, r in series if r is not None]
+        if len(open_points) >= 2:
+            parts.append(f'''
+#v(0.4cm)
+#eyebrow("Your newsletter open rate over time")
+#v(0.15cm)
+#line-chart({_typst_series(open_points)})
+''')
+        if len(click_points) >= 2:
+            parts.append(f'''
+#v(0.4cm)
+#eyebrow("Your newsletter click rate over time")
+#v(0.15cm)
+#line-chart({_typst_series(click_points)})
+''')
+
         if context.get("newsletter_quality"):
             parts.append(_newsletter_quality_typst(context["newsletter_quality"]))
 
@@ -674,7 +700,7 @@ def render_domain_report_pdf(conn, domain_id: int, domain_name: str, recipient_l
         _standing_narrative(context),
         _action_ledger(context),
         _protection_and_deliverability(context, cdata),
-        _newsletter_and_closing(context),
+        _newsletter_and_closing(context, cdata),
     ])
     typ_source = _PREAMBLE + _page_setup(domain_name) + body
     return _compile_typst(typ_source)
