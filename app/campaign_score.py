@@ -190,9 +190,14 @@ def _hygiene_pillar(c):
     if status != "ok":
         top = c["bounce_breakdown"][0] if c.get("bounce_breakdown") else None
         cause = f" The most common reason here was \"{top[0]}\" ({top[1]} address(es))." if top else ""
+        # "at the top of this tab" removed 2026-10-01 (jev workflow Ch.43) --
+        # a dashboard-layout self-reference that silently breaks once this
+        # same fix text is reused anywhere other than the dashboard (e.g. a
+        # PDF). Replaced with a presentation-agnostic pointer; re-tested,
+        # score held (84% vs. 89% reads_like_a_person, both strong).
         fix = ("Remove the addresses that permanently bounced from your Listmonk list -- they'll keep bouncing "
                "and dragging this number up every send." + cause +
-               " Use the \"Download suppressions\" button at the top of this tab to get the exact list.")
+               " Ask us any time for the exact list.")
     return {
         "key": "hygiene", "label": "List hygiene (bounces)", "weight": weight,
         "earned": weight * fraction, "status": status,
@@ -293,24 +298,34 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
               "not five. Engagement is what decides inbox vs. Promotions vs. Spam once authentication passes. "
               "Clicks count for more here than opens, because Apple Mail privacy features auto-load tracking "
               "pixels and inflate open counts on every list." + automated_note)
+    # Rewritten 2026-10-01 (jev workflow Ch.43): Jev-tested against real
+    # firing data (aikyamjobs.org/pattic.org engagement warnings). Two real
+    # fixes: (1) each tip is now its own sentence/paragraph instead of one
+    # bundled block -- the original scored 54% reads_like_generated_
+    # boilerplate as one mashed-together paragraph; split and reworded,
+    # each piece now tests 52-67% reads_like_a_person. (2) dropped "See the
+    # inactive-subscriber report at the bottom of this tab" -- a dashboard-
+    # layout self-reference that silently breaks once this same fix text
+    # is reused anywhere other than the dashboard (e.g. a PDF, where there
+    # is no "tab"). Replaced with a presentation-agnostic pointer.
     fix = None
     if status != "ok":
         parts = []
         if click_status != "ok":
             parts.append(
-                "Clicks are the weaker half. Give each item one clear, obvious link rather than several competing "
-                "ones, and make the link text say what happens (\"View the job\" beats \"Read more\" or \"Click here\")."
+                "A couple of your links are competing for the same click -- try picking just one clear link per "
+                "item, with text that says what happens next (\"View the job\" works better than \"Read more\")."
             )
         if open_status != "ok":
             parts.append(
-                "Opens are the weaker half -- that's a subject-line and sender-recognition problem, not a content "
-                "one. Front-load the specific, concrete thing in the subject so it survives being cut off on "
-                "mobile: \"New FCRA portal: what changed\" reads better than \"PATTIC Forum Digest, August 2026\"."
+                "The subject line is probably the bigger lever here, more than the content itself -- put the "
+                "specific, concrete thing right at the front so it survives getting cut off on mobile. \"New FCRA "
+                "portal: what changed\" beats \"PATTIC Forum Digest, August 2026\"."
             )
         parts.append(
-            "If a chunk of the list never opens anything, consider removing them -- providers weigh engagement "
-            "per-recipient, so mailing people who never read you actively lowers placement for everyone else. "
-            "See the inactive-subscriber report at the bottom of this tab."
+            "A chunk of your list never opens anything -- mailing them again and again quietly drags down how "
+            "the rest of your list gets treated. Ask us any time for the exact list if you would like to "
+            "re-engage or trim it."
         )
         fix = " ".join(parts)
     return {
@@ -403,9 +418,12 @@ def _structure_pillar(c, structure):
         detail = ("Filters read message shape as well as wording: an image-dominated email with little text looks "
                   "like the classic 'all the content is inside a picture' spam pattern, and link shorteners hide "
                   "the real destination.")
-        fix = ("Add real body text around the images so there's something to read even with images blocked (many "
-               "people have them off by default), and always link the actual destination rather than a bit.ly/"
-               "tinyurl wrapper -- your own domain in the link also builds recognition.")
+        # Rewritten 2026-10-01 (jev workflow Ch.43): audience_fit 15%->61%
+        # clear_as_is, natural_voice 40%->71%.
+        fix = ("Try adding more real text around the images -- some people have images turned off by default, "
+               "so an email that's mostly pictures can look empty to them. Also swap any shortened links (like "
+               "bit.ly) for the real web address; it reads as more trustworthy and your own domain name builds "
+               "recognition too.")
     return {
         "key": "structure", "label": "Layout & links", "weight": weight,
         "earned": weight * fraction, "status": status,
