@@ -117,6 +117,17 @@ DEFAULT_SETTINGS = {
     "report_subject_template": "Your {domain} domain health update from aikyam",  # {domain} substituted at send time
     "report_signoff_name": "The aikyam Team",         # sign-off name at the bottom of the domain-health email
     "report_reply_to": "jinso@aikyamfellows.org",     # where replies go, since the From address isn't a monitored inbox
+    # A separate, temporary override from report_emails_enabled above --
+    # that flag is the user's own standing "ready for real mail" intent,
+    # this one is a short-lived guard against the scheduled job's own
+    # restart behavior (next_run_time = 1 minute after every service
+    # restart, see web.py) sending real reports purely because active
+    # development happened to restart the service while a domain was due.
+    # Toggle via `python -m app.actions pause-sends` / `resume-sends`.
+    # Never flips report_emails_enabled itself, so the user's real setting
+    # is untouched and this never needs remembering to turn back off by
+    # anyone relying on normal scheduled behavior.
+    "dev_pause_scheduled_sends": "0",
 }
 
 

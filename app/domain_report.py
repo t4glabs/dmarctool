@@ -2272,6 +2272,11 @@ def run_report_emails(conn, verbose: bool = True) -> None:
     internal state), that decides per-domain whether it's due rather than
     needing its own scheduler job."""
     settings = ensure_default_settings(conn)
+    if settings.get("dev_pause_scheduled_sends", "0") == "1":
+        if verbose:
+            print("[domain_report] dev_pause_scheduled_sends is on -- not sending "
+                  "(run `python -m app.actions resume-sends` when active development is done)")
+        return
     if settings.get("report_emails_enabled", "0") != "1":
         if verbose:
             print("[domain_report] report_emails_enabled is off in Settings -- not sending "
