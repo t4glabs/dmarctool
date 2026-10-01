@@ -2069,3 +2069,52 @@ for pattic.org as a result.
 Verified: full 33-domain `build_notification()` sweep (zero errors) with the final wording, live page
 re-checked for ilabindia.org showing its real prior send correctly. Service restarted, healthy. No new
 email sent by Claude.
+
+---
+
+## Chapter 42 — Two more manual notify buttons: inactive subscribers, domain expiry
+
+Same pattern as bounce-notify (Ch.40-41), at the user's request to extend it to other actions. Explicit
+scope constraint this time: "remember only manual buttons and a log if i already send. thats it" -- no
+extra automation, no auto-triggering, just a button and a send-history log, matching the existing shape
+exactly.
+
+**Inactive subscribers** (`app/subscriber_notify.py`, new `subscriber_notification_sends` table): reuses
+the existing `subscriber_engagement_summary()` detection (already built for the dashboard's own CSV
+export), with its own independent watermark -- separate from the dashboard's `subscriber_review_watermarks`,
+same reasoning as bounce-notify's independent watermark (reviewing on the dashboard and telling the client
+are two different real actions). Real data: aikyamjobs.org has 518 subscribers who've received 9+
+newsletters with zero opens, out of 4,120 total (12.6%).
+
+Wording deliberately softer than bounce-notify's "confirmed dead, delete" register -- these are still real
+people who may have simply lost interest, not broken addresses, so the email never tells the client to
+remove anyone, only to decide. Jev-tested (audience_fit/actionability/natural_voice/honesty_calibration)
+against real aikyamjobs.org numbers: landed at actionability 98%, natural_voice 74%, honesty_calibration
+97%, audience_fit 43% (same real ceiling as every prior notify-email wording round).
+
+**Domain expiry** (`app/domain_expiry_notify.py`, new `domain_expiry_notification_sends` table): simpler
+than the other two -- a domain's expiry date is one point-in-time fact, not a "new since" list, so the
+send-log exists purely for the operator's own "already told them" visibility, not to scope content. Real
+data: aikyamsolve.org expires 2026-11-22 (52 days), registered through Cloudflare, Inc.; captains.ngo
+similarly open. Jev-tested, landed strong across all 4 criteria: audience_fit 82%, actionability 100%,
+natural_voice 80%, honesty_calibration 93% -- the best-scoring wording of any notify email built so far.
+
+**Refactor**: extracted `_send_manual_notification()` (`app/web.py`) -- the secrets-check/From-header/
+HTML-body/send_message block was about to be duplicated a third time; now shared by all 3 notify routes.
+
+**A real bug caught and fixed before shipping**: a `replace_all` edit meant to fix 4 of my own new routes'
+tab anchors accidentally also changed an unrelated, pre-existing route (`classify_sender`, the sending-IP
+classification form) from `#senders` to `#deliverability` -- caught by grepping all occurrences before
+moving on, not assumed safe. A second, separate bug: the domain-expiry button's confirm() dialog used an
+HTML entity (`&quot;`) inside a Jinja `{{ }}` expression, which Jinja can't parse (entities aren't Jinja
+string syntax) -- caused a real `TemplateSyntaxError` on every domain page load, caught immediately via the
+live error log, fixed by matching the bounce-notify button's already-working plain-nested-quotes pattern.
+
+**UI placement, verified against the real tab structure, not assumed**: inactive-subscriber button in the
+existing "Inactive subscribers" section (Deliverability & Spam tab); domain-expiry button inline next to
+the existing expiry badge (Auth & DNS tab, not Overview as first guessed -- corrected by actually checking
+the template's tab-panel boundaries).
+
+Verified: full 33-domain page-render sweep against the real live service (zero errors), both buttons
+spot-checked rendering real data (518 inactive subscribers; 52-days-left expiry badge). Direct builder-
+function tests confirm correct content/attachment row counts. Service restarted, healthy. No email sent.

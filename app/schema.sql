@@ -689,6 +689,41 @@ CREATE TABLE IF NOT EXISTS bounce_notification_sends (
 
 CREATE INDEX IF NOT EXISTS idx_bounce_notification_sends_domain ON bounce_notification_sends(domain_id, sent_at);
 
+-- Same shape and reasoning as bounce_notification_sends above, for the
+-- "notify client about inactive subscribers" manual send (see
+-- app.subscriber_notify). Its own independent watermark/log -- NOT the
+-- dashboard's separate subscriber_review_watermarks table, since "I
+-- reviewed this on the dashboard" and "I told the client about it" are two
+-- different real actions.
+CREATE TABLE IF NOT EXISTS subscriber_notification_sends (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    sent_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    recipient_email   TEXT,
+    inactive_count    INTEGER NOT NULL DEFAULT 0,
+    status            TEXT NOT NULL,      -- 'sent' | 'failed'
+    error_message     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscriber_notification_sends_domain ON subscriber_notification_sends(domain_id, sent_at);
+
+-- Same shape again, for the "notify client their domain is expiring soon"
+-- manual send (see app.domain_expiry's notify helper). A single
+-- point-in-time fact (the expiry date), not a "new since" list -- this log
+-- exists purely so the operator can see "already told them, on this date"
+-- rather than to scope what content goes in the email.
+CREATE TABLE IF NOT EXISTS domain_expiry_notification_sends (
+    id                INTEGER PRIMARY KEY,
+    domain_id         INTEGER NOT NULL REFERENCES domains(id),
+    sent_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    recipient_email   TEXT,
+    expires_at        TEXT,
+    status            TEXT NOT NULL,      -- 'sent' | 'failed'
+    error_message     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_domain_expiry_notification_sends_domain ON domain_expiry_notification_sends(domain_id, sent_at);
+
 -- One row per domain per calendar day, a derived composite "how healthy is
 -- this domain's email right now" snapshot (see app.analysis.snapshot_domain_health
 -- for the 0-100 scoring formula). Powers two things a live query can't:

@@ -455,6 +455,15 @@
             <span class="badge muted" title="{{ domain_expiry.note }}">Couldn't check</span>
           {% elif domain_expiry_days_left <= domain_expiry_warn_days %}
             <span class="badge bad" title="{{ domain_expiry.note }}">{{ domain_expiry.expires_at }} -- {{ domain_expiry_days_left }} day{{ 's' if domain_expiry_days_left != 1 else '' }} left</span>{{ fix_note(category_remediation('domain_expiring_soon')) }}
+            <form class="inline" action="/domain/{{ domain.name }}/notify_domain_expiry" method="post" style="display:inline-block;margin-left:0.5rem;" onsubmit="return confirm('Send a domain-expiry email to {{ report_settings.recipient_email if report_settings else "the configured recipient" }} now?');">
+              <button type="submit" class="small">📧 Notify client</button>
+            </form>
+            {% if expiry_notify_last %}
+            <div class="muted" style="font-size:0.8rem;margin-top:0.2rem;">
+              Last notified: {{ expiry_notify_last.sent_at }}
+              {% if expiry_notify_last.status == 'sent' %}(to {{ expiry_notify_last.recipient_email }}){% else %}-- <span style="color:var(--bad)">failed: {{ expiry_notify_last.error_message }}</span>{% endif %}
+            </div>
+            {% endif %}
           {% else %}
             <span class="badge ok" title="{{ domain_expiry.note }}">{{ domain_expiry.expires_at }} ({{ domain_expiry_days_left }} days){% if domain_expiry.registrar %}, via {{ domain_expiry.registrar }}{% endif %}</span>
           {% endif %}
@@ -1187,6 +1196,24 @@
           <button type="submit" class="small" title="After this, someone only reappears if they've received another newsletter since without opening it -- if you actually remove them from Listmonk, they drop off on their own.">✓ Mark reviewed</button>
         </form>
       </div>
+      {% endif %}
+      {% if subscriber_notify_last %}
+      <p class="muted" style="margin-top:0;font-size:0.85rem;">
+        Last notified: {{ subscriber_notify_last.sent_at }}
+        {% if subscriber_notify_last.status == 'sent' %}
+        ({{ subscriber_notify_last.inactive_count }} subscribers, to {{ subscriber_notify_last.recipient_email }})
+        {% else %}
+        -- <span style="color:var(--bad)">failed: {{ subscriber_notify_last.error_message }}</span>
+        {% endif %}
+      </p>
+      {% endif %}
+      {% if subscriber_notify_pending_count %}
+      <form class="inline" action="/domain/{{ domain.name }}/notify_inactive_subscribers" method="post" onsubmit="return confirm('Send an inactive-subscriber email to {{ report_settings.recipient_email if report_settings else "the configured recipient" }} now?');">
+        <button type="submit">📧 Notify client ({{ subscriber_notify_pending_count }} inactive)</button>
+      </form>
+      {% if not report_settings or not report_settings.recipient_email %}
+      <p class="muted" style="font-size:0.85rem;">Save a recipient email under "Email Updates" first.</p>
+      {% endif %}
       {% endif %}
       {% if engagement.inactive %}
       <div class="table-wrap">

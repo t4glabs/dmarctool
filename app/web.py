@@ -65,6 +65,13 @@ from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
 from app.bounce_notify import build_notification, last_notification, pending_notify_counts, record_notification_sent
+from app.subscriber_notify import (build_notification as build_subscriber_notification,
+                                    last_notification as last_subscriber_notification,
+                                    pending_notify_count as pending_subscriber_notify_count,
+                                    record_notification_sent as record_subscriber_notification_sent)
+from app.domain_expiry_notify import (build_notification as build_expiry_notification,
+                                       last_notification as last_expiry_notification,
+                                       record_notification_sent as record_expiry_notification_sent)
 from app.email_verifier import verify_email
 from app.known_bad import known_bad_map, known_bad_counts
 from app.ses_account import run_ses_account_checks
@@ -517,6 +524,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     domain_expiry_days_left = (
         days_until(domain_expiry["expires_at"]) if domain_expiry and domain_expiry["expires_at"] else None
     )
+    expiry_notify_last = last_expiry_notification(conn, domain_id)
 
     report_run = current_policy_run(conn, domain_id)
     manual_run = conn.execute(
@@ -769,6 +777,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10, settings=settings)
     mailgun_newsletter_campaigns = recent_mailgun_campaigns(conn, domain_id, limit=10, settings=settings)
     engagement = subscriber_engagement_summary(conn, domain_id)
+    subscriber_notify_pending_count = pending_subscriber_notify_count(conn, domain_id)
+    subscriber_notify_last = last_subscriber_notification(conn, domain_id)
     bounce_categories = [
         {"category": category, "count": n, "chronic": False,
          "download_url_new": f"/domain/{name}/bounce_category.csv?" + urllib.parse.urlencode({"category": category, "new": "true"}),
@@ -888,6 +898,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "newsletter_campaigns": newsletter_campaigns,
         "mailgun_newsletter_campaigns": mailgun_newsletter_campaigns,
         "engagement": engagement,
+        "subscriber_notify_pending_count": subscriber_notify_pending_count,
+        "subscriber_notify_last": subscriber_notify_last,
         "bounce_categories": bounce_categories,
         "bounce_notify_hard_count": bounce_notify_hard_count,
         "bounce_notify_chronic_count": bounce_notify_chronic_count,
@@ -912,6 +924,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "domain_expiry": domain_expiry,
         "domain_expiry_days_left": domain_expiry_days_left,
         "domain_expiry_warn_days": int(settings["domain_expiry_warn_days"]),
+        "expiry_notify_last": expiry_notify_last,
         "verdicts": verdicts,
     })
 
@@ -1439,6 +1452,33 @@ def test_domain_report(name: str):
     return RedirectResponse(f"/domain/{name}?flash={flash}#email_updates", status_code=303)
 
 
+def _send_manual_notification(settings_row, settings, subject: str, text_body: str, attachment=None):
+    """Shared send path for every manual, button-triggered client
+    notification (bounce cleanup, inactive subscribers, domain expiry) --
+    same recipient/cc as the domain's report settings, same global
+    reply-to, same sender display name, per the user's own instruction to
+    reuse all three across every notification type. Returns (status, err)
+    where status is 'sent'/'failed'/'missing_secrets'/'no_recipient'."""
+    if not settings_row or not settings_row["recipient_email"]:
+        return "no_recipient", None
+    sender_email = get_secret("REPORT_SENDER_EMAIL")
+    sender_domain = get_secret("REPORT_SENDER_MAILGUN_DOMAIN")
+    api_key = get_secret("MAILGUN_SEND_API_KEY")
+    if not (sender_email and sender_domain and api_key):
+        return "missing_secrets", None
+    reply_to = settings.get("report_reply_to") or None
+    sender_name = settings["report_sender_name"]
+    from_header = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+    html_body = "<div style=\"font-family:sans-serif;font-size:15px;line-height:1.6;\">" + \
+        "".join(f"<p style=\"margin:0 0 12px 0;\">{_html_escape(line)}</p>" if line else "<br>" for line in text_body.split("\n")) + \
+        "</div>"
+    _, err = send_message(
+        sender_domain, api_key, from_header, settings_row["recipient_email"], subject, text_body, html_body,
+        cc_addr=settings_row["cc_email"], reply_to=reply_to, attachment=attachment,
+    )
+    return ("failed" if err else "sent"), err
+
+
 @app.post("/domain/{name}/notify_bounce_cleanup")
 def notify_bounce_cleanup(name: str):
     """Manual, button-triggered send (see app.bounce_notify) -- distinct
@@ -1453,10 +1493,10 @@ def notify_bounce_cleanup(name: str):
     domain_id = domain["id"]
 
     settings_row = get_report_settings(conn, domain_id)
+    settings = ensure_default_settings(conn)
     if not settings_row or not settings_row["recipient_email"]:
         return RedirectResponse(f"/domain/{name}?flash=Save a recipient email first.#deliverability", status_code=303)
 
-    settings = ensure_default_settings(conn)
     min_occ = int(settings["chronic_transient_min_occurrences"])
     min_days = int(settings["chronic_transient_min_days"])
     built = build_notification(conn, domain_id, name, settings_row["recipient_label"], min_occ, min_days,
@@ -1465,31 +1505,82 @@ def notify_bounce_cleanup(name: str):
         return RedirectResponse(f"/domain/{name}?flash=Nothing new to notify about right now.#deliverability", status_code=303)
     subject, text_body, attachments, hard_count, chronic_count = built
 
-    sender_email = get_secret("REPORT_SENDER_EMAIL")
-    sender_domain = get_secret("REPORT_SENDER_MAILGUN_DOMAIN")
-    api_key = get_secret("MAILGUN_SEND_API_KEY")
-    if not (sender_email and sender_domain and api_key):
+    status, err = _send_manual_notification(settings_row, settings, subject, text_body, attachment=attachments)
+    if status == "missing_secrets":
         return RedirectResponse(
             f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_SEND_API_KEY in secrets.env.#deliverability",
             status_code=303,
         )
-    reply_to = settings.get("report_reply_to") or None
-    sender_name = settings["report_sender_name"]
-    from_header = f"{sender_name} <{sender_email}>" if sender_name else sender_email
-    html_body = "<div style=\"font-family:sans-serif;font-size:15px;line-height:1.6;\">" + \
-        "".join(f"<p style=\"margin:0 0 12px 0;\">{_html_escape(line)}</p>" if line else "<br>" for line in text_body.split("\n")) + \
-        "</div>"
-    _, err = send_message(
-        sender_domain, api_key, from_header, settings_row["recipient_email"], subject, text_body, html_body,
-        cc_addr=settings_row["cc_email"], reply_to=reply_to, attachment=attachments,
-    )
-    status = "failed" if err else "sent"
     record_notification_sent(conn, domain_id, settings_row["recipient_email"], hard_count, chronic_count, status, err)
     if err:
         flash = f"Notification failed: {err}"
     else:
         flash = f"Notified {settings_row['recipient_email']} ({hard_count} + {chronic_count} addresses)."
     return RedirectResponse(f"/domain/{name}?flash={flash}#deliverability", status_code=303)
+
+
+@app.post("/domain/{name}/notify_inactive_subscribers")
+def notify_inactive_subscribers(name: str):
+    """Manual, button-triggered send (see app.subscriber_notify) -- same
+    recipient/cc/reply-to convention as notify_bounce_cleanup."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    domain_id = domain["id"]
+
+    settings_row = get_report_settings(conn, domain_id)
+    settings = ensure_default_settings(conn)
+    if not settings_row or not settings_row["recipient_email"]:
+        return RedirectResponse(f"/domain/{name}?flash=Save a recipient email first.#deliverability", status_code=303)
+
+    built = build_subscriber_notification(conn, domain_id, name, settings_row["recipient_label"],
+                                           signoff_name=settings["report_signoff_name"])
+    if built is None:
+        return RedirectResponse(f"/domain/{name}?flash=Nothing new to notify about right now.#deliverability", status_code=303)
+    subject, text_body, attachments, count = built
+
+    status, err = _send_manual_notification(settings_row, settings, subject, text_body, attachment=attachments)
+    if status == "missing_secrets":
+        return RedirectResponse(
+            f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_SEND_API_KEY in secrets.env.#deliverability",
+            status_code=303,
+        )
+    record_subscriber_notification_sent(conn, domain_id, settings_row["recipient_email"], count, status, err)
+    flash = f"Notification failed: {err}" if err else f"Notified {settings_row['recipient_email']} ({count} inactive subscribers)."
+    return RedirectResponse(f"/domain/{name}?flash={flash}#deliverability", status_code=303)
+
+
+@app.post("/domain/{name}/notify_domain_expiry")
+def notify_domain_expiry(name: str):
+    """Manual, button-triggered send (see app.domain_expiry_notify) -- same
+    recipient/cc/reply-to convention as notify_bounce_cleanup."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    domain_id = domain["id"]
+
+    settings_row = get_report_settings(conn, domain_id)
+    settings = ensure_default_settings(conn)
+    if not settings_row or not settings_row["recipient_email"]:
+        return RedirectResponse(f"/domain/{name}?flash=Save a recipient email first.#auth", status_code=303)
+
+    built = build_expiry_notification(conn, domain_id, name, settings_row["recipient_label"],
+                                       signoff_name=settings["report_signoff_name"])
+    if built is None:
+        return RedirectResponse(f"/domain/{name}?flash=No expiry data on file for this domain yet.#auth", status_code=303)
+    subject, text_body, days_left, expires_at = built
+
+    status, err = _send_manual_notification(settings_row, settings, subject, text_body)
+    if status == "missing_secrets":
+        return RedirectResponse(
+            f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_SEND_API_KEY in secrets.env.#auth",
+            status_code=303,
+        )
+    record_expiry_notification_sent(conn, domain_id, settings_row["recipient_email"], expires_at, status, err)
+    flash = f"Notification failed: {err}" if err else f"Notified {settings_row['recipient_email']} (expires {expires_at}, {days_left} days)."
+    return RedirectResponse(f"/domain/{name}?flash={flash}#auth", status_code=303)
 
 
 @app.get("/domain/{name}/report_preview", response_class=HTMLResponse)
