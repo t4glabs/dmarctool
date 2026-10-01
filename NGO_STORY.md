@@ -174,12 +174,16 @@ continuously, for every domain aikyam manages, so you don't have to learn any of
 - **Cleans your mailing list for you** — finds the addresses that are truly dead, and the ones quietly
   acting dead without ever formally bouncing, and can email you one clear list of exactly what to remove
   and why.
+- **Notices when subscribers stop opening your newsletters**, and can email you the exact list so you can
+  decide whether to win them back or trim your list — either way, it's better than quietly mailing people
+  who never read you.
 - **Reviews your own newsletters** before they go out — checking subject lines and content for anything
   that reads like spam to an automated filter, and checking your "From" name is consistent and
   recognizable every time.
-- **Checks your website hasn't been flagged unsafe**, that your domain isn't quietly approaching
-  expiration, and that mail sent to you is protected against interception — all the quiet failure points
-  most organizations never think to check.
+- **Warns you ahead of time if your domain registration is close to expiring**, since a lapsed domain can
+  take your website and email down with it.
+- **Checks your website hasn't been flagged unsafe**, and that mail sent to you is protected against
+  interception — the kind of quiet failure point most organizations never think to check.
 - **Reports back to you in plain language, on your own schedule** — no jargon, no technical terms, just
   what happened, what was fixed, and what's still being watched, sent straight to your inbox with a
   proper, easy-to-read report attached.

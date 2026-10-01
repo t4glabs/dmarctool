@@ -82,9 +82,17 @@ just repeat the same sentence verbatim every cycle.
 - A periodic, jargon-free email report to each domain's own owner, with a full, minimalist-designed PDF
   attachment (real charts, real typography, generated on the fly) covering their health score, what
   changed, what was fixed, and what's still being watched — written for someone who's never heard of SPF.
+  Includes a real per-newsletter engagement trend (open/click rate over the last 20 sends, not just this
+  period's average) and a plain-language newsletter quality verdict with concrete tips — never a raw
+  grade, just "N of M newsletters came back clean" plus what to fix.
 - A one-click list-cleanup email: attaches the confirmed-dead and likely-dead address lists as two
   clearly-labeled, appropriately-hedged files, explains in plain terms why removing them protects their
   sender reputation, and remembers what's already been sent so nothing goes out twice.
+- A one-click inactive-subscriber email: flags subscribers who've stopped opening newsletters and lets the
+  operator send the client the exact list to re-engage or trim, with its own send history so nothing goes
+  out twice.
+- A one-click domain-expiry reminder: warns the client well before their domain registration lapses, since
+  only they (not the operator) can renew it.
 
 ### One unified action list
 - Every check above feeds one deduplicated, prioritized action list per domain, with plain-language
