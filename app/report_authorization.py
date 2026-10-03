@@ -1,5 +1,16 @@
 """
-External-destination authorization for DMARC report addresses (RFC 7489 s7.1).
+External-destination authorization for DMARC report addresses.
+
+Originally RFC 7489 s7.1 (2015), where this was a SHOULD. The IETF replaced
+that spec in May 2026 ("DMARCbis"): this exact provision now lives at
+**RFC 9990 s4** ("Verifying External Destinations"), and its strength was
+promoted from SHOULD to MUST -- confirmed directly against the published RFC
+text and a second independent source, 2026-10-03, not assumed from the
+renumbering alone. Practically, this raises the real urgency of the existing
+unresolved finding on this tool's own portfolio (most tracked domains still
+lack an authorization record): as RFC 9990-compliant receivers roll out,
+reports that are merely a "latent gap" today become ones that actually stop,
+silently, with no error.
 
 When a domain's DMARC record sends reports to a mailbox on a *different*
 domain -- `_dmarc.arpo.in` with `rua=mailto:dmarc-reports@aikyamfellows.org`
@@ -115,8 +126,8 @@ def check_authorization(reporting_domain: str, destination_domain: str) -> dict:
         "status": "missing", "via": None, "record": None,
         "note": (f"{destination_domain} has no record authorizing it to receive DMARC reports for "
                  f"{reporting_domain}. Reports are still arriving today, so nothing is broken right "
-                 f"now, but a receiver that enforces RFC 7489 section 7.1 would stop sending "
-                 f"silently."),
+                 f"now, but a receiver enforcing this (RFC 9990 section 4 -- a MUST as of the May 2026 "
+                 f"DMARCbis update, previously just a SHOULD) would stop sending silently."),
     }
 
 

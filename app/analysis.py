@@ -365,6 +365,18 @@ _ESP_PTR_PATTERNS = (
     ("postmarkapp.com", "Postmark"),
     ("sendinblue.com", "Brevo (Sendinblue)"),
     ("mailchannels.net", "MailChannels"),
+    # Added 2026-10-03 (competitor-gap research): common among small-org/
+    # nonprofit marketing stacks, same real gap dmarcian's own marketing
+    # flags ("resolves raw IPs to real services like Salesforce or
+    # Klaviyo"). Each hostname verified against a real, independent source
+    # before adding -- not guessed -- since a wrong pattern here just
+    # silently never matches, with no error to catch it.
+    ("klaviyomail.com", "Klaviyo"),
+    ("ccsend.com", "Constant Contact"),
+    ("exacttarget.com", "Salesforce Marketing Cloud"),
+    ("hubspotemail.net", "HubSpot"),
+    ("cmail", "Campaign Monitor"),
+    ("activehosted.com", "ActiveCampaign"),
 )
 
 
