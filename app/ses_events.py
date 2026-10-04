@@ -415,6 +415,19 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
             if verbose:
                 print(f"[ses] batch delete failed: {e}")
         processed += len(messages)
+        # Commit after every batch instead of only once at the very end. A
+        # background drain can legitimately run for up to ses_drain_seconds
+        # (600s) -- with only a final commit, this connection held one open
+        # write transaction for that whole window, and since every single
+        # page view writes to access_log on its own connection, that blocked
+        # the entire dashboard (not just this check) for up to 10 minutes on
+        # a real backlog. Committing per ~10-message batch (a few times a
+        # second) releases the write lock constantly instead, so a slow
+        # drain no longer freezes the rest of the app. The counts/
+        # suppression-notification aggregates below are still written once
+        # after the loop -- they only read from in-memory dicts, which this
+        # commit doesn't affect.
+        conn.commit()
         if verbose and processed % 500 < 10:
             print(f"[ses] ...{processed} processed so far this run")
 

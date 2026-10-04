@@ -2340,3 +2340,36 @@ afterward (`group_report_sends`/`domain_report_groups` back to 0 rows, both doma
 Paused `dev_pause_scheduled_sends` before the one real service restart used to confirm `/report_groups`
 and a real domain page both load live, then resumed it immediately after (log showed a clean restart, 0
 group sends). No group has ever been enabled with a real recipient outside this already-deleted test.
+
+---
+
+## Chapter 48 — Found and fixed the real sweep-hang: SES drain held one write lock for up to 10 minutes
+
+Follow-up to the unresolved incident in [[dmarctool_sweep_hang_incident]]: the app went fully
+unresponsive for 10+ minutes right after the Report Groups work, confirmed via a real
+`sqlite3.OperationalError: database is locked` at restart. Root-caused this session instead of guessing.
+
+**Method**: ran the real 20-step periodic sweep against a throwaway *copy* of the real database
+(`sqlite3 .backup`) so a repeat hang couldn't touch the live app -- deliberately excluding
+`run_ses_event_ingest` from that test since it deletes messages from the real shared SQS queue, and
+running it against a disposable DB copy would have permanently lost real events. All 19 other steps
+completed cleanly in under a minute. That left `run_ses_event_ingest` as the only untested step, and its
+own code comment already documented the exact mechanism: a background drain is allowed to run for up to
+`ses_drain_seconds` (600s, a deliberate earlier fix for backlog draining) but the function only called
+`conn.commit()` once, at the very end -- holding one open SQLite write transaction for the whole window.
+Every single page view writes to `access_log` on its own connection (`audit_middleware`), so any slow
+drain blocked the entire dashboard, not just that one check.
+
+**Fix**: moved the commit inside the per-batch loop (`conn.commit()` after each ~10-message batch, which
+already happens every ~1-2 seconds) instead of only after the whole drain finishes. The post-loop
+aggregate writes (`ses_event_counts`, suppression-notification tallies) are untouched -- they only read
+from in-memory dicts accumulated across the loop, so committing mid-loop doesn't affect their correctness.
+
+**Verified live, not just in theory**: ran the real drain against the real database and real SQS queue
+(334 real messages waiting) while polling the live dashboard throughout -- drained cleanly in 6.1s, queue
+confirmed empty afterward (`ApproximateNumberOfMessages: 0`), dashboard stayed responsive. Today's real
+backlog wasn't large enough to reproduce the full multi-minute version of the original hang, but the root
+mechanism (one commit per up-to-600s drain) was fixed regardless of today's queue size. Service restarted
+once to load the fix, confirmed responsive. `dev_pause_scheduled_sends` was kept PAUSED throughout this
+whole investigation and the restart (see [[dmarctool_dev_pause_discipline]] -- the standing rule from this
+same incident), not resumed.
