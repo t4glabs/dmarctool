@@ -668,6 +668,42 @@ CREATE TABLE IF NOT EXISTS report_sends (
 
 CREATE INDEX IF NOT EXISTS idx_report_sends_domain ON report_sends(domain_id, sent_at);
 
+-- A domain's reports can optionally be delivered as part of a group instead
+-- of on its own (see domains.report_group_id) -- e.g. aikyamjobs.org and its
+-- subdomain ats.aikyamjobs.org, where the same real person was getting two
+-- near-identical monthly reports. Same field shape as domain_report_settings
+-- deliberately, so the existing per-domain scheduling/period logic
+-- (_report_period(), the due-check against last_sent_at/interval_days) works
+-- on a group row exactly like it already does on a domain row. A grouped
+-- domain's OWN domain_report_settings row is left untouched but unused while
+-- grouped, so ungrouping it later loses nothing.
+CREATE TABLE IF NOT EXISTS domain_report_groups (
+    id              INTEGER PRIMARY KEY,
+    name            TEXT NOT NULL,
+    recipient_email TEXT,
+    recipient_label TEXT,
+    interval_days   INTEGER NOT NULL DEFAULT 30,
+    enabled         INTEGER NOT NULL DEFAULT 0,
+    last_sent_at    TEXT,
+    cc_email        TEXT DEFAULT 'jinso@aikyamfellows.org',
+    pdf_intro_shown INTEGER NOT NULL DEFAULT 0
+);
+
+-- Same shape as report_sends above, for a group send instead of a single
+-- domain's.
+CREATE TABLE IF NOT EXISTS group_report_sends (
+    id              INTEGER PRIMARY KEY,
+    group_id        INTEGER NOT NULL REFERENCES domain_report_groups(id),
+    period_start    TEXT NOT NULL,
+    period_end      TEXT NOT NULL,
+    sent_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    recipient_email TEXT,
+    status          TEXT NOT NULL,      -- 'sent' | 'failed' | 'skipped_no_data'
+    error_message   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_report_sends_group ON group_report_sends(group_id, sent_at);
+
 -- Audit log of every "notify client about bounce cleanup" email -- a manual,
 -- button-triggered send (see app.bounce_notify), distinct from the scheduled
 -- periodic report_sends above. The last successful row's sent_at is also the

@@ -251,24 +251,49 @@ def _page_setup(domain_name: str) -> str:
 '''
 
 
-def _masthead_and_kpi(context: dict) -> str:
-    """Wordmark, period, greeting, intro, and the KPI stat-tile row -- the
-    same 3 numbers the email report's KPI strip shows (Chapter 23-27),
-    re-derived from the identical _build_context() dict so the PDF and email
-    can never disagree about the same fact. Tile 3 (health-timeline delta)
-    stays dormant-but-wired exactly like the email version, for the same
-    reason (domain_health_snapshots doesn't have 3+ months of history yet
-    portfolio-wide)."""
-    parts = [f'''
+def _shared_masthead(name: str, recipient_label: str, period_start: str, period_end: str,
+                      is_group: bool = False) -> str:
+    """Wordmark, period, and greeting -- rendered exactly ONCE per document,
+    whether it's a single domain's report or a group's combined one (jev
+    workflow Ch.47: split out of the old _masthead_and_kpi so a multi-domain
+    report doesn't repeat the wordmark/greeting once per domain). `is_group`
+    switches the intro sentence to the Jev-tested group wording (audience_fit
+    99%, honesty_calibration 95%, natural_voice 51% -- the real ceiling found
+    after 2 rounds, same as every other new sentence in this project)
+    instead of naming one domain."""
+    intro = (
+        "Here is how each of your domains has been doing lately, in plain terms. No technical jargon, "
+        "just what happened and what we did about it -- one section per domain below."
+        if is_group else
+        f"Here's how #text(weight: \"bold\")[#{_typst_str(name)}]'s emails have been doing lately, in "
+        f"plain terms. No technical jargon, just what happened and what we did about it."
+    )
+    return f'''
 = aikyam
-#eyebrow({_typst_str(f"{context['period_start']} to {context['period_end']}")})
+#eyebrow({_typst_str(f"{period_start} to {period_end}")})
 
 #v(0.3cm)
-#text(font: heading-font, size: 17pt, weight: "bold")[Hi #{_typst_str(context['recipient_label'])},]
+#text(font: heading-font, size: 17pt, weight: "bold")[Hi #{_typst_str(recipient_label)},]
 
 #v(0.35cm)
-#text(size: 10.5pt)[Here's how #text(weight: "bold")[#{_typst_str(context['domain_name'])}]'s emails have been doing lately, in plain terms. No technical jargon, just what happened and what we did about it.]
-''']
+#text(size: 10.5pt)[{intro}]
+'''
+
+
+def _domain_kpi_header(context: dict, show_name_heading: bool = False) -> str:
+    """The per-domain KPI stat-tile row + headline box -- the same 3 numbers
+    the email report's KPI strip shows (Chapter 23-27), re-derived from the
+    identical _build_context() dict so the PDF and email can never disagree
+    about the same fact. Tile 3 (health-timeline delta) stays dormant-but-
+    wired exactly like the email version, for the same reason
+    (domain_health_snapshots doesn't have 3+ months of history yet
+    portfolio-wide). `show_name_heading` adds a level-2 "## {domain}" heading
+    above the tiles -- used only in a group report, where each domain needs
+    its own clearly-labeled section; a single-domain report already named
+    the domain in the shared masthead, so it stays off there."""
+    parts = []
+    if show_name_heading:
+        parts.append(f'\n== #{_typst_str(context["domain_name"])}\n')
 
     tiles = []
     if context.get("delivery_rate_pct") is not None:
@@ -627,11 +652,13 @@ def _newsletter_quality_typst(summary: dict) -> str:
     return "\n".join(parts)
 
 
-def _newsletter_and_closing(context: dict, chart_data: dict = None) -> str:
+def _newsletter_and_tips(context: dict, chart_data: dict = None) -> str:
     """newsletter (+ its real open/click segment gauges, re-derived from the
     exact same newsletter_bars data Chapter 26's email table-bars use -- same
-    number, different render), tips, and the closing paragraph/signoff.
-    Closing wording is the exact established text, not a new decision."""
+    number, different render) and tips. Split from the final closing
+    paragraph/signoff (now _closing(), jev workflow Ch.47) so a group report
+    can render this once per domain but the closing only once for the whole
+    document."""
     parts = []
     if context.get("newsletter"):
         parts.append(f'#section-title("Your newsletter\'s reach")\n#{_typst_str(context["newsletter"])}\n')
@@ -684,7 +711,16 @@ def _newsletter_and_closing(context: dict, chart_data: dict = None) -> str:
 )
 ''')
 
-    parts.append(f'''
+    return "\n".join(parts)
+
+
+def _closing(signoff_name: str) -> str:
+    """The fixed closing paragraph + signoff -- exact established wording,
+    not a new decision. Rendered exactly ONCE at the very end of the
+    document, whether it covers one domain or a whole group (jev workflow
+    Ch.47) -- previously baked into the end of _newsletter_and_closing(),
+    which would have repeated once per domain in a group report."""
+    return f'''
 #v(0.6cm)
 This might look like a lot to take in, but it really matters. These are the things that decide whether
 people actually see your emails, and whether someone could try to impersonate your organization using
@@ -693,29 +729,85 @@ always happy to walk through it with you.
 
 #v(0.4cm)
 With care, \\
-#text(weight: "bold")[#{_typst_str(context["signoff_name"])}]
-''')
-    return "\n".join(parts)
+#text(weight: "bold")[#{_typst_str(signoff_name)}]
+'''
 
 
 def render_domain_report_pdf(conn, domain_id: int, domain_name: str, recipient_label: str,
                               period_start, period_end) -> bytes:
-    """Renders the full domain report as PDF bytes -- Round D scope, the
-    complete single-document assembly: masthead/KPI/headline (Round A),
+    """Renders the full single-domain report as PDF bytes -- Round D scope,
+    the complete single-document assembly: masthead/KPI/headline (Round A),
     standing narrative + action ledger (Round B), protection/deliverability
     + charts (Round C), newsletter + tips + closing (Round D). One shared
-    context dict throughout, zero new content decisions anywhere."""
+    context dict throughout, zero new content decisions anywhere.
+
+    Jev workflow Ch.47: now a thin wrapper over the same shared-masthead/
+    domain-section/closing pieces render_group_report_pdf() also uses, so
+    there is exactly one code path per zone rather than two -- a group
+    report is not a separate reimplementation, it's this same assembly
+    repeated per domain with one shared masthead/closing instead of one
+    each."""
     from app.domain_report import _build_context
     from app.domain_report import chart_data as _get_chart_data
 
     context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
     cdata = _get_chart_data(conn, domain_id, period_start, period_end)
     body = "\n".join([
-        _masthead_and_kpi(context),
+        _shared_masthead(domain_name, recipient_label, context["period_start"], context["period_end"]),
+        _domain_kpi_header(context),
         _standing_narrative(context),
         _action_ledger(context),
         _protection_and_deliverability(context, cdata),
-        _newsletter_and_closing(context, cdata),
+        _newsletter_and_tips(context, cdata),
+        _closing(context["signoff_name"]),
     ])
     typ_source = _PREAMBLE + _page_setup(domain_name) + body
+    return _compile_typst(typ_source)
+
+
+def render_group_report_pdf(conn, domain_ids: list, group_name: str, recipient_label: str,
+                             period_start, period_end) -> bytes:
+    """Renders ONE combined PDF covering several domains -- jev workflow
+    Ch.47, built for the real case of a domain + its subdomain (e.g.
+    aikyamjobs.org + ats.aikyamjobs.org) sharing one real recipient who was
+    getting two near-identical monthly reports.
+
+    Deliberately NOT a blended/averaged report: each domain's own health
+    score, action items, and charts are kept fully separate and clearly
+    labeled, since two domains can have (and in the real motivating case,
+    do have) genuinely different DMARC postures -- a combined "average
+    health score" would misrepresent both. One shared masthead at the top,
+    one domain-labeled section per member (each reusing the exact same
+    zone-builder functions a single-domain report uses, so there is no
+    second content path to drift out of sync), one closing at the end.
+    A page break between domains keeps each one's section visually
+    self-contained for a reader skimming to "their" domain."""
+    from app.domain_report import _build_context
+    from app.domain_report import chart_data as _get_chart_data
+
+    rows = conn.execute(
+        f"SELECT id, name FROM domains WHERE id IN ({','.join('?' * len(domain_ids))}) ORDER BY name",
+        domain_ids,
+    ).fetchall()
+
+    body_parts = [_shared_masthead(group_name, recipient_label, period_start.date().isoformat(),
+                                    period_end.date().isoformat(), is_group=True)]
+    for i, row in enumerate(rows):
+        domain_id, domain_name = row["id"], row["name"]
+        context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
+        cdata = _get_chart_data(conn, domain_id, period_start, period_end)
+        if i > 0:
+            body_parts.append("\n#pagebreak()\n")
+        body_parts.append(_domain_kpi_header(context, show_name_heading=True))
+        body_parts.append(_standing_narrative(context))
+        body_parts.append(_action_ledger(context))
+        body_parts.append(_protection_and_deliverability(context, cdata))
+        body_parts.append(_newsletter_and_tips(context, cdata))
+
+    # signoff_name is a tool-wide setting (same one every domain's own
+    # context already carries via _build_context()), not per-domain or
+    # per-group -- reuse the last member's context instead of a fresh query.
+    body_parts.append(_closing(context["signoff_name"]))
+
+    typ_source = _PREAMBLE + _page_setup(group_name) + "\n".join(body_parts)
     return _compile_typst(typ_source)

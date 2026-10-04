@@ -55,8 +55,9 @@ from app.db import get_connection, get_or_create_domain, init_db
 from app.dns_check import check_domain, discover_untracked_subdomains, run_dns_checks
 from app.domain_expiry import days_until, run_domain_expiry_checks
 from app.domain_report import (
-    get_report_settings, preview_domain_report, report_period_for_domain, run_report_emails,
-    save_report_settings, send_report_now,
+    all_report_groups, create_report_group, delete_report_group, get_report_settings, preview_domain_report,
+    preview_group_report, report_period_for_domain, report_period_for_group, run_report_emails,
+    save_group_settings, save_report_settings, send_group_report_now, send_report_now, set_domain_group,
 )
 from app.listmonk import run_listmonk_content_sync, run_listmonk_blocklist_sync
 from app.lookalike import findings_for_domain, run_lookalike_checks
@@ -824,6 +825,10 @@ def domain_detail(request: Request, name: str, flash: str = None):
 
     report_settings = get_report_settings(conn, domain_id)
     report_preview_subject, report_preview_text, _ = preview_domain_report(conn, domain_id, name)
+    report_group = (
+        conn.execute("SELECT * FROM domain_report_groups WHERE id=?", (domain["report_group_id"],)).fetchone()
+        if domain["report_group_id"] else None
+    )
 
     verdicts = {
         "senders": senders_verdict(senders, source_classes),
@@ -915,6 +920,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "classifications": CLASSIFICATIONS,
         "manual_log_items": manual_log_items,
         "report_settings": report_settings,
+        "report_group": report_group,
         "report_emails_enabled": settings.get("report_emails_enabled", "0") == "1",
         "report_preview_subject": report_preview_subject,
         "report_preview_text": report_preview_text,
@@ -1613,6 +1619,142 @@ def preview_domain_report_pdf(name: str):
     period_start, period_end = report_period_for_domain(conn, domain_id)
     recipient_label = settings_row["recipient_label"] if settings_row else None
     pdf_bytes = render_domain_report_pdf(conn, domain_id, name, recipient_label, period_start, period_end)
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+@app.get("/report_groups", response_class=HTMLResponse)
+def report_groups_page(request: Request, flash: str = None):
+    """List every report group + its members, and a create-group form.
+    Domains not in any group never appear here -- same "optional, additive"
+    contract as the rest of this feature."""
+    conn = get_connection()
+    groups = all_report_groups(conn)
+    grouped_ids = {m["id"] for g in groups for m in g["members"]}
+    ungrouped_domains = conn.execute(
+        "SELECT id, name FROM domains WHERE report_group_id IS NULL ORDER BY name"
+    ).fetchall()
+    return templates.TemplateResponse(request, "report_groups.html", {
+        "groups": groups,
+        "ungrouped_domains": [d for d in ungrouped_domains if d["id"] not in grouped_ids],
+        "flash": flash,
+    })
+
+
+@app.post("/report_groups")
+def create_report_group_route(name: str = Form(...)):
+    conn = get_connection()
+    name = name.strip()
+    if not name:
+        return RedirectResponse("/report_groups?flash=Group name can't be empty.", status_code=303)
+    create_report_group(conn, name)
+    return RedirectResponse("/report_groups?flash=Group created -- add member domains and a recipient below.",
+                             status_code=303)
+
+
+@app.post("/report_groups/{group_id}/settings")
+def save_report_group_settings(group_id: int, name: str = Form(...), recipient_email: str = Form(""),
+                                recipient_label: str = Form(""), interval_days: int = Form(30),
+                                enabled: str = Form(""), cc_email: str = Form("")):
+    conn = get_connection()
+    save_group_settings(conn, group_id, name.strip(), recipient_email or None, recipient_label or None,
+                         interval_days, bool(enabled), cc_email or None)
+    return RedirectResponse("/report_groups?flash=Group settings saved.", status_code=303)
+
+
+@app.post("/report_groups/{group_id}/members")
+def update_group_members(group_id: int, domain_id: int = Form(...), action: str = Form(...)):
+    """action='add' puts this domain in this group (moving it out of any
+    other group it was in, since a domain can only belong to one); 'remove'
+    clears it back to standalone, leaving its own domain_report_settings row
+    untouched and ready to use again."""
+    conn = get_connection()
+    set_domain_group(conn, domain_id, group_id if action == "add" else None)
+    return RedirectResponse("/report_groups?flash=Group membership updated.", status_code=303)
+
+
+@app.post("/report_groups/{group_id}/delete")
+def delete_report_group_route(group_id: int):
+    conn = get_connection()
+    delete_report_group(conn, group_id)
+    return RedirectResponse("/report_groups?flash=Group deleted -- its domains are back to standalone delivery.",
+                             status_code=303)
+
+
+def _group_member_domains(conn, group_id: int):
+    rows = conn.execute("SELECT id, name FROM domains WHERE report_group_id=? ORDER BY name", (group_id,)).fetchall()
+    return [(r["id"], r["name"]) for r in rows]
+
+
+@app.post("/report_groups/{group_id}/test")
+def test_report_group(group_id: int):
+    conn = get_connection()
+    group = conn.execute("SELECT * FROM domain_report_groups WHERE id=?", (group_id,)).fetchone()
+    if not group:
+        raise HTTPException(status_code=404, detail="group not found")
+    if not group["recipient_email"]:
+        return RedirectResponse("/report_groups?flash=Save a recipient email first.", status_code=303)
+    member_domains = _group_member_domains(conn, group_id)
+    if not member_domains:
+        return RedirectResponse("/report_groups?flash=Add at least one member domain first.", status_code=303)
+
+    sender_email = get_secret("REPORT_SENDER_EMAIL")
+    sender_domain = get_secret("REPORT_SENDER_MAILGUN_DOMAIN")
+    api_key = get_secret("MAILGUN_SEND_API_KEY")
+    if not (sender_email and sender_domain and api_key):
+        return RedirectResponse(
+            "/report_groups?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_SEND_API_KEY in secrets.env.",
+            status_code=303,
+        )
+
+    period_start, period_end = report_period_for_group(conn, group_id)
+    status, err = send_group_report_now(
+        conn, group_id, group["name"], member_domains, group["recipient_email"], group["recipient_label"],
+        period_start, period_end, sender_email, sender_domain, api_key, mark_sent=False,
+        cc_email=group["cc_email"],
+    )
+    if status == "sent":
+        flash = f"Test email sent to {group['recipient_email']}."
+        if group["cc_email"]:
+            flash += f" (cc: {group['cc_email']})"
+    elif status == "skipped_no_data":
+        flash = "No DMARC report data for any member domain in that period yet -- nothing sent."
+    else:
+        flash = f"Test send failed: {err}"
+    return RedirectResponse(f"/report_groups?flash={flash}", status_code=303)
+
+
+@app.get("/report_groups/{group_id}/preview", response_class=HTMLResponse)
+def preview_report_group_html(request: Request, group_id: int):
+    """Read-only, same contract as /domain/{name}/report_preview -- no
+    Mailgun call, no sending, safe to open any time."""
+    conn = get_connection()
+    group = conn.execute("SELECT * FROM domain_report_groups WHERE id=?", (group_id,)).fetchone()
+    if not group:
+        return HTMLResponse("Unknown report group", status_code=404)
+    member_domains = _group_member_domains(conn, group_id)
+    if not member_domains:
+        return HTMLResponse("This group has no member domains yet.", status_code=404)
+    _subject, _text, context = preview_group_report(conn, group_id, group["name"], member_domains)
+    return templates.TemplateResponse(request, "email_report.html", context)
+
+
+@app.get("/report_groups/{group_id}/pdf")
+def preview_report_group_pdf(group_id: int):
+    """Read-only, same contract as /domain/{name}/report_pdf -- this is how
+    the combined group PDF gets verified without ever triggering a real or
+    test send."""
+    from app.pdf_report import render_group_report_pdf
+
+    conn = get_connection()
+    group = conn.execute("SELECT * FROM domain_report_groups WHERE id=?", (group_id,)).fetchone()
+    if not group:
+        return HTMLResponse("Unknown report group", status_code=404)
+    member_domains = _group_member_domains(conn, group_id)
+    if not member_domains:
+        return HTMLResponse("This group has no member domains yet.", status_code=404)
+    period_start, period_end = report_period_for_group(conn, group_id)
+    pdf_bytes = render_group_report_pdf(conn, [did for did, _ in member_domains], group["name"],
+                                         group["recipient_label"], period_start, period_end)
     return Response(content=pdf_bytes, media_type="application/pdf")
 
 

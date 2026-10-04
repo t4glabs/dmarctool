@@ -85,6 +85,11 @@ def init_db(conn: sqlite3.Connection) -> None:
     })
     _ensure_columns(conn, "domains", {
         "pinned": "INTEGER NOT NULL DEFAULT 0",
+        # NULL (the default) = this domain's reports are delivered on their
+        # own, exactly as before -- set only when the operator explicitly
+        # combines this domain's reports with others into one group (see
+        # domain_report_groups). The vast majority of domains stay NULL.
+        "report_group_id": "INTEGER REFERENCES domain_report_groups(id)",
     })
     _ensure_columns(conn, "ip_whois_cache", {
         # Registry country code (e.g. "CN") parsed from the same whois output as

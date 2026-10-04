@@ -2291,3 +2291,52 @@ wording, is very likely the real remaining ceiling. 2 of the 6 priority categori
 Verified against all 33 real domains (zero errors), visually confirmed on tinybridge.in's real PDF --
 merged sentence renders correctly, no duplicate phrases. Service restarted, healthy, scheduled sends
 confirmed active (user resumed them, verified safe, earlier this session). No email sent.
+
+---
+
+## Chapter 47 — Report Groups: one combined PDF/email for a parent domain + its subdomains
+
+User raised a real duplication problem: `aikyamjobs.org` and its real subdomain `ats.aikyamjobs.org` were
+each configured separately for email reports, but share the same real recipients
+(`sentinaro@aikyamfellows.org`, `jinso@aikyamfellows.org`) -- so the same person got two near-identical
+monthly PDFs, and every future subdomain would repeat the problem. Confirmed with the user before
+designing anything: one combined PDF for the whole group, not N separate ones.
+
+**Design constraint, checked against real data first**: `ats.aikyamjobs.org` genuinely has a different
+DMARC posture than its parent (different open action items, far fewer ingested reports, earlier `pct=`
+ramp stage, as later confirmed live: 94/100 health with 4 open items for the parent vs. 100/100 with
+nothing open for the subdomain). Blending or averaging their metrics would misrepresent both -- so
+grouping is deliberately an *optional, delivery-only* concept. A grouped domain's own technical analysis
+(dashboard, action items, bounce tracking) stays fully independent forever; only the recipient/schedule/
+PDF/email layer is shared. A domain not in any group behaves with zero change. A grouped domain's own
+`domain_report_settings` row is left in place but unused, so ungrouping later loses nothing.
+
+**What shipped**: `domain_report_groups` + `group_report_sends` tables, `domains.report_group_id`
+(nullable FK). `app/pdf_report.py`'s old `_masthead_and_kpi()`/`_newsletter_and_closing()` were split into
+reusable zone functions (`_shared_masthead`, `_domain_kpi_header`, `_newsletter_and_tips`, `_closing`) so
+`render_domain_report_pdf()` (single-domain, unchanged output) and the new `render_group_report_pdf()`
+(one shared masthead/closing, one `#pagebreak()`-separated section per member domain, each built from that
+domain's own real, unmodified `_build_context()`/`chart_data()`) share one code path per zone instead of
+two. `_build_group_context()` is the single shared context-builder behind both `preview_group_report()`
+and `send_group_report_now()` -- same "preview and send must compute identically" discipline as the
+existing single-domain pair. New `/report_groups` page + 7 routes (list/create/settings/members/test/
+preview/pdf/delete), all mirroring the existing per-domain routes' shape and access level exactly.
+
+**The one new piece of client-facing wording** (`_group_teaser_hook()`, the line that replaces a single
+domain's name in the teaser email with an aggregate across the group) was Jev-tested on the real combined
+aikyamjobs.org + ats.aikyamjobs.org case before shipping: `honesty_calibration` 95% accurate,
+`natural_voice` 30% reads_like_a_person -- a real, modest, documented ceiling, not oversold. The new
+group-intro sentence in `_shared_masthead` (is_group=True) tested `audience_fit` 99%, `honesty` 95%,
+`natural_voice` 51%.
+
+**Verified on real data, no email ever sent**: created a real test group from `aikyamjobs.org` (id 1) +
+`ats.aikyamjobs.org` (id 22) via the new routes, confirmed the member list, settings save, and read-only
+`/report_groups/{id}/preview` + `/report_groups/{id}/pdf` routes all work -- visually PNG-checked the
+8-page combined PDF: one shared masthead, each domain's real (and genuinely different) KPI/health/action-
+item/newsletter sections on its own page(s), one shared closing at the very end. Deleted the test group
+afterward (`group_report_sends`/`domain_report_groups` back to 0 rows, both domains back to
+`report_group_id = NULL`). Re-rendered all 35 real domains' standalone pages and PDFs after the
+`pdf_report.py` zone-builder refactor -- zero errors, confirming the single-domain path is unchanged.
+Paused `dev_pause_scheduled_sends` before the one real service restart used to confirm `/report_groups`
+and a real domain page both load live, then resumed it immediately after (log showed a clean restart, 0
+group sends). No group has ever been enabled with a real recipient outside this already-deleted test.

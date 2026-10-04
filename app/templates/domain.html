@@ -1254,6 +1254,21 @@
 
   <div class="tab-panel" data-tab="email_updates">
 
+    {% if report_group %}
+    <div class="section">
+      <h2 class="first">📧 Email health updates for the domain owner</h2>
+      <p class="muted" style="margin-top:0">
+        This domain's updates are combined with its report group, so there's nothing to configure here separately.
+      </p>
+      <div class="verdict ok">
+        &#128279; This domain's reports are combined into the
+        <strong>&ldquo;{{ report_group.name }}&rdquo;</strong> group -- one shared recipient, schedule, and PDF
+        cover every domain in that group. Manage it on the
+        <a href="/report_groups">Report Groups</a> page. This domain's own settings above are kept but unused
+        while it's grouped, so removing it from the group later picks up right where they left off.
+      </div>
+    </div>
+    {% else %}
     <div class="section">
       <h2 class="first">📧 Email health updates for the domain owner</h2>
       <p class="muted" style="margin-top:0">
@@ -1262,7 +1277,9 @@
         mail and newsletter are doing. Written for someone who's never heard of DMARC/SPF/DKIM, on their own
         schedule. Nothing is ever sent until you enable this below and review a test send. The sender name,
         subject line, and sign-off used for every domain's email are set once for the whole tool, in
-        <a href="/settings#report-sender-name">Settings</a>.
+        <a href="/settings#report-sender-name">Settings</a>. If this domain shares a recipient with others (e.g. a
+        subdomain of one you already track), consider combining them into one
+        <a href="/report_groups">report group</a> instead of configuring each separately.
       </p>
       <form action="/domain/{{ domain.name }}/report_settings" method="post">
         <div class="formrow">
@@ -1333,6 +1350,7 @@
         Same access level as the preview above -- not yet a public/shareable link (no login on this app at all yet).
       </p>
     </div>
+    {% endif %}
 
   </div>
 

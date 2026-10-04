@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Report groups - DMARCTool{% endblock %}
+{% block content %}
+
+<h1>&#128279; Report groups</h1>
+<p class="muted" style="margin-top:0">
+  Combine several domains -- a parent domain and its subdomains, for example -- into one shared recipient,
+  schedule, and PDF, instead of configuring and sending a near-identical report for each one separately.
+  Each domain's own dashboard, action items, and analysis stay exactly as separate as they are today -- grouping
+  only changes how the reports are <em>delivered</em>. A domain not in any group here behaves with zero change,
+  exactly as before.
+</p>
+
+{% if groups %}
+{% for g in groups %}
+<div class="section">
+  <h2 class="first">{{ g.group.name }}</h2>
+
+  <p class="muted" style="margin-top:0">
+    <strong>Members:</strong>
+    {% if g.members %}
+      {% for m in g.members %}
+      <a href="/domain/{{ m.name }}">{{ m.name }}</a>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    {% else %}
+      <em>none yet -- add one below.</em>
+    {% endif %}
+  </p>
+
+  <form action="/report_groups/{{ g.group.id }}/settings" method="post">
+    <input type="hidden" name="name" value="{{ g.group.name }}">
+    <div class="formrow">
+      <div class="field">
+        <label>Send updates to (one or more, comma separated)</label>
+        <input type="email" name="recipient_email" multiple value="{{ g.group.recipient_email or '' }}"
+               placeholder="e.g. hello@theirdomain.org, someoneelse@theirdomain.org">
+      </div>
+      <div class="field">
+        <label>Greet them as</label>
+        <input type="text" name="recipient_label" value="{{ g.group.recipient_label or '' }}"
+               placeholder="e.g. Bangalore Cat Squad team">
+      </div>
+      <div class="field">
+        <label>Send every</label>
+        <select name="interval_days">
+          <option value="7" {{ 'selected' if g.group.interval_days == 7 else '' }}>Week</option>
+          <option value="30" {{ 'selected' if g.group.interval_days == 30 else '' }}>Month</option>
+          <option value="90" {{ 'selected' if g.group.interval_days == 90 else '' }}>Quarter (3 months)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>CC (Aikyam's own copy)</label>
+        <input type="email" name="cc_email" multiple
+               value="{{ g.group.cc_email if g.group.cc_email is not none else 'jinso@aikyamfellows.org' }}"
+               placeholder="jinso@aikyamfellows.org">
+      </div>
+      <div class="field">
+        <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if g.group.enabled else '' }}> Enabled</label>
+      </div>
+      <div class="field"><button type="submit">Save</button></div>
+    </div>
+  </form>
+
+  <form action="/report_groups/{{ g.group.id }}/test" method="post" style="margin-top:0.6rem">
+    <button type="submit" {{ 'disabled' if not g.group.recipient_email or not g.members else '' }}>✉️ Send a test now</button>
+    <span class="muted" style="font-size:0.85rem">
+      Sends immediately to the address above using every member domain's real current data, without affecting the
+      real schedule or marking anything as sent.
+    </span>
+  </form>
+  {% if g.group.last_sent_at %}
+  <p class="muted" style="font-size:0.85rem; margin-top:0.6rem">Last sent: {{ g.group.last_sent_at }}</p>
+  {% endif %}
+
+  <p class="muted" style="font-size:0.85rem; margin-top:0.6rem">
+    <a href="/report_groups/{{ g.group.id }}/preview" target="_blank" rel="noopener">View as the styled HTML email &rarr;</a>
+    &nbsp;&middot;&nbsp;
+    <a href="/report_groups/{{ g.group.id }}/pdf" target="_blank" rel="noopener">View the combined PDF &rarr;</a>
+  </p>
+
+  <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border);">
+    <div class="formrow" style="align-items:flex-end;">
+      <div class="field">
+        <label>Add a domain to this group</label>
+        <form action="/report_groups/{{ g.group.id }}/members" method="post" class="inline">
+          <input type="hidden" name="action" value="add">
+          <select name="domain_id">
+            {% for d in ungrouped_domains %}
+            <option value="{{ d.id }}">{{ d.name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" {{ 'disabled' if not ungrouped_domains else '' }}>Add</button>
+        </form>
+      </div>
+    </div>
+    {% if g.members %}
+    <div class="field" style="margin-top:0.6rem">
+      <label>Remove a member</label>
+      {% for m in g.members %}
+      <form action="/report_groups/{{ g.group.id }}/members" method="post" class="inline" style="display:inline-block; margin-right:0.5rem;">
+        <input type="hidden" name="action" value="remove">
+        <input type="hidden" name="domain_id" value="{{ m.id }}">
+        <button type="submit" class="secondary">{{ m.name }} &times;</button>
+      </form>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <form action="/report_groups/{{ g.group.id }}/delete" method="post" style="margin-top:1rem"
+        onsubmit="return confirm('Delete the &quot;{{ g.group.name }}&quot; group? Its member domains go back to standalone delivery -- their own settings are kept.');">
+    <button type="submit" class="secondary">Delete group</button>
+  </form>
+</div>
+{% endfor %}
+{% else %}
+<div class="section">
+  <p class="muted">No report groups yet -- create one below, then add member domains to it.</p>
+</div>
+{% endif %}
+
+<div class="section">
+  <h2 class="first">Create a new group</h2>
+  <form action="/report_groups" method="post">
+    <div class="formrow">
+      <div class="field">
+        <label>Group name</label>
+        <input type="text" name="name" placeholder="e.g. Aikyam Jobs" required>
+      </div>
+      <div class="field"><button type="submit">Create group</button></div>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

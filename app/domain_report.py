@@ -1944,6 +1944,62 @@ def report_period_for_domain(conn, domain_id: int):
     return _report_period(row, datetime.datetime.utcnow())
 
 
+def report_period_for_group(conn, group_id: int):
+    """Same as report_period_for_domain(), for a report group (jev workflow
+    Ch.47) -- domain_report_groups has the identical interval_days/
+    last_sent_at shape, so _report_period() works unchanged."""
+    row = conn.execute("SELECT * FROM domain_report_groups WHERE id=?", (group_id,)).fetchone()
+    return _report_period(row, datetime.datetime.utcnow())
+
+
+def create_report_group(conn, name: str) -> int:
+    cur = conn.execute("INSERT INTO domain_report_groups (name) VALUES (?)", (name,))
+    conn.commit()
+    return cur.lastrowid
+
+
+def save_group_settings(conn, group_id: int, name: str, recipient_email: str, recipient_label: str,
+                         interval_days: int, enabled: bool, cc_email: str = None) -> None:
+    """Same normalization as save_report_settings() -- group recipients are
+    just as likely to be a comma-separated list as a single domain's."""
+    recipient_email = _normalize_email_list(recipient_email)
+    cc_email = _normalize_email_list(cc_email) or DEFAULT_CC_EMAIL
+    conn.execute(
+        """UPDATE domain_report_groups SET name=?, recipient_email=?, recipient_label=?,
+           interval_days=?, enabled=?, cc_email=? WHERE id=?""",
+        (name, recipient_email, recipient_label, interval_days, int(enabled), cc_email, group_id),
+    )
+    conn.commit()
+
+
+def all_report_groups(conn):
+    """Every report group with its member domains, for the /report_groups
+    list page -- member_domains kept as full Row objects here (unlike the
+    (id, name) tuples send_group_report_now()/preview_group_report() take)
+    since the template needs to link to each member's own domain page."""
+    groups = conn.execute("SELECT * FROM domain_report_groups ORDER BY name").fetchall()
+    result = []
+    for g in groups:
+        members = conn.execute(
+            "SELECT id, name FROM domains WHERE report_group_id=? ORDER BY name", (g["id"],)
+        ).fetchall()
+        result.append({"group": g, "members": members})
+    return result
+
+
+def set_domain_group(conn, domain_id: int, group_id) -> None:
+    conn.execute("UPDATE domains SET report_group_id=? WHERE id=?", (group_id, domain_id))
+    conn.commit()
+
+
+def delete_report_group(conn, group_id: int) -> None:
+    """Clears members' report_group_id first so they fall back to standalone
+    delivery using their own, untouched domain_report_settings row."""
+    conn.execute("UPDATE domains SET report_group_id=NULL WHERE report_group_id=?", (group_id,))
+    conn.execute("DELETE FROM domain_report_groups WHERE id=?", (group_id,))
+    conn.commit()
+
+
 # What each kind of problem actually threatens, in the terms this audience
 # cares about: their donors, their funders, and whether their impact stories
 # get read. The whole reason a grassroots org needs to care about domain
@@ -2402,9 +2458,12 @@ def run_report_emails(conn, verbose: bool = True) -> None:
         return
 
     now = datetime.datetime.utcnow()
+    # d.report_group_id IS NULL -- a grouped domain's own domain_report_settings
+    # row is left in place but unused while grouped (see send_group_report_now
+    # below), so ungrouping it later loses nothing.
     rows = conn.execute(
         """SELECT drs.*, d.name as domain_name FROM domain_report_settings drs
-           JOIN domains d ON d.id = drs.domain_id WHERE drs.enabled=1"""
+           JOIN domains d ON d.id = drs.domain_id WHERE drs.enabled=1 AND d.report_group_id IS NULL"""
     ).fetchall()
 
     for row in rows:
@@ -2421,6 +2480,31 @@ def run_report_emails(conn, verbose: bool = True) -> None:
                          row["recipient_label"], period_start, period_end,
                          sender_email, sender_domain, api_key, mark_sent=True, verbose=verbose,
                          cc_email=row["cc_email"])
+
+    # Report groups -- same due-check logic (_report_period, last_sent_at,
+    # interval_days) as the standalone domains above, reused as-is since
+    # domain_report_groups has the identical field shape.
+    groups = conn.execute("SELECT * FROM domain_report_groups WHERE enabled=1").fetchall()
+    for group in groups:
+        if not group["recipient_email"]:
+            continue
+        interval = group["interval_days"] or DEFAULT_INTERVAL_DAYS
+        if group["last_sent_at"]:
+            last_sent = datetime.datetime.strptime(group["last_sent_at"], "%Y-%m-%d %H:%M:%S")
+            if now - last_sent < datetime.timedelta(days=interval):
+                continue
+        member_rows = conn.execute(
+            "SELECT id, name FROM domains WHERE report_group_id=? ORDER BY name", (group["id"],)
+        ).fetchall()
+        if not member_rows:
+            continue
+        period_start, period_end = _report_period(group, now)
+
+        send_group_report_now(conn, group["id"], group["name"],
+                               [(r["id"], r["name"]) for r in member_rows],
+                               group["recipient_email"], group["recipient_label"], period_start, period_end,
+                               sender_email, sender_domain, api_key, mark_sent=True, verbose=verbose,
+                               cc_email=group["cc_email"])
 
 
 # Fixed hex palette for every chart embedded in the emailed HTML report --
@@ -2586,6 +2670,38 @@ def _teaser_hook(domain_name: str, resolved: list, still_open: list, health_scor
     return ", ".join(parts) + "."
 
 
+def _group_teaser_hook(member_summaries: list) -> str:
+    """Same real-data-anchored idea as _teaser_hook(), for a report group
+    (jev workflow Ch.47) -- real totals across every member domain, never
+    a blended/averaged number (there's no meaningful single "health score"
+    across genuinely different domains). `member_summaries`: [(domain_name,
+    resolved_count, still_open_count), ...].
+
+    Jev-tested the exact shipped string: `natural_voice` 30% reads_like_a_person
+    / `honesty_calibration` 95% accurate on the real aikyamjobs.org+
+    ats.aikyamjobs.org case (0 resolved, 2 still open combined) -- a real,
+    modest ceiling for this genuinely new sentence shape (summarizing ACROSS
+    domains is a harder sentence to write naturally than about one),
+    documented honestly rather than chased further. A good candidate for
+    its own future round."""
+    n = len(member_summaries)
+    resolved_total = sum(r for _, r, _ in member_summaries)
+    still_open_total = sum(s for _, _, s in member_summaries)
+    opener = f"We looked after your {n} domain{'s' if n != 1 else ''} this period"
+    if resolved_total and still_open_total:
+        body = (f"and resolved {resolved_total} issue{'s' if resolved_total != 1 else ''}, with "
+                f"{still_open_total} thing{'s' if still_open_total != 1 else ''} worth your attention")
+    elif resolved_total:
+        body = f"and resolved {resolved_total} issue{'s' if resolved_total != 1 else ''}"
+    elif still_open_total:
+        body = f"and found {still_open_total} thing{'s' if still_open_total != 1 else ''} worth your attention"
+    else:
+        body = None
+    if body:
+        return f"{opener}, {body} -- the full breakdown for each one is inside."
+    return f"{opener} -- nothing needs your attention right now, full details for each one are inside."
+
+
 def _pdf_intro_line(pdf_intro_shown: bool) -> str:
     """The sentence introducing the PDF attachment, in the teaser email.
     Chapter 35 (jev/DECISIONS_LOG.md) found and fixed a real repetition-
@@ -2670,6 +2786,52 @@ def preview_domain_report(conn, domain_id: int, domain_name: str):
     return subject, text, context
 
 
+def _build_group_context(conn, group_id: int, group_name: str, recipient_label: str, member_domains: list,
+                          period_start: datetime.datetime, period_end: datetime.datetime) -> dict:
+    """The full teaser-email context for a report group (jev workflow
+    Ch.47) -- shared by preview_group_report() and send_group_report_now(),
+    same reasoning as _build_context() being shared by the single-domain
+    preview/send pair. member_domains: [(domain_id, domain_name), ...]."""
+    settings = ensure_default_settings(conn)
+    member_contexts = [
+        _build_context(conn, did, dname, recipient_label, period_start, period_end)
+        for did, dname in member_domains
+    ]
+    member_summaries = [
+        (c["domain_name"], len(c.get("resolved") or []), len(c.get("still_open") or []))
+        for c in member_contexts
+    ]
+    pdf_intro_row = conn.execute(
+        "SELECT pdf_intro_shown FROM domain_report_groups WHERE id=?", (group_id,)
+    ).fetchone()
+    return {
+        "domain_name": group_name,
+        "recipient_label": recipient_label or group_name,
+        "pdf_intro": _pdf_intro_line(bool(pdf_intro_row and pdf_intro_row["pdf_intro_shown"])),
+        "period_start": period_start.date().isoformat(),
+        "period_end": period_end.date().isoformat(),
+        "signoff_name": settings["report_signoff_name"],
+        "teaser_hook": _group_teaser_hook(member_summaries),
+    }
+
+
+def preview_group_report(conn, group_id: int, group_name: str, member_domains: list):
+    """Same as preview_domain_report(), for a report group -- read-only, no
+    send, no last_sent_at touched. member_domains: [(domain_id,
+    domain_name), ...]."""
+    from app.web import templates  # local import: avoids a circular import at module load time
+
+    settings = ensure_default_settings(conn)
+    row = conn.execute("SELECT * FROM domain_report_groups WHERE id=?", (group_id,)).fetchone()
+    period_start, period_end = _report_period(row, datetime.datetime.utcnow())
+    recipient_label = row["recipient_label"] if row else None
+    context = _build_group_context(conn, group_id, group_name, recipient_label, member_domains,
+                                    period_start, period_end)
+    subject = settings["report_subject_template"].replace("{domain}", group_name)
+    text = templates.env.get_template("email_report.txt").render(**context)
+    return subject, text, context
+
+
 def send_report_now(conn, domain_id: int, domain_name: str, recipient_email: str, recipient_label: str,
                      period_start: datetime.datetime, period_end: datetime.datetime,
                      sender_email: str, sender_domain: str, api_key: str,
@@ -2732,6 +2894,75 @@ def _log_send(conn, domain_id, period_start, period_end, recipient_email, status
         (domain_id, period_start.isoformat(), period_end.isoformat(), recipient_email, status, error_message),
     )
     conn.commit()
+
+
+def _log_group_send(conn, group_id, period_start, period_end, recipient_email, status, error_message):
+    conn.execute(
+        """INSERT INTO group_report_sends (group_id, period_start, period_end, recipient_email, status, error_message)
+           VALUES (?,?,?,?,?,?)""",
+        (group_id, period_start.isoformat(), period_end.isoformat(), recipient_email, status, error_message),
+    )
+    conn.commit()
+
+
+def send_group_report_now(conn, group_id: int, group_name: str, member_domains: list, recipient_email: str,
+                           recipient_label: str, period_start: datetime.datetime, period_end: datetime.datetime,
+                           sender_email: str, sender_domain: str, api_key: str,
+                           mark_sent: bool, verbose: bool = True, cc_email: str = None):
+    """Same shape as send_report_now(), for a report group (jev workflow
+    Ch.47) -- one combined PDF + one teaser email covering every member
+    domain, instead of one per domain. `member_domains`: [(domain_id,
+    domain_name), ...]. Returns (status, error) with the same meaning as
+    send_report_now()."""
+    from app.web import templates  # local import: avoids a circular import at module load time
+
+    has_reports = any(
+        conn.execute(
+            "SELECT 1 FROM reports WHERE domain_id=? AND date_end BETWEEN ? AND ? LIMIT 1",
+            (did, int(period_start.timestamp()), int(period_end.timestamp())),
+        ).fetchone()
+        for did, _ in member_domains
+    )
+    if not has_reports:
+        _log_group_send(conn, group_id, period_start, period_end, recipient_email, "skipped_no_data", None)
+        if verbose:
+            print(f"[domain_report] {group_name} (group): no data in this period, skipping")
+        return "skipped_no_data", None
+
+    settings = ensure_default_settings(conn)
+    sender_name = settings["report_sender_name"]
+    from_header = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+    reply_to = settings.get("report_reply_to") or None
+    subject = settings["report_subject_template"].replace("{domain}", group_name)
+
+    group_context = _build_group_context(conn, group_id, group_name, recipient_label, member_domains,
+                                          period_start, period_end)
+    html = templates.env.get_template("email_report.html").render(**group_context)
+    text = templates.env.get_template("email_report.txt").render(**group_context)
+
+    from app.pdf_report import render_group_report_pdf
+    pdf_bytes = render_group_report_pdf(conn, [did for did, _ in member_domains], group_name,
+                                         recipient_label, period_start, period_end)
+    attachment = (f"{group_name}-email-report.pdf", pdf_bytes, "application/pdf")
+
+    message_id, err = send_message(sender_domain, api_key, from_header, recipient_email, subject, text, html,
+                                    cc_addr=cc_email, reply_to=reply_to, attachment=attachment)
+    status = "failed" if err else "sent"
+    _log_group_send(conn, group_id, period_start, period_end, recipient_email, status, err)
+    if err:
+        if verbose:
+            print(f"[domain_report] {group_name} (group): send failed -- {err}")
+        return "failed", err
+
+    if mark_sent:
+        conn.execute(
+            "UPDATE domain_report_groups SET last_sent_at=datetime('now'), pdf_intro_shown=1 WHERE id=?",
+            (group_id,),
+        )
+        conn.commit()
+    if verbose:
+        print(f"[domain_report] {group_name} (group): sent to {recipient_email}")
+    return "sent", None
 
 
 def main() -> None:
