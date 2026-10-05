@@ -1267,6 +1267,13 @@
         <a href="/report_groups">Report Groups</a> page. This domain's own settings above are kept but unused
         while it's grouped, so removing it from the group later picks up right where they left off.
       </div>
+      <p class="muted" style="font-size:0.85rem; margin-top:0.6rem">
+        <a href="/report_groups/{{ report_group.id }}/preview" target="_blank" rel="noopener">View as the styled HTML email &rarr;</a>
+        &nbsp;&middot;&nbsp;
+        <a href="/report_groups/{{ report_group.id }}/pdf" target="_blank" rel="noopener">View the combined PDF &rarr;</a>
+        <br>
+        <span style="font-size:0.78rem">Covers every domain in the group, including this one, in one document.</span>
+      </p>
     </div>
     {% else %}
     <div class="section">
