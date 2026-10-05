@@ -340,6 +340,86 @@ def enrich_impersonation_whois(conn, lookback_days: int = 180, max_lookups: int 
         print(f"[impersonation_whois] {done} IP(s) enriched, {len(to_do) - done} still pending")
 
 
+def low_volume_failing_rollup(conn, domain_id: int, domain_name: str, start_epoch: int, end_epoch: int,
+                               min_volume: int) -> list:
+    """Groups this domain's one-off/low-volume FAILING senders (below
+    `min_volume` -- the same floor eligible_known_senders() uses to decide
+    what's worth a DNSBL/WHOIS lookup) by shared sending infrastructure
+    instead of listing them as individually-meaningless rows.
+
+    Built from a real case: catsofkochi.com had 8 failing senders this period,
+    each sent exactly once, each individually reporting "not enough data" --
+    useless on their own. Reverse-DNS showed 6 of them were actually the same
+    thing: Google Cloud generic compute (a teammate's Better Auth integration,
+    never added to SPF). Jev-tested this rollup framing at 96%
+    clear_and_actionable vs. 46% for a raw per-IP PTR line -- the grouping is
+    what makes it a finding instead of noise.
+
+    Returns a list of {"pattern", "kind", "count", "example_ips", "all_spf_fail",
+    "all_dkim_fail"} sorted by count descending. `kind` is "cloud_compute" |
+    "esp" | "ptr_other" | "no_ptr" -- cloud_compute is the one most worth a
+    second look (a known ESP match is usually benign; a PTR match with no
+    recognized pattern or no PTR at all are grouped too, so nothing silently
+    disappears, but they carry a softer framing)."""
+    from app.analysis import _guess_cloud_host, _guess_provider
+
+    rows = conn.execute(
+        """SELECT rr.source_ip, SUM(rr.count) as total,
+                  SUM(CASE WHEN rr.spf_result='fail' THEN rr.count ELSE 0 END) as spf_fail,
+                  SUM(CASE WHEN rr.dkim_result='fail' THEN rr.count ELSE 0 END) as dkim_fail
+           FROM report_records rr JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id=? AND r.date_end >= ? AND r.date_begin <= ?
+           GROUP BY rr.source_ip
+           HAVING SUM(rr.count) < ? AND SUM(CASE WHEN rr.dkim_result='pass' OR rr.spf_result='pass'
+                                                   THEN rr.count ELSE 0 END) = 0""",
+        (domain_id, start_epoch, end_epoch, min_volume),
+    ).fetchall()
+    if not rows:
+        return []
+
+    groups = {}
+    for row in rows:
+        ip, total = row["source_ip"], row["total"]
+        ptr_row = conn.execute(
+            "SELECT ptr_hostname FROM ptr_checks WHERE source_ip=? ORDER BY checked_at DESC LIMIT 1", (ip,)
+        ).fetchone()
+        ptr = ptr_row["ptr_hostname"] if ptr_row else None
+
+        cloud_host = _guess_cloud_host(ptr)
+        esp = _guess_provider(ptr) if not cloud_host else None
+        if cloud_host:
+            kind, pattern = "cloud_compute", cloud_host
+        elif esp:
+            kind, pattern = "esp", esp
+        elif ptr:
+            # Loose fallback: the PTR's last two labels, so e.g. three
+            # different one-off IPs all ending in ".example-host.net" still
+            # cluster together even with no recognized provider pattern.
+            labels = ptr.rstrip(".").split(".")
+            pattern = ".".join(labels[-2:]) if len(labels) >= 2 else ptr
+            kind = "ptr_other"
+        else:
+            # Covers both "genuinely has no PTR record" and "not checked yet"
+            # (recency windows for the rollup vs. the PTR-eligibility sweep
+            # aren't perfectly aligned) -- either way, there's nothing to go
+            # on from reverse-DNS yet, so one honestly-hedged bucket for both.
+            kind, pattern = "no_ptr", "No reverse-DNS record on file"
+
+        key = (kind, pattern)
+        g = groups.setdefault(key, {"pattern": pattern, "kind": kind, "count": 0, "example_ips": [],
+                                     "all_spf_fail": True, "all_dkim_fail": True})
+        g["count"] += total
+        if len(g["example_ips"]) < 3:
+            g["example_ips"].append(ip)
+        g["all_spf_fail"] = g["all_spf_fail"] and (row["spf_fail"] == total)
+        g["all_dkim_fail"] = g["all_dkim_fail"] and (row["dkim_fail"] == total)
+
+    # cloud_compute first (most actionable), then esp, then everything else,
+    # each tier sorted by volume -- so the highest-signal group always leads.
+    kind_rank = {"cloud_compute": 0, "esp": 1, "ptr_other": 2, "no_ptr": 3}
+    return sorted(groups.values(), key=lambda g: (kind_rank[g["kind"]], -g["count"]))
+
+
 def classification_summary(classifications: dict) -> dict:
     """Counts per kind, plus how many sources actually warrant attention --
     which is the whole point: 'forwarded' is not a problem, and lumping it in

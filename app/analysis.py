@@ -390,6 +390,37 @@ def _guess_provider(ptr: str):
     return None
 
 
+# Deliberately separate from _ESP_PTR_PATTERNS above: an ESP match there is
+# usually reassuring ("oh, that's just Mailgun"); a match here means mail is
+# going out directly from raw cloud compute, not through any recognized mail
+# service -- a real app/script sending mail itself, which is exactly the shape
+# a forgotten SPF/DKIM entry (or, less often, a forger) takes. Built from a
+# real case: catsofkochi.com's and captains.ngo's failing one-off senders both
+# resolved to *.bc.googleusercontent.com (Google Cloud generic compute), which
+# turned out to be a teammate's Better Auth integration never added to SPF.
+_CLOUD_COMPUTE_PTR_PATTERNS = (
+    ("bc.googleusercontent.com", "Google Cloud (generic compute)"),
+    ("compute.amazonaws.com", "AWS EC2 (generic compute)"),
+    ("compute-1.amazonaws.com", "AWS EC2 (generic compute)"),
+    ("cloudapp.azure.com", "Azure (generic compute)"),
+    ("digitalocean.com", "DigitalOcean (generic compute)"),
+    ("linode.com", "Linode (generic compute)"),
+    ("hetzner.com", "Hetzner (generic compute)"),
+    ("ovh.net", "OVH (generic compute)"),
+    ("vultr.com", "Vultr (generic compute)"),
+)
+
+
+def _guess_cloud_host(ptr: str):
+    if not ptr:
+        return None
+    lowered = ptr.lower()
+    for pattern, name in _CLOUD_COMPUTE_PTR_PATTERNS:
+        if pattern in lowered:
+            return name
+    return None
+
+
 _WHOIS_ORG_FIELDS = ("orgname:", "organization:", "org-name:", "descr:", "netname:")
 _WHOIS_COUNTRY_FIELDS = ("country:", "country-code:")
 
@@ -1915,6 +1946,29 @@ def eligible_known_senders(conn, settings: dict):
            FROM known_senders ks JOIN domains d ON d.id = ks.domain_id
            WHERE ks.classification != 'ignored'
              AND ks.total_msgs >= ?
+             AND ks.last_seen >= ?""",
+        (min_volume, recent_cutoff),
+    ).fetchall()
+
+
+def low_volume_failing_senders(conn, settings: dict):
+    """known_senders rows BELOW eligible_known_senders' volume floor that have
+    at least one failing message recently -- the exact shape (one-off IP,
+    never reused) real spoofing/misconfiguration takes, which is precisely
+    what that floor excludes from every lookup (PTR/WHOIS/DNSBL) today. Only
+    used to widen PTR checks (cheap, local `dig`, no rate limit) -- NOT
+    blocklist.py's DNSBL checks or WHOIS, both of which stay behind the
+    stricter volume floor since upstream registries/DNSBL providers do
+    rate-limit. See the catsofkochi.com case this was built for: 8 one-off
+    IPs, each sent once, each invisible to every existing check."""
+    min_volume = int(settings["blocklist_min_volume"])
+    recent_cutoff = int(datetime.datetime.utcnow().timestamp()) - int(settings["blocklist_recent_days"]) * 86400
+    return conn.execute(
+        """SELECT DISTINCT ks.source_ip, ks.domain_id, d.name as domain_name
+           FROM known_senders ks JOIN domains d ON d.id = ks.domain_id
+           WHERE ks.classification != 'ignored'
+             AND ks.total_msgs < ?
+             AND ks.fail_msgs > 0
              AND ks.last_seen >= ?""",
         (min_volume, recent_cutoff),
     ).fetchall()

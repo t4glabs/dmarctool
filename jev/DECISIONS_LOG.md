@@ -2373,3 +2373,56 @@ mechanism (one commit per up-to-600s drain) was fixed regardless of today's queu
 once to load the fix, confirmed responsive. `dev_pause_scheduled_sends` was kept PAUSED throughout this
 whole investigation and the restart (see [[dmarctool_dev_pause_discipline]] -- the standing rule from this
 same incident), not resumed.
+
+---
+
+## Chapter 49 — Failing-sender rollup: turning low-volume DMARC noise into a real finding
+
+User asked for more insight on the deliverability side after catsofkochi.com's health score dropped
+50->100 and its pass rate read 14.3% with no way to see why beyond "google.com" (the reporting org, not
+the actual sender). Investigated the real case before building anything.
+
+**Real finding, traced by hand first**: catsofkochi.com had only 7-11 messages in the rolling window --
+at that volume a single message swings the percentage wildly, which is most of why "14%" looked alarming.
+Of the failing messages, every one came from an IP whose reverse-DNS resolves to `*.bc.googleusercontent
+.com` (Google Cloud generic compute), not Gmail/Workspace or any known ESP -- confirmed by direct `dig -x`
+on the real IPs. The user's teammate independently confirmed this: a Better Auth integration deployed on
+Google Cloud was sending its own verification emails as catsofkochi.com, never added to SPF/DKIM. The same
+exact pattern was found live on a second real domain, captains.ngo, while testing.
+
+**Why this was invisible in the tool before**: (1) PTR/WHOIS lookups only ran for senders above a volume
+floor (`eligible_known_senders`, min 50 msgs) -- exactly backwards for this case, since a one-off IP that's
+never reused is the classic shape both spoofing AND an unauthorized integration take. (2) Even where PTR
+data existed, it only lived on a per-IP `/source/{ip}` page -- investigating 8 one-off IPs meant 8 separate
+clicks, each saying "not enough data" on its own, which reads as noise rather than a pattern. (3) The raw
+pass-rate percentage had no low-volume caveat, unlike the health score elsewhere in this tool, which already
+has one.
+
+**Jev-tested the core design choice before building**: a raw per-IP PTR line ("8.235.14.116 -- reverse-DNS:
+...") scored only `clear_but_not_actionable` (46% confidence) under a custom operator-audience context (not
+the NGO-report audience harness, which doesn't apply to internal dashboard copy). The same information
+**grouped by shared infrastructure** ("6 of 8 failing senders this period resolve to Google Cloud generic
+compute, not Gmail/Workspace") scored `clear_and_actionable` at 96%. Grouping, not just surfacing more raw
+data, was the actual fix.
+
+**Shipped**:
+- `low_volume_failing_senders()` (app/analysis.py) + widened `_run_ptr()` (app/compliance.py): one-off/
+  low-volume FAILING senders now get a reverse-DNS lookup too (cheap, local `dig`, no rate limit) --
+  deliberately NOT added to action-item eligibility, since a spoofer's own missing PTR record isn't
+  something the domain owner can fix; this only feeds the rollup below.
+- `_CLOUD_COMPUTE_PTR_PATTERNS` / `_guess_cloud_host()` (app/analysis.py): a new pattern list separate from
+  the existing ESP pattern list, since matching here means "unrecognized infra sending mail directly," the
+  opposite signal from matching a known ESP.
+- `low_volume_failing_rollup()` (app/source_classification.py): groups a domain's low-volume failing
+  senders by cloud-compute match > known-ESP match > loose PTR-suffix match > no-PTR-on-file, sorted by
+  volume, each tier framed differently (cloud-compute reads as the strongest, most actionable signal).
+- New "Where your failing mail is actually coming from" section, domain.html's Senders tab, placed first
+  (ahead of the provider/stream reputation breakdowns, which answer a different question).
+- Low-volume caveat on the pass-rate badge (both the domain page's KPI pill and its own header) and the
+  overview card, reusing the existing `health_score_min_volume` floor rather than inventing a new threshold
+  -- "14.3%" from 7 messages now reads as a flagged, low-confidence number instead of a stark red alarm.
+
+**Verified on real data**: catsofkochi.com and captains.ngo both show the real rollup correctly (6-7
+messages, Google Cloud generic compute, both SPF and DKIM failing). Confirmed zero stray `ptr_issue` action
+items were created from widening PTR eligibility. Full 35-domain portfolio sweep + the overview page: zero
+errors. Service restarted, scheduled sends left on (per explicit instruction this session) throughout.

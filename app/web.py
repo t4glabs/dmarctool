@@ -78,7 +78,9 @@ from app.known_bad import known_bad_map, known_bad_counts
 from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest, _suppression_watermark as _ses_suppression_watermark
 from app.safe_browsing import run_safe_browsing_checks
-from app.source_classification import classify_sources, caught_impersonation, enrich_impersonation_whois
+from app.source_classification import (
+    classify_sources, caught_impersonation, enrich_impersonation_whois, low_volume_failing_rollup,
+)
 from app.source_view import shared_cause_verdict, source_action_guide, source_overview
 from app.mta_sts import run_mta_sts_checks
 from app.report_authorization import latest_report_auth, run_report_auth_checks
@@ -323,6 +325,7 @@ def build_domain_summary(conn, domain_row, settings):
         "window_days": window_days,
         "window_total": window_total,
         "window_rate": window_rate,
+        "window_low_volume": window_total is not None and window_total < int(settings["health_score_min_volume"]),
         "last_ingested": last_ingested,
         "open_counts": open_counts,
         "top_issues": top_issues,
@@ -545,10 +548,16 @@ def domain_detail(request: Request, name: str, flash: str = None):
     # unverified), over the same window the sender table itself shows.
     source_classes = {}
     impersonation_caught = None
+    failing_sender_rollup = []
     if latest_report["latest"]:
         source_classes = classify_sources(
             conn, domain_id, domain["name"],
             latest_report["latest"] - window_days * 86400, latest_report["latest"],
+        )
+        failing_sender_rollup = low_volume_failing_rollup(
+            conn, domain_id, domain["name"],
+            latest_report["latest"] - window_days * 86400, latest_report["latest"],
+            int(settings["blocklist_min_volume"]),
         )
     if latest_report["latest"]:
         window_start = latest_report["latest"] - window_days * 86400
@@ -852,6 +861,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         # refuses on the same condition rather than trusting the template.
         "report_auth": report_auth,
         "source_classes": source_classes,
+        "failing_sender_rollup": failing_sender_rollup,
         "ip_labels": ip_label_map(conn),
         "impersonation_caught": impersonation_caught,
         "lookalikes": lookalikes,
@@ -870,6 +880,11 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "manual_run": {"p": manual_run["p"], "pct": manual_run["pct"], "observed_from": _fmt_date(manual_run["observed_from"])} if manual_run else None,
         "recommendation": {"title": rec_row["title"], "detail": rec_row["detail"]} if rec_row else None,
         "window_days": window_days, "window_total": window_total, "window_rate": window_rate,
+        # Same min-volume floor already used for the health score (catches a
+        # pass rate like "14%" from just ~11 messages, which swings wildly
+        # with each one and isn't a real signal at that volume) -- flags the
+        # badge as low-confidence instead of only quietly fixing the score.
+        "window_low_volume": window_total is not None and window_total < int(settings["health_score_min_volume"]),
         "sparkline_svg": sparkline_svg,
         "disposition_donut_svg": disposition_donut_svg,
         "provider_chart_svg": provider_chart_svg,

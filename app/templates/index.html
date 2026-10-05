@@ -236,7 +236,7 @@
 
       <div class="cc-meta">
         <div class="cm-row"><span>Live DNS</span><span>{% if d.dns_status=='ok' %}<b>p={{ d.dns_p }} · {{ d.dns_pct }}%</b>{% elif d.dns_status=='missing' %}<b style="color:#c0392b;">no record</b>{% elif d.dns_status=='multiple' %}<b style="color:#c0392b;">conflicting</b>{% else %}not checked{% endif %}</span></div>
-        <div class="cm-row"><span>Pass rate ({{ d.window_days }}d)</span><span>{% if d.window_rate is not none %}<b>{{ "%.1f"|format(d.window_rate*100) }}%</b> <span style="opacity:.7">({{ d.window_total }})</span>{% else %}—{% endif %}</span></div>
+        <div class="cm-row"><span>Pass rate ({{ d.window_days }}d)</span><span>{% if d.window_rate is not none %}<b{% if d.window_low_volume %} style="opacity:.6" title="Only {{ d.window_total }} messages this period -- too little volume for this percentage to mean much on its own"{% endif %}>{{ "%.1f"|format(d.window_rate*100) }}%</b> <span style="opacity:.7">({{ d.window_total }})</span>{% else %}—{% endif %}</span></div>
         <div class="cm-row"><span>Last report</span><span>{{ d.last_ingested or "never" }}</span></div>
       </div>
 

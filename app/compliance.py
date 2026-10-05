@@ -27,7 +27,8 @@ import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 from app.analysis import (
-    all_domains, ensure_default_settings, eligible_known_senders, sender_ip_context, upsert_system_action,
+    all_domains, ensure_default_settings, eligible_known_senders, low_volume_failing_senders,
+    sender_ip_context, upsert_system_action,
 )
 from app.db import get_connection, init_db
 
@@ -350,7 +351,21 @@ def run_compliance_checks(conn, verbose: bool = True) -> None:
 def _run_ptr(conn, settings, recheck_hours, verbose):
     senders = eligible_known_senders(conn, settings)
     by_ip = {}
+    action_item_eligible = set()
     for row in senders:
+        by_ip.setdefault(row["source_ip"], []).append((row["domain_id"], row["domain_name"]))
+        action_item_eligible.add(row["source_ip"])
+
+    # One-off/low-volume FAILING senders get PTR-checked too (cheap, local
+    # `dig`, no rate limit) so the failing-sender rollup (source_classification
+    # .py) has identity context to group by -- real spoofing/misconfiguration
+    # looks exactly like "one IP, sent once, never again", which the stricter
+    # volume floor above was built to exclude from budget-sensitive lookups
+    # (DNSBL/WHOIS), not from this cheap one. Deliberately NOT added to
+    # action_item_eligible below: a spoofer's own missing PTR record isn't
+    # something the domain owner can fix, so this only populates the cache for
+    # the rollup to read, it doesn't create a "fix this" action item.
+    for row in low_volume_failing_senders(conn, settings):
         by_ip.setdefault(row["source_ip"], []).append((row["domain_id"], row["domain_name"]))
 
     # An IP with an already-OPEN ptr_issue stays in the recheck set even if it
@@ -364,6 +379,7 @@ def _run_ptr(conn, settings, recheck_hours, verbose):
     ).fetchall()
     for row in open_ptr_issue_ips:
         by_ip.setdefault(row["source_ip"], [])
+        action_item_eligible.add(row["source_ip"])
         if (row["domain_id"], row["domain_name"]) not in by_ip[row["source_ip"]]:
             by_ip[row["source_ip"]].append((row["domain_id"], row["domain_name"]))
 
@@ -381,6 +397,8 @@ def _run_ptr(conn, settings, recheck_hours, verbose):
         )
         if verbose:
             print(f"[PTR] {source_ip} ({', '.join(n for _, n in domains)}): {status} -- {note}")
+        if source_ip not in action_item_eligible:
+            continue
         if status in ("ptr_missing", "mismatch"):
             category_fact = {
                 "not_yours": "It also has a reverse-DNS problem, unsurprising for a spoofing attempt rather than real infrastructure.",
