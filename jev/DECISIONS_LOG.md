@@ -2453,3 +2453,39 @@ keyword.
 real addresses in each file matching what's on the dashboard. Full 35-domain sweep: zero regressions.
 Service restarted, scheduled sends left on throughout (per the user's own earlier instruction), no email
 ever sent during verification.
+
+---
+
+## Chapter 51 — UI audit: sub-grouped Deliverability tab + overview priority sort
+
+User asked for a holistic UI/UX audit of the whole tool and a plan to make it "100% professional" --
+checked the actual templates/navigation rather than guessing, and ran the key structural decision through
+Jev before proposing anything.
+
+**Honest starting point**: the foundation (index.html's "command centre" page, the Ghost-admin-derived
+design system, consistent emoji-coded section headers, inline tooltips via labels.py) was already solid --
+not inventing problems that aren't there. Two real, concrete issues found:
+
+**1. Domain page's "Deliverability & Spam" tab was overloaded** -- 12 section headers back to back with
+no sub-grouping, mixing three unrelated concerns (list-hygiene actions, provider-specific reputation stats,
+newsletter content quality). Jev-tested two fixes under a custom operator-audience context (not the
+NGO-report harness): sub-grouping within one tab + jump nav scored 2.65/3 scannability with 99%
+confidence of LOW navigation overhead; splitting into 3 separate tabs scored a statistically-tied 2.72/3
+but with 96% confidence of HIGH overhead. Shipped the sub-group approach: 3 labeled dividers (List
+hygiene / Provider reputation / Newsletter performance) with anchor IDs, a jump-nav strip at the top linking
+to each, each divider conditionally hidden when its group has no data for that domain (verified: a quiet
+domain like kantha.app correctly shows only "Provider reputation", not two empty dividers).
+
+**2. Overview page's domain grid had no priority order** -- alphabetical only below the existing "worth
+checking across every domain" panel (which only catches specific named problems, not a general ranking).
+Added a client-side sort toggle (Pinned first / Needs attention first / Alphabetical) next to the existing
+search box -- pure DOM reordering of already-rendered cards via new data-health/data-pinned attributes, no
+backend change. Domains with no health score yet sort to the end under "needs attention first" rather than
+being treated as either healthy or urgent.
+
+Verified against all 35 real domains: zero errors, correct conditional divider gating confirmed across a
+random sample, correct data-health population (19 of 35 domains have a real score, 16 don't yet). Service
+restarted, scheduled sends left on throughout, no email sent.
+
+**Not yet done** (flagged, not scoped): a broader audit for other instances of the "google.com shown
+instead of the real sender" kind of ambiguity (Ch.49) elsewhere in the tool.

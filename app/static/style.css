@@ -184,6 +184,20 @@ th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: 
 tr:hover td { background: var(--card-raised); }
 .table-wrap { overflow-x: auto; }
 .section { border: 1px solid var(--border); border-radius: var(--radius); padding: 1.4rem 1.5rem; margin-bottom: 1.2rem; background: var(--card); }
+.jump-nav {
+  display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 1.2rem;
+}
+.jump-nav a {
+  font-size: 0.85rem; font-weight: 600; color: var(--fg); text-decoration: none;
+  padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: var(--card-raised);
+}
+.jump-nav a:hover { border-color: var(--accent); color: var(--accent); }
+.group-divider {
+  font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); margin: 1.6rem 0 0.8rem 0; padding-top: 1.2rem; border-top: 1px solid var(--border);
+  scroll-margin-top: 1rem;
+}
+.group-divider:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .verdict {
   font-size: 0.86rem; font-weight: 600; margin: 0.6rem 0 1rem 0; padding: 0.55rem 0.8rem;
   border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--card-raised);

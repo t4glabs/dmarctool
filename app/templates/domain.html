@@ -807,6 +807,18 @@
 
   <div class="tab-panel" data-tab="deliverability">
 
+    {% set show_hygiene_group = mailgun_suppression_counts or ses_suppression_counts or spam_complaints or bounce_notify_hard_count or bounce_notify_chronic_count or bounce_notify_spam_count or bounce_notify_last or bounce_categories %}
+    {% set show_provider_group = postmaster_stats or postmaster_compliance or mailgun_stats or mailgun_suppression_counts or ses_stats or ses_suppression_counts or ses_account_status or ses_identity %}
+    {% set show_newsletter_group = newsletter_campaigns or mailgun_newsletter_campaigns or (engagement and engagement.total_subscribers > 0) %}
+
+    <div class="jump-nav">
+      {% if show_hygiene_group %}<a href="#hygiene-group">🧹 List hygiene</a>{% endif %}
+      {% if show_provider_group %}<a href="#provider-group">🏢 Provider reputation</a>{% endif %}
+      {% if show_newsletter_group %}<a href="#newsletter-group">📰 Newsletter performance</a>{% endif %}
+    </div>
+
+    {% if show_hygiene_group %}<h3 class="group-divider" id="hygiene-group">🧹 List hygiene</h3>{% endif %}
+
     {% if mailgun_suppression_counts or ses_suppression_counts %}
     <div class="section">
       <h2 class="first">📥 Download suppressions</h2>
@@ -919,6 +931,8 @@
       </div>
     </div>
     {% endif %}
+
+    {% if show_provider_group %}<h3 class="group-divider" id="provider-group">🏢 Provider reputation</h3>{% endif %}
 
     {% if postmaster_stats or postmaster_compliance %}
     <div class="section">
@@ -1141,6 +1155,8 @@
       <div class="sparkline">{{ ses_volume_chart | safe }}</div>
     </div>
     {% endif %}
+
+    {% if show_newsletter_group %}<h3 class="group-divider" id="newsletter-group">📰 Newsletter performance</h3>{% endif %}
 
     {% if newsletter_campaigns %}
     <div class="section">

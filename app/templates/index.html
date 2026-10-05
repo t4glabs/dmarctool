@@ -85,6 +85,8 @@
   .cc-pin.active, .cc-pin:hover { color:var(--cc-accent); }
   .cc-search { display:flex; align-items:center; gap:.4rem; background:var(--cc-card); border:1px solid var(--cc-line); border-radius:10px; padding:.4rem .7rem; }
   .cc-search input { border:0; outline:0; background:transparent; font-family:var(--cc-serif); font-size:.95rem; min-width:220px; color:var(--cc-ink); }
+  .cc-sort { font-family:var(--cc-serif); font-size:.9rem; color:var(--cc-ink); background:var(--cc-card);
+             border:1px solid var(--cc-line); border-radius:10px; padding:.45rem .6rem; }
   .cc-addform { display:flex; gap:.4rem; }
   .cc-addform input { border:1px solid var(--cc-line); border-radius:9px; padding:.45rem .6rem; font-family:var(--cc-serif); }
   .cc-addform button { font-family:var(--cc-display); font-weight:600; background:var(--cc-ink); color:#fff; border:0; border-radius:9px; padding:.45rem .8rem; cursor:pointer; }
@@ -206,6 +208,11 @@
     <h2>Domains</h2>
     <div style="display:flex; gap:.6rem; flex-wrap:wrap; align-items:center;">
       <div class="cc-search">🔍<input type="search" id="domain-search" placeholder="Search domains..." autocomplete="off" aria-label="Search domains"><span class="muted" id="domain-filter-count" role="status" aria-live="polite" style="font-size:.8rem;"></span></div>
+      <select id="domain-sort" class="cc-sort" aria-label="Sort domains" title="How to order the cards below">
+        <option value="pinned">Pinned first</option>
+        <option value="health">Needs attention first</option>
+        <option value="name">Alphabetical</option>
+      </select>
       <form action="/domains/add" method="post" class="cc-addform">
         <input type="text" name="name" placeholder="example.org" required autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Domain to track">
         <button type="submit">+ Track</button>
@@ -217,7 +224,9 @@
     {% for d in domains %}
     {% set has_issues = d.open_counts and d.open_counts.values()|sum > 0 %}
     {% set dns_bad = d.dns_status in ('missing','multiple') or (d.dns_status=='ok' and not d.dns_match) %}
-    <div class="cc-card{{ ' pinned' if d.pinned else '' }}" data-domain="{{ d.name }}">
+    <div class="cc-card{{ ' pinned' if d.pinned else '' }}" data-domain="{{ d.name }}"
+         data-pinned="{{ '1' if d.pinned else '0' }}"
+         data-health="{{ d.health_score if d.health_score is not none else '' }}">
       <div class="cc-eyebrow">
         <span>Domain</span>
         <form class="inline pin-form" action="/domain/{{ d.name }}/pin" method="post">
@@ -283,6 +292,50 @@
   input.addEventListener('input', apply);
   input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; apply(); } });
   apply();
+})();
+
+(function () {
+  // Client-side only -- every card already carries data-pinned/data-health/
+  // data-domain, so re-sorting is just reordering existing DOM nodes, no
+  // reload and no backend change. "Needs attention first" puts the lowest
+  // health score at the top (worst domains surface without scanning all 35
+  // alphabetically) and pushes domains with no score yet (nothing to act on)
+  // to the very end rather than treating "no data" as "healthy" or "bad".
+  var select = document.getElementById('domain-sort');
+  var grid = document.getElementById('domain-grid');
+  if (!select || !grid) return;
+  var cards = Array.prototype.slice.call(grid.querySelectorAll('[data-domain]'));
+  var empty = document.getElementById('domain-filter-empty');
+
+  function sortedCards(mode) {
+    var withHealth = cards.map(function (c) {
+      return { el: c, pinned: c.getAttribute('data-pinned') === '1',
+               health: c.getAttribute('data-health'), name: c.getAttribute('data-domain') };
+    });
+    if (mode === 'health') {
+      withHealth.sort(function (a, b) {
+        var ah = a.health === '' ? null : parseFloat(a.health);
+        var bh = b.health === '' ? null : parseFloat(b.health);
+        if (ah === null && bh === null) return a.name.localeCompare(b.name);
+        if (ah === null) return 1;
+        if (bh === null) return -1;
+        return ah - bh;
+      });
+    } else if (mode === 'name') {
+      withHealth.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    } else {
+      withHealth.sort(function (a, b) {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
+    return withHealth.map(function (x) { return x.el; });
+  }
+
+  select.addEventListener('change', function () {
+    sortedCards(select.value).forEach(function (el) { grid.appendChild(el); });
+    if (empty) grid.appendChild(empty);
+  });
 })();
 </script>
 {% endblock %}
