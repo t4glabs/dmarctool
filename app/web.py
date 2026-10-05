@@ -768,6 +768,32 @@ def domain_detail(request: Request, name: str, flash: str = None):
         (domain_id,),
     ):
         ses_bounce_type_counts.setdefault(row["configuration_set"], {})[row["bounce_type"] or "Undetermined"] = row["n"]
+
+    # Actual complaint-flagged addresses, not just a count -- AWS's own
+    # console used to show this directly under a sending identity's reputation
+    # tab (SES VDM); that view no longer surfaces it per-identity, only under
+    # a configuration set with no address-level detail, which is why this is
+    # now the only place to see "who exactly complained and when" without
+    # digging through raw SQS-drained events by hand. Mailgun's own complaints
+    # included too, same union the full suppressions.csv export already does.
+    spam_complaints = sorted(
+        [{"source": "SES", "source_domain": r["configuration_set"], "email": _clean_email(r["email"]),
+          "reason": r["reason"], "first_seen_at": r["first_seen_at"], "last_seen_at": r["last_seen_at"]}
+         for r in conn.execute(
+            """SELECT configuration_set, email, reason, first_seen_at, last_seen_at
+               FROM ses_suppressions WHERE domain_id=? AND kind='complaint'""",
+            (domain_id,),
+        )] +
+        [{"source": "Mailgun", "source_domain": r["mailgun_domain"], "email": _clean_email(r["email"]),
+          "reason": r["reason"], "first_seen_at": r["first_seen_at"], "last_seen_at": r["last_checked_at"]}
+         for r in conn.execute(
+            """SELECT mailgun_domain, email, reason, first_seen_at, last_checked_at
+               FROM mailgun_suppressions WHERE domain_id=? AND kind='complaint'""",
+            (domain_id,),
+        )],
+        key=lambda r: r["last_seen_at"], reverse=True,
+    )
+
     ses_series = ses_daily_series(conn, domain_id, days=60)
     ses_bounce_series = [(r["day"], r["bounce_num"], r["bounce_den"]) for r in ses_series]
     ses_complaint_series = [(r["day"], r["complaint_num"], r["complaint_den"]) for r in ses_series]
@@ -910,6 +936,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_window_days": ses_window_days,
         "ses_suppression_counts": ses_suppression_counts,
         "ses_bounce_type_counts": ses_bounce_type_counts,
+        "spam_complaints": spam_complaints,
         "ses_bounce_chart_svg": ses_bounce_chart_svg,
         "ses_complaint_chart_svg": ses_complaint_chart_svg,
         "ses_bounce_summary": ses_bounce_summary,
@@ -995,6 +1022,48 @@ def download_suppressions(name: str):
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{name}_suppressions.csv"'},
+    )
+
+
+@app.get("/domain/{name}/spam_complaints.csv")
+def download_spam_complaints(name: str):
+    """Complaint-only export -- the full suppressions.csv above mixes these
+    in with bounces, which is fine for a Listmonk cleanup pass but not for
+    "did anything else get reported as spam besides what I already found."
+    AWS's own console used to show complained addresses directly under a
+    sending identity's reputation tab (SES VDM); that view no longer exposes
+    them per-identity, only an aggregate count under a configuration set --
+    this is the replacement."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    domain_id = domain["id"]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["source", "source_domain", "email", "reason", "first_seen", "last_seen"])
+
+    for r in conn.execute(
+        """SELECT mailgun_domain, email, reason, first_seen_at, last_checked_at
+           FROM mailgun_suppressions WHERE domain_id=? AND kind='complaint' ORDER BY last_checked_at DESC""",
+        (domain_id,),
+    ):
+        writer.writerow(["mailgun", r["mailgun_domain"], _clean_email(r["email"]), r["reason"] or "",
+                          r["first_seen_at"], r["last_checked_at"]])
+
+    for r in conn.execute(
+        """SELECT configuration_set, email, reason, first_seen_at, last_seen_at
+           FROM ses_suppressions WHERE domain_id=? AND kind='complaint' ORDER BY last_seen_at DESC""",
+        (domain_id,),
+    ):
+        writer.writerow(["ses", r["configuration_set"], _clean_email(r["email"]), r["reason"] or "",
+                          r["first_seen_at"], r["last_seen_at"]])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}_spam_complaints.csv"'},
     )
 
 

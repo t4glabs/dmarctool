@@ -826,6 +826,37 @@
     </div>
     {% endif %}
 
+    {% if spam_complaints %}
+    <div class="section">
+      <h2 class="first">🚩 Spam complaints ({{ spam_complaints|length }})</h2>
+      <p class="muted" style="margin-top:0">
+        Every address that has marked mail from this domain as spam, oldest and newest time it happened --
+        this is the full list, so if you've found some by hand, this is how to check whether there are any
+        others. AWS's own console used to show these directly under a sending identity; it now only shows a
+        count per configuration set with no address-level detail, so this is the replacement.
+      </p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Email</th><th>Source</th><th>Reason</th><th>First reported</th><th>Last reported</th></tr>
+        {% for c in spam_complaints %}
+        <tr>
+          <td>{{ c.email }}</td>
+          <td class="muted">{{ c.source }} ({{ c.source_domain }})</td>
+          <td class="muted">{{ c.reason or "" }}</td>
+          <td class="muted">{{ c.first_seen_at }}</td>
+          <td class="muted">{{ c.last_seen_at }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      <div class="formrow" style="margin-top:0.6rem;">
+        <a href="/domain/{{ domain.name }}/spam_complaints.csv">
+          <button type="button" class="small">⬇️ Download spam complaints only</button>
+        </a>
+      </div>
+    </div>
+    {% endif %}
+
     {% if bounce_notify_hard_count or bounce_notify_chronic_count or bounce_notify_last %}
     <div class="section">
       <h2 class="first">📧 Notify client about list cleanup</h2>
