@@ -857,27 +857,28 @@
     </div>
     {% endif %}
 
-    {% if bounce_notify_hard_count or bounce_notify_chronic_count or bounce_notify_last %}
+    {% if bounce_notify_hard_count or bounce_notify_chronic_count or bounce_notify_spam_count or bounce_notify_last %}
     <div class="section">
       <h2 class="first">📧 Notify client about list cleanup</h2>
       <p class="muted" style="margin-top:0">
         Instead of downloading a CSV and emailing it yourself: sends the same "please remove these addresses"
-        email straight from aikyam, to the recipient/cc configured under Email Updates, with the confirmed-dead
-        and likely-dead addresses attached as two separate files -- reply-to is jinso@aikyamfellows.org.
+        email straight from aikyam, to the recipient/cc configured under Email Updates, with the spam
+        complaints, confirmed-dead, and likely-dead addresses attached as separate files -- reply-to is
+        jinso@aikyamfellows.org.
       </p>
       {% if bounce_notify_last %}
       <p class="muted" style="margin-top:0;font-size:0.85rem;">
         Last notified: {{ bounce_notify_last.sent_at }}
         {% if bounce_notify_last.status == 'sent' %}
-        ({{ bounce_notify_last.hard_bounce_count }} confirmed + {{ bounce_notify_last.chronic_count }} likely, to {{ bounce_notify_last.recipient_email }})
+        ({{ bounce_notify_last.spam_complaint_count or 0 }} spam + {{ bounce_notify_last.hard_bounce_count }} confirmed + {{ bounce_notify_last.chronic_count }} likely, to {{ bounce_notify_last.recipient_email }})
         {% else %}
         -- <span style="color:var(--bad)">failed: {{ bounce_notify_last.error_message }}</span>
         {% endif %}
       </p>
       {% endif %}
-      {% if bounce_notify_hard_count or bounce_notify_chronic_count %}
+      {% if bounce_notify_hard_count or bounce_notify_chronic_count or bounce_notify_spam_count %}
       <form class="inline" action="/domain/{{ domain.name }}/notify_bounce_cleanup" method="post" onsubmit="return confirm('Send a cleanup email to {{ report_settings.recipient_email if report_settings else "the configured recipient" }} now?');">
-        <button type="submit">📧 Notify client ({{ bounce_notify_hard_count }} confirmed{% if bounce_notify_chronic_count %} + {{ bounce_notify_chronic_count }} likely{% endif %})</button>
+        <button type="submit">📧 Notify client ({% if bounce_notify_spam_count %}{{ bounce_notify_spam_count }} spam + {% endif %}{{ bounce_notify_hard_count }} confirmed{% if bounce_notify_chronic_count %} + {{ bounce_notify_chronic_count }} likely{% endif %})</button>
       </form>
       {% if not report_settings or not report_settings.recipient_email %}
       <p class="muted" style="font-size:0.85rem;">Save a recipient email under "Email Updates" first.</p>

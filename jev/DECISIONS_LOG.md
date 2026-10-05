@@ -2426,3 +2426,30 @@ data, was the actual fix.
 messages, Google Cloud generic compute, both SPF and DKIM failing). Confirmed zero stray `ptr_issue` action
 items were created from widening PTR eligibility. Full 35-domain portfolio sweep + the overview page: zero
 errors. Service restarted, scheduled sends left on (per explicit instruction this session) throughout.
+
+---
+
+## Chapter 50 — Spam complaints join the client "list cleanup" notify email
+
+Direct follow-up to Ch.49's new spam-complaints view: user asked whether that data should also go into the
+existing bounce-cleanup notify email sent to domain owners (app/bounce_notify.py), not just live on the
+dashboard.
+
+**Shipped**: spam complaints are now a third category in that email, alongside the existing confirmed-dead
+and likely-dead files -- `spam-complaints.csv`, scoped to what's new since the last notification (same
+watermark the hard-bounce category already uses). Framed with the SAME confidence as hard bounces (no
+hedging -- the provider told us directly), and listed FIRST since it's arguably more urgent: a dead address
+just wastes send effort, but an unaddressed complaint actively damages reputation with every other provider
+watching this domain, every day it's left on the list. The existing Jev-validated hard/chronic wording
+(Ch.40) is left completely unchanged; only the surrounding scaffolding (intro paragraphs, file count,
+numbering) was generalized to handle 1-3 present categories instead of a fixed 2.
+
+New `bounce_notification_sends.spam_complaint_count` column (additive migration). `pending_notify_counts()`
+and `build_notification()` both return a 3rd value now; `record_notification_sent()` takes a `spam_count`
+keyword.
+
+**Verified on real data**: aikyamjobs.org currently has 2 pending spam complaints + 10 confirmed bounces +
+29 chronic -- generated the real 3-file email body and all three CSVs, read correctly, numbered correctly,
+real addresses in each file matching what's on the dashboard. Full 35-domain sweep: zero regressions.
+Service restarted, scheduled sends left on throughout (per the user's own earlier instruction), no email
+ever sent during verification.

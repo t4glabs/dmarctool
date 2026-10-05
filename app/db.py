@@ -97,6 +97,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         # registries omit it, and "looked up, none found" is a valid answer.
         "country": "TEXT",
     })
+    _ensure_columns(conn, "bounce_notification_sends", {
+        # A third category alongside hard/chronic bounces in the same
+        # "notify client to clean their list" email -- addresses that
+        # marked this domain's mail as spam. Reuses this table's existing
+        # watermark (bounce_notification_sends.sent_at) rather than a
+        # separate one, so there's one shared "since we last notified this
+        # domain" cutoff across all three categories, not three.
+        "spam_complaint_count": "INTEGER NOT NULL DEFAULT 0",
+    })
     _ensure_columns(conn, "domain_health_snapshots", {
         # Real newsletter engagement (unique click rate), added to the health
         # score's weighted formula 2026-09-24 (jev workflow Chapter 16) -- the

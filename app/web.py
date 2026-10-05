@@ -832,7 +832,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
             "count": len(chronic_transient), "chronic": True,
             "download_url_full": f"/domain/{name}/chronic_transient.csv",
         })
-    bounce_notify_hard_count, bounce_notify_chronic_count = pending_notify_counts(
+    bounce_notify_hard_count, bounce_notify_chronic_count, bounce_notify_spam_count = pending_notify_counts(
         conn, domain_id, int(settings["chronic_transient_min_occurrences"]), int(settings["chronic_transient_min_days"]))
     bounce_notify_last = last_notification(conn, domain_id)
 
@@ -950,6 +950,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "bounce_categories": bounce_categories,
         "bounce_notify_hard_count": bounce_notify_hard_count,
         "bounce_notify_chronic_count": bounce_notify_chronic_count,
+        "bounce_notify_spam_count": bounce_notify_spam_count,
         "bounce_notify_last": bounce_notify_last,
         "display_names": display_names,
         "cadence": cadence,
@@ -1593,7 +1594,7 @@ def notify_bounce_cleanup(name: str):
                                 signoff_name=settings["report_signoff_name"])
     if built is None:
         return RedirectResponse(f"/domain/{name}?flash=Nothing new to notify about right now.#deliverability", status_code=303)
-    subject, text_body, attachments, hard_count, chronic_count = built
+    subject, text_body, attachments, hard_count, chronic_count, spam_count = built
 
     status, err = _send_manual_notification(settings_row, settings, subject, text_body, attachment=attachments)
     if status == "missing_secrets":
@@ -1601,11 +1602,12 @@ def notify_bounce_cleanup(name: str):
             f"/domain/{name}?flash=Missing REPORT_SENDER_EMAIL/REPORT_SENDER_MAILGUN_DOMAIN/MAILGUN_SEND_API_KEY in secrets.env.#deliverability",
             status_code=303,
         )
-    record_notification_sent(conn, domain_id, settings_row["recipient_email"], hard_count, chronic_count, status, err)
+    record_notification_sent(conn, domain_id, settings_row["recipient_email"], hard_count, chronic_count, status, err,
+                              spam_count=spam_count)
     if err:
         flash = f"Notification failed: {err}"
     else:
-        flash = f"Notified {settings_row['recipient_email']} ({hard_count} + {chronic_count} addresses)."
+        flash = f"Notified {settings_row['recipient_email']} ({spam_count} spam + {hard_count} confirmed + {chronic_count} likely)."
     return RedirectResponse(f"/domain/{name}?flash={flash}#deliverability", status_code=303)
 
 
