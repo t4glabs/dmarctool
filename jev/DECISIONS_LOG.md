@@ -2514,3 +2514,44 @@ Service restarted, scheduled sends left on, no email sent.
 
 Not forcing further findings where the evidence doesn't support them -- this was a genuinely clean pass
 with one real bug, not a dozen invented ones.
+
+---
+
+## Chapter 53 — Self-authentication was the missing signal in guess_sender_identity()
+
+User flagged a real action item ("Investigate failing sender 35.174.145.124, Labeled as: Not yet
+identified, PTR: us.cloud-sec-av.com") and had independently found an external article identifying
+cloud-sec-av.com as Check Point Harmony Email Security (formerly Avanan) -- a recipient-side scanner that
+commonly shows up failing in DMARC reports as a benign side-effect, nothing to fix on the sender's end.
+
+**Root cause, confirmed by reading the actual code**: `source_classification.py`'s `classify_sources()`
+had ALREADY correctly identified this exact IP as "forwarded" (a valid signature for aikyamjobs.org exists
+on some of its messages) using the real per-record auth evidence. But `analysis.py`'s
+`guess_sender_identity()` -- the function that actually builds the action item's headline/summary/action
+text -- never checked for a self-signature at all: its `auth_domains` check explicitly excluded
+`domain_name` itself (`if d != domain_name`), since its original purpose was "what OTHER identity might
+this IP have." A source that authenticates as yourself sometimes but not always fell straight through to
+the much weaker "possibly related to another domain you track" cross-domain-pool hedge -- the two
+classification engines looked at overlapping evidence and gave contradictory answers, and only the weaker
+one was wired into the action item.
+
+**Fix**: added a self-authentication check to `guess_sender_identity()`, ranked right after the
+human-flagged-suspicious check and ahead of every other-domain/cross-domain-pool signal. Also added a new
+third PTR pattern category, `_SECURITY_GATEWAY_PTR_PATTERNS` (Check Point Harmony/Avanan, Mimecast,
+Proofpoint, Cisco Secure Email, Barracuda -- each hostname independently verified against technical
+sources, not guessed), alongside the existing ESP and cloud-compute pattern lists. When both signals are
+present, the guidance names the actual gateway and gives a confident "no action needed, never add this to
+SPF" answer; with only one or neither, it still gives the best available answer rather than silence.
+
+**Verified**: the exact flagged case now reads "✅ Your own mail, rescanned by Check Point Harmony Email
+Security (Avanan)... No action needed." Also found the fix correctly surfaces several OTHER real
+forwarder-pattern senders across the portfolio that were getting the same vague hedge (pattic.org has its
+own dual-DKIM-signing-via-SES pattern that sometimes breaks alignment) -- confirmed against the real
+underlying `record_auth_results` data, not just trusting the new code. Full 36-domain sweep: zero
+regressions, and spot-checked that genuinely suspicious/not-yours IPs elsewhere in the portfolio were
+NOT softened by the new branch. Service restarted, scheduled sends left on throughout.
+
+This was flagged by the user as part of a much larger complaint: investigating a failing sender currently
+requires understanding two overlapping, sometimes-disagreeing classification systems, cross-domain
+correlation noise, and no clear priority model -- "what am I even supposed to do." That broader redesign
+is a separate, larger initiative, tracked next.

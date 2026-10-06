@@ -300,6 +300,17 @@ def _passing_auth_domains(conn, domain_id: int, source_ip: str) -> dict:
     return by_domain
 
 
+def _is_own_domain(candidate: str, domain_name: str) -> bool:
+    """Whether a signature domain counts as this domain's own -- the domain
+    itself, or a subdomain of it. Same logic as source_classification.py's
+    _is_own(), duplicated rather than cross-imported since that function is
+    private to its own module and the two modules otherwise have no
+    dependency on each other."""
+    c = (candidate or "").strip().lower().rstrip(".")
+    own = domain_name.strip().lower().rstrip(".")
+    return bool(c) and (c == own or c.endswith("." + own) or own.endswith("." + c))
+
+
 def _identity_message_share(conn, domain_id: int, source_ip: str, auth_domain: str) -> float:
     """What fraction of this source's mail for this domain actually carries a
     valid signature for `auth_domain`.
@@ -416,6 +427,40 @@ def _guess_cloud_host(ptr: str):
         return None
     lowered = ptr.lower()
     for pattern, name in _CLOUD_COMPUTE_PTR_PATTERNS:
+        if pattern in lowered:
+            return name
+    return None
+
+
+# A third, distinct category from the two above: these are RECIPIENT-side
+# email security gateways (Check Point Harmony/Avanan, Mimecast, Proofpoint,
+# Cisco Secure Email, Barracuda). You don't have to use any of these yourself
+# for one to show up failing in your own DMARC reports -- a recipient's own
+# organization routes YOUR mail through their scanner before final delivery,
+# which re-injects the message from a different IP and can break SPF/DKIM
+# along the way, even though DMARC already passed at the real point of
+# delivery. This is the single most common "scary-looking but actually
+# benign" DMARC failure pattern and has nothing to do with your own sending
+# setup -- never add these to your SPF record, they aren't your
+# infrastructure. Every hostname below independently confirmed (not
+# guessed): cloud-sec-av.com from a real user-found case (Check Point
+# Harmony), the rest cross-checked against independent technical sources
+# before shipping, same discipline as _ESP_PTR_PATTERNS.
+_SECURITY_GATEWAY_PTR_PATTERNS = (
+    ("cloud-sec-av.com", "Check Point Harmony Email Security (Avanan)"),
+    ("mimecast.com", "Mimecast"),
+    ("pphosted.com", "Proofpoint"),
+    ("ppe-hosted.com", "Proofpoint"),
+    ("iphmx.com", "Cisco Secure Email (IronPort)"),
+    ("barracudanetworks.com", "Barracuda Email Security Gateway"),
+)
+
+
+def _guess_security_gateway(ptr: str):
+    if not ptr:
+        return None
+    lowered = ptr.lower()
+    for pattern, name in _SECURITY_GATEWAY_PTR_PATTERNS:
         if pattern in lowered:
             return name
     return None
@@ -582,22 +627,38 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
          "suspicious" while reviewing a different domain -- checked before
          everything else below, since a deliberate human judgment call
          outranks even cryptographic authentication.
-      1. Which domain(s) it actually authenticates as, from the DMARC
-         report's own SPF/DKIM results -- cryptographic proof for this exact
-         message, the most trustworthy signal available.
-      2. Whether this exact IP is already labeled for a different domain in
+      1. Whether it carries a valid signature for THIS domain itself on at
+         least some of its messages -- the strongest possible reassurance:
+         cryptographic proof this really is (or was) this domain's own mail,
+         not a guess about intent. Previously missing entirely: the auth-
+         domains check below explicitly excluded the domain's own name, so a
+         source that authenticates as yourself sometimes but not always (a
+         forwarder, mailing list, or recipient-side security scanner that
+         altered the message in transit) fell all the way through to the
+         much weaker cross-domain-pool hedge, producing a vague "possibly
+         related" verdict for something source_classification.py's
+         classify_sources() had already confidently identified as
+         "forwarded" from the same evidence. Fixed by checking this first.
+      2. Which OTHER domain(s) it authenticates as, from the DMARC report's
+         own SPF/DKIM results -- cryptographic proof for this exact message,
+         still a strong signal, just not about this domain specifically.
+      3. Whether this exact IP is already labeled for a different domain in
          your own portfolio. Weaker than it sounds: ESPs like Mailgun/
          SendGrid commonly run *shared* sending IP pools reused across many
          unrelated customer accounts (no dedicated IP purchased), so the same
          physical IP can legitimately authenticate as completely different,
          unrelated domains for different customers at different times. If
-         this disagrees with #1, that disagreement itself is the useful
+         this disagrees with #2, that disagreement itself is the useful
          finding -- it means "shared pool", not "these domains are related".
-      3. The sending provider name, parsed from reverse DNS (a specific,
-         named ESP -- Mailgun, SES, etc.) -- or failing that, the network's
-         registered owner via WHOIS (a much vaguer signal: "Google LLC" or
-         "Amazon Technologies Inc." just means *some* customer's app is
-         running on that cloud, not which one -- worded accordingly below).
+      4. The sending provider name, parsed from reverse DNS -- a specific,
+         named ESP (Mailgun, SES, etc.) or a recipient-side security gateway
+         (Mimecast, Proofpoint, Check Point Harmony, etc. -- see
+         _SECURITY_GATEWAY_PTR_PATTERNS, a well-known "scary-looking but
+         benign" DMARC failure category that has nothing to do with your own
+         sending setup) -- or failing that, the network's registered owner
+         via WHOIS (a much vaguer signal: "Google LLC" or "Amazon
+         Technologies Inc." just means *some* customer's app is running on
+         that cloud, not which one -- worded accordingly below).
     Returns a dict {"verdict", "icon", "headline", "summary", "action"} --
     verdict-first and structured, rather than one dense hedging paragraph, so
     every caller (the Known Senders table's popover, and sender_ip_context()
@@ -622,8 +683,11 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
     if ptr is None and not skip_lookup:
         ptr = _reverse_dns(source_ip)
     provider = _guess_provider(ptr)
+    gateway = _guess_security_gateway(ptr)
+    passing = _passing_auth_domains(conn, domain_id, source_ip)
+    self_signed = any(_is_own_domain(d, domain_name) for d in passing)
     auth_domains = {
-        d for d in _passing_auth_domains(conn, domain_id, source_ip)
+        d for d in passing
         if d != domain_name and d not in _ESP_DEFAULT_AUTH_DOMAINS
     }
     cross_domain = _cross_domain_labels(conn, source_ip, domain_id)
@@ -646,6 +710,54 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
                         f"worth treating this with real caution here too, even if it also authenticates as "
                         f"something else."),
             "action": "Consider marking this sender suspicious here as well, and keep an eye on where else this IP shows up.",
+        }
+
+    # This exact source has a cryptographically valid signature for THIS
+    # domain on at least some of its messages -- the signature of mail that
+    # genuinely started out as yours and got altered enough in transit (by a
+    # forwarder, mailing list, or a recipient's own security scanner) to fail
+    # DMARC on the way, not someone forging you. Checked ahead of every
+    # weaker signal below, matching classify_sources()'s "forwarded" verdict,
+    # which is computed from the same evidence.
+    if self_signed:
+        if gateway:
+            return {
+                "verdict": "legitimate",
+                "icon": "✅",
+                "headline": f"Your own mail, rescanned by {gateway}",
+                "summary": (f"Its reverse-DNS name identifies it as {gateway}, a recipient-side email security "
+                            f"gateway -- some of your recipients route incoming mail through it for scanning "
+                            f"before final delivery. It carries a valid signature for {domain_name} on some of "
+                            f"its messages, confirming this really is your own mail, just reprocessed on the way "
+                            f"in. DMARC already passed at the real point of delivery; what you're seeing here is "
+                            f"a downstream processing artifact, not an attack."),
+                "action": "No action needed. Never add this to your SPF record -- it isn't your sending infrastructure.",
+            }
+        return {
+            "verdict": "legitimate",
+            "icon": "✅",
+            "headline": "Your own mail, altered somewhere in transit",
+            "summary": (f"It carries a valid signature for {domain_name} on some of its messages but not all -- "
+                        f"that is what a relay or forwarder looks like (a mailing list, an auto-forward rule, a "
+                        f"spam filter or security scanner that rewrites mail), not someone pretending to be you."),
+            "action": "No action needed -- there is nothing to fix at your end for mail that started out as genuinely yours.",
+        }
+
+    # No self-signature at all, but the infrastructure is still recognizable
+    # as a well-known recipient-side security gateway -- weaker than the
+    # self_signed case above (no cryptographic proof this specific mail was
+    # ever yours), but still a much more confident, specific answer than the
+    # generic cross-domain-pool hedge further down.
+    if gateway and not auth_domains:
+        return {
+            "verdict": "maybe",
+            "icon": "✅",
+            "headline": f"Likely recipient-side scanning ({gateway})",
+            "summary": (f"Its reverse-DNS name identifies it as {gateway}, a recipient-side email security "
+                        f"gateway. These commonly show up failing in DMARC reports when a recipient's own "
+                        f"organization routes your mail through it before delivery -- it has nothing to do with "
+                        f"your own sending setup."),
+            "action": "No action needed, and don't add this to your SPF record -- it isn't your infrastructure.",
         }
 
     if auth_domains and cross_domain_names and not (auth_domains & cross_domain_names):
