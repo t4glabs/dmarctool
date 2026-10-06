@@ -180,6 +180,30 @@
         {% if overview.stale %}<div class="cc-secrow"><span class="csr-lbl" title="No fresh DMARC reports in a while">No fresh reports</span><span>{% for name in overview.stale %}<a href="/domain/{{ name }}" class="cc-badge-muted">{{ name }}</a>{% endfor %}</span></div>{% endif %}
       </div>
       {% endif %}
+
+      {# Cross-domain sender triage -- the sender-level counterpart to the
+         domain-level panel above. A sending source that looks ambiguous on
+         one domain page is often the same source doing the same thing on
+         several of them at once; this is the one place that says so without
+         having to open every domain to find it. #}
+      {% if senders_needing_attention %}
+      <div class="cc-panel">
+        <h2>📡 Senders needing a decision</h2>
+        <p class="cc-sub" style="font-size:.85rem; margin:-.3rem 0 .8rem;">
+          Across every domain, every sending source still waiting on a human call -- already filtered down
+          from "failing somewhere" to "actually needs you," ranked so the one fix that clears the most
+          domains at once comes first.
+        </p>
+        {% for s in senders_needing_attention %}
+        <div class="cc-secrow">
+          <span class="csr-lbl" title="{{ s.summary }}">
+            <a href="/source/{{ s.source_ip }}" class="{{ 'cc-badge-bad' if s.verdict == 'flagged' else ('cc-badge-warn' if s.verdict == 'maybe' else 'cc-badge-muted') }}">{{ s.source_ip }}</a>
+          </span>
+          <span>{{ s.headline }}{% if s.failing_domain_count > 1 %} &middot; failing on {{ s.failing_domain_count }} domains{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
     </div>
 
     {# ---- ACTIVITY RAIL ---- #}

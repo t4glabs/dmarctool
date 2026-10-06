@@ -2555,3 +2555,53 @@ This was flagged by the user as part of a much larger complaint: investigating a
 requires understanding two overlapping, sometimes-disagreeing classification systems, cross-domain
 correlation noise, and no clear priority model -- "what am I even supposed to do." That broader redesign
 is a separate, larger initiative, tracked next.
+
+---
+
+## Chapter 54 — Sender investigation: four targeted fixes, not a rewrite
+
+Follow-up to Ch.53. User's real complaint was broader than the one flagged action item: *"what IP, what
+if some other project of mine also uses that IP... what am I even supposed to do... UI requires a major
+major major rewriting and rewamp and complete redesign."* Entered Plan Mode given the scope of that ask.
+
+**Investigated before proposing a rewrite -- found the decision-support logic was already good.**
+`app/source_view.py`'s `source_action_guide()` + `shared_cause_verdict()` is a genuinely thorough
+"what is this, what do I do" tree (recognize/don't-recognize fork, a checklist, cross-domain corroboration)
+that already does exactly what the module's own docstring says it was built for. That didn't need
+rebuilding. Four narrower, real gaps did:
+
+1. **The action item itself had no link to `/source/{ip}`** -- the richer guide existed, nothing routed a
+   reader to it. Fixed in `domain.html`'s action-item card + a new `linked_title`/`is_ip_item` pair in
+   `web.py`'s `_with_verdict()`. Hit a real MarkupSafe gotcha building this: `title | e | replace(...) |
+   safe` silently double-escapes the replacement HTML (`Markup.replace()` re-escapes its argument) --
+   fixed by building the linked title in plain Python with `html.escape()` instead of chaining Jinja
+   filters.
+2. **A reassurance-text bug Ch.53's own fix exposed**: the canned sentence for `(failure_investigation,
+   "legitimate")` said "different identity," which was wrong for the two new self-signed-forwarding
+   branches Ch.53 added (same verdict, opposite reason). Fixed by deriving the reassurance from the real
+   `guess["headline"]`/`["summary"]` for the two categories with a per-item guess, instead of a static
+   dict that can drift out of sync as verdict branches get added.
+3. **Found a second instance of the SAME bug class while fixing #2**: `_with_verdict()`'s live
+   recomputation of `guess_sender_identity()` never passed the cached PTR hostname, so it silently
+   couldn't recognise the gateway/ESP/cloud-host pattern on this path even after Ch.53 -- verified by
+   re-rendering the exact flagged case and seeing it fall back to the weaker non-gateway branch. Fixed by
+   reading `ptr_checks` (cache only, no live DNS call -- this is a page render) before calling
+   `guess_sender_identity()`, same pattern the Known Senders table already used a few lines below.
+4. **Consolidated a duplicate, weaker heuristic**: `source_view.py`'s `_RELAY_PTR_HINTS` substring list
+   overlapped with and was strictly weaker than the new verified `_SECURITY_GATEWAY_PTR_PATTERNS`. Replaced
+   with calls to the real pattern functions, same precedence order as `guess_sender_identity()`, keeping
+   the substring list only as a last resort.
+5. **New portfolio-wide "Senders needing a decision" panel** on the overview page -- the sender-level
+   counterpart to the existing domain-level "worth checking across every domain" panel, which had no
+   equivalent for sender-level issues spanning domains. `source_view.portfolio_senders_needing_attention()`
+   reuses `source_overview()`/`shared_cause_verdict()`/`guess_sender_identity()` entirely as-is: aggregates
+   every domain's open sender-investigation action items, filters out whatever already resolves calmly
+   (`legitimate`/`not_yours`), ranks flagged-by-a-human first then by how many domains one fix would clear.
+
+**Verified against real data and an honest empty state**: right now all 9 currently-open sender
+investigations across the whole portfolio resolve to "legitimate" thanks to Ch.53's fix, so the new panel
+correctly shows nothing today -- confirmed this is correct (not a broken query) by checking each of the 9
+IPs' verdict directly, then verified the panel's layout/sorting/color-coding with a synthetic non-empty
+list before shipping. Full 36-domain + representative source-page sweep: zero regressions. Service
+restarted, scheduled sends left on throughout, no email sent (pure read/display logic, nothing in this
+chapter touches a send path).

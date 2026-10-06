@@ -122,27 +122,47 @@ def source_overview(conn, source_ip: str) -> dict:
     }
 
 
-_RELAY_PTR_HINTS = ("sec", "av", "filter", "forward", "relay", "gateway", "gw", "spam", "proxy", "barracuda", "mimecast", "proofpoint")
+# Last-resort only, when the hostname matches none of the verified pattern
+# lists below -- kept narrow (not relied on as the primary signal anymore)
+# since a substring match has no independent confirmation behind it, unlike
+# _SECURITY_GATEWAY_PTR_PATTERNS/_ESP_PTR_PATTERNS/_CLOUD_COMPUTE_PTR_PATTERNS.
+_RELAY_PTR_HINTS = ("sec", "av", "filter", "forward", "relay", "gateway", "gw", "spam", "proxy")
 
 
 def _owner_line(conn, overview: dict):
     """Plain 'who owns this address' sentence from WHOIS + reverse DNS, with a
-    guess at what the reverse-DNS name implies (a named ESP, a security/
-    forwarding relay, or just a rented cloud server) -- the part a
-    non-technical reader needs to answer 'is this mine?'."""
-    from app.analysis import cached_whois_org, cached_whois_country, _guess_provider
+    guess at what the reverse-DNS name implies (a named ESP, a recognized
+    recipient-side security gateway, generic cloud compute, or just a rented
+    cloud server) -- the part a non-technical reader needs to answer 'is this
+    mine?'. Reuses the same verified pattern lists and precedence order as
+    guess_sender_identity() (gateway > ESP > cloud-compute > generic
+    substring guess) instead of this module's own separate, weaker substring
+    heuristic -- one set of patterns, not two that can drift apart."""
+    from app.analysis import (
+        cached_whois_org, cached_whois_country, _guess_provider, _guess_cloud_host, _guess_security_gateway,
+    )
     ip = overview["source_ip"]
     org = cached_whois_org(conn, ip, allow_live=False)
     country = cached_whois_country(conn, ip)
     ptr = overview["ptr"]["ptr_hostname"] if overview.get("ptr") and overview["ptr"]["ptr_hostname"] else None
+    gateway = _guess_security_gateway(ptr) if ptr else None
     provider = _guess_provider(ptr) if ptr else None
+    cloud_host = _guess_cloud_host(ptr) if ptr else None
 
     who = org or "an unknown network"
     if country:
         who += f" (registered in {country})"
     parts = [f"This address belongs to {who}."]
-    if provider:
+    if gateway:
+        parts.append(f"Its reverse-DNS name identifies it as {gateway}, a recipient-side email security "
+                      f"gateway -- this commonly shows up failing in DMARC reports when a recipient's own "
+                      f"organization routes mail through it before delivery, and has nothing to do with your "
+                      f"own sending setup.")
+    elif provider:
         parts.append(f"Its reverse-DNS name points to {provider}.")
+    elif cloud_host:
+        parts.append(f"Its reverse-DNS name ({ptr}) resolves to {cloud_host} -- not a known mail service, "
+                      f"so if this is sending mail it's likely an app or script, not a recognized ESP.")
     elif ptr:
         low = ptr.lower()
         if any(h in low for h in _RELAY_PTR_HINTS):
@@ -345,3 +365,63 @@ def corroborated_identity_pairs(conn, high_vol: int, high_fail_rate: float, min_
                 continue
             pairs.setdefault((row["source_ip"], auth_domain), []).append(row["domain_name"])
     return pairs
+
+
+def portfolio_senders_needing_attention(conn) -> list:
+    """Every sending source across the WHOLE portfolio that still needs a
+    human decision, ranked by urgency -- the cross-domain counterpart to
+    index.html's "worth checking across every domain" panel, which only
+    covers domain-level problems (no DMARC, expiring, etc.), not sender-level
+    ones. This is the exact case this module's own docstring was written
+    for (a misconfigured relay showing up as an unrelated-looking problem on
+    each domain separately) -- but until now you only found it by accident,
+    while already investigating one of the affected domains. There was no
+    single place answering "across my whole portfolio, which senders
+    actually need a decision from me right now."
+
+    Reuses source_overview()/shared_cause_verdict()/guess_sender_identity()
+    entirely as-is -- no new classification logic, just a new aggregation
+    over every domain's open sender-investigation action items, with
+    whatever guess_sender_identity() already resolves calmly (verdict
+    "legitimate"/"not_yours" -- matching web.py's _NO_ACTION_VERDICTS)
+    filtered out, since those already show a reassuring answer on their own
+    domain page and don't need separate portfolio-level nagging."""
+    from app.analysis import guess_sender_identity
+
+    ips = [r["ref_key"] for r in conn.execute(
+        """SELECT DISTINCT ref_key FROM action_items
+           WHERE status='open' AND category IN ('new_sender', 'failure_investigation') AND ref_key IS NOT NULL"""
+    )]
+
+    out = []
+    for ip in ips:
+        overview = source_overview(conn, ip)
+        if not overview:
+            continue
+        # One representative domain for guess_sender_identity()'s per-domain
+        # signature check -- the highest-volume one, same choice
+        # source_action_guide() itself already makes for this exact reason.
+        primary = max(overview["domains"], key=lambda d: d["total"])
+        did = conn.execute("SELECT id FROM domains WHERE name=?", (primary["domain_name"],)).fetchone()
+        if not did:
+            continue
+        ptr = overview["ptr"]["ptr_hostname"] if overview.get("ptr") else None
+        guess = guess_sender_identity(conn, did["id"], primary["domain_name"], ip, ptr=ptr, skip_lookup=True)
+        if guess["verdict"] in ("legitimate", "not_yours"):
+            continue
+        _, summary = shared_cause_verdict(overview)
+        out.append({
+            "source_ip": ip,
+            "verdict": guess["verdict"],
+            "headline": guess["headline"],
+            "domain_count": overview["domain_count"],
+            "failing_domain_count": overview["failing_domain_count"],
+            "summary": summary,
+        })
+
+    # flagged (a human already called this suspicious elsewhere) always
+    # leads; within each tier, the pattern touching the most domains at once
+    # is the highest-leverage fix (one change clears the most items).
+    rank = {"flagged": 0, "maybe": 1, "unclear": 2}
+    out.sort(key=lambda x: (rank.get(x["verdict"], 3), -x["failing_domain_count"]))
+    return out

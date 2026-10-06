@@ -81,7 +81,9 @@ from app.safe_browsing import run_safe_browsing_checks
 from app.source_classification import (
     classify_sources, caught_impersonation, enrich_impersonation_whois, low_volume_failing_rollup,
 )
-from app.source_view import shared_cause_verdict, source_action_guide, source_overview
+from app.source_view import (
+    portfolio_senders_needing_attention, shared_cause_verdict, source_action_guide, source_overview,
+)
 from app.mta_sts import run_mta_sts_checks
 from app.report_authorization import latest_report_auth, run_report_auth_checks
 from app.watchlist import build_watchlist
@@ -467,6 +469,7 @@ def index(request: Request, flash: str = None):
         "kpis": kpis, "portfolio_sparkline_svg": portfolio_sparkline_svg, "vibe_donut_svg": vibe_donut_svg,
         "protection": build_protection_summary(conn),
         "activity": build_activity_feed(conn, limit=8),
+        "senders_needing_attention": portfolio_senders_needing_attention(conn),
     })
 
 
@@ -610,14 +613,55 @@ def domain_detail(request: Request, name: str, flash: str = None):
     # already worked out in the background job (via ip_whois_cache), never a
     # fresh WHOIS call here.
     def _with_verdict(item):
-        verdict = (
-            guess_sender_identity(conn, domain_id, domain["name"], item["ref_key"], skip_lookup=True)["verdict"]
-            if item["category"] in _NO_ACTION_VERDICTS and item["ref_key"] else None
-        )
+        is_ip_item = item["category"] in _NO_ACTION_VERDICTS and bool(item["ref_key"])
+        linked_title = None
+        if is_ip_item and item["ref_key"] in item["title"]:
+            # Built here, not via a Jinja replace|safe chain in the template --
+            # MarkupSafe's Markup.replace() re-escapes the replacement argument,
+            # so an `| e | replace(...) | safe` chain silently double-escapes
+            # the <a> tag into literal text. Plain string ops on already-
+            # html-escaped pieces avoid that gotcha entirely.
+            escaped_ip = _html_escape(item["ref_key"])
+            link = f'<a href="/source/{escaped_ip}">{escaped_ip}</a>'
+            linked_title = _html_escape(item["title"]).replace(escaped_ip, link)
+        guess = None
+        if item["category"] in _NO_ACTION_VERDICTS and item["ref_key"]:
+            # Cached PTR hostname only (no live DNS call -- this is a page
+            # render) -- without it, guess_sender_identity() can't recognise
+            # an ESP/cloud-host/security-gateway pattern at all and silently
+            # falls back to a weaker (but not wrong) verdict branch, same bug
+            # class just fixed in flag_new_and_failing_senders()'s own
+            # PTR= argument and the Known Senders table's guess= below.
+            ptr_row = conn.execute(
+                "SELECT ptr_hostname FROM ptr_checks WHERE source_ip=? ORDER BY checked_at DESC LIMIT 1",
+                (item["ref_key"],),
+            ).fetchone()
+            guess = guess_sender_identity(
+                conn, domain_id, domain["name"], item["ref_key"],
+                ptr=ptr_row["ptr_hostname"] if ptr_row else None, skip_lookup=True,
+            )
+        verdict = guess["verdict"] if guess else None
         no_action = verdict in _NO_ACTION_VERDICTS.get(item["category"], set())
-        reassurance = _REASSURANCE.get((item["category"], verdict)) if no_action else None
-        return dict(item, ip_verdict=verdict, no_action_needed=no_action, reassurance=reassurance,
-                    ip_flagged=(verdict == "flagged"))
+        # new_sender/failure_investigation already have a per-item guess computed
+        # above, so their reassurance is built straight from its real
+        # headline/summary -- always in sync with whatever guess_sender_identity()
+        # actually said, instead of a static sentence that can drift out of date
+        # as new verdict branches get added (a canned "different identity" string
+        # here was wrong for Ch.53's new self-signed-forwarding branches, which
+        # also return "legitimate" but for the opposite reason). blocklist/
+        # ptr_issue have no per-item guess text worth reusing (their summary is
+        # about PTR/blocklist status, not "why this needs no action"), so they
+        # keep the existing static _REASSURANCE sentence, which is still correct
+        # for those two categories.
+        reassurance_headline, reassurance_detail = None, None
+        if no_action and guess and item["category"] in ("new_sender", "failure_investigation"):
+            reassurance_headline, reassurance_detail = guess["headline"], guess["summary"]
+        elif no_action:
+            reassurance_headline = "Nothing to do here:"
+            reassurance_detail = _REASSURANCE.get((item["category"], verdict))
+        return dict(item, ip_verdict=verdict, no_action_needed=no_action,
+                    reassurance_headline=reassurance_headline, reassurance_detail=reassurance_detail,
+                    ip_flagged=(verdict == "flagged"), is_ip_item=is_ip_item, linked_title=linked_title)
 
     open_items = [_with_verdict(item) for item in open_items]
 
