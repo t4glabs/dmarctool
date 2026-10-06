@@ -132,7 +132,9 @@
     <span>
       {% if src.ptr %}
         {% if src.ptr.status == 'confirmed' %}<span class="badge ok" title="{{ src.ptr.note }}">{{ src.ptr.ptr_hostname }}</span>
-        {% elif src.ptr.status in ('ptr_missing', 'mismatch') %}<span class="badge bad" title="{{ src.ptr.note }}">{{ src.ptr.status }}</span>
+        {% elif src.ptr.status == 'ptr_missing' %}<span class="badge bad" title="{{ src.ptr.note }}">No PTR record</span>
+        {% elif src.ptr.status == 'mismatch' %}<span class="badge bad" title="{{ src.ptr.note }}">Doesn't match back</span>
+        {% elif src.ptr.status == 'lookup_failed' %}<span class="badge muted" title="{{ src.ptr.note }}">Couldn't check</span>
         {% else %}<span class="badge muted" title="{{ src.ptr.note }}">{{ src.ptr.status }}</span>{% endif %}
       {% else %}<span class="muted">Not checked yet</span>{% endif %}
     </span>

@@ -2489,3 +2489,28 @@ restarted, scheduled sends left on throughout, no email sent.
 
 **Not yet done** (flagged, not scoped): a broader audit for other instances of the "google.com shown
 instead of the real sender" kind of ambiguity (Ch.49) elsewhere in the tool.
+
+---
+
+## Chapter 52 — UI audit round 2: the labeling pass
+
+Follow-up to Ch.51's deferred item: swept every template for the "raw internal value shown without
+context" pattern (the google.com-vs-real-sender confusion from Ch.49 was the original example). Checked
+domain.html (all 6 tabs), source.html, watchlist_content.html, email_checker.html/email_verifier.py,
+report_groups.html.
+
+**Honest result**: the codebase is mostly disciplined about this already -- classification_label(),
+category_label(), dns_status_label() etc. are consistently used everywhere they apply, and
+email_verifier.py's reason strings are already plain English. Only one real inconsistency found:
+`source.html`'s PTR/reverse-DNS row showed raw internal status codes (`ptr_missing`, `mismatch`) as literal
+badge text, while the Blocklist row immediately above it in the same panel correctly translates its status
+("Listed"/"Clean"/"Couldn't check"). `domain.html`'s own Known Senders table already had the correct
+translation for the same data -- source.html was the one place this had been missed.
+
+**Fixed**: `ptr_missing` -> "No PTR record", `mismatch` -> "Doesn't match back", `lookup_failed` -> "Couldn't
+check" (matching the Blocklist row's wording convention). Verified against 3 real IPs with each of the
+non-confirmed statuses present in the live database. Full 36-domain + 15-source-page sweep: zero errors.
+Service restarted, scheduled sends left on, no email sent.
+
+Not forcing further findings where the evidence doesn't support them -- this was a genuinely clean pass
+with one real bug, not a dozen invented ones.
