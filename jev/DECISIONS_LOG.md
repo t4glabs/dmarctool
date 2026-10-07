@@ -2605,3 +2605,34 @@ IPs' verdict directly, then verified the panel's layout/sorting/color-coding wit
 list before shipping. Full 36-domain + representative source-page sweep: zero regressions. Service
 restarted, scheduled sends left on throughout, no email sent (pure read/display logic, nothing in this
 chapter touches a send path).
+
+---
+
+## Chapter 55 — Action items now say WHEN, not just how much
+
+Direct follow-up to a real incident: user asked a teammate to investigate a flagged sender on
+aikyamfellows.org, got back a long (partly garbled) report pointing at Mailgun, went to check Mailgun's
+own dashboard, found nothing in the last 5 days, and asked what that could mean. Cross-referencing
+DMARCTool's own already-ingested data directly answered it in under a minute: the 3 flagged messages were
+from April, June, and September **2025** -- all 13+ months old, with zero recurrence since (confirmed by
+checking the domain's full failure history, not just this one IP). Mailgun's dashboard has nothing because
+events that old are long past any plan's log retention -- not because anything was hidden.
+
+User's reaction, correctly: the tool already had every fact needed to answer this instantly and never
+said so. "20 msgs, 5% pass (19 failing)" reads identically whether that happened yesterday or 18 months
+ago -- there was no WHEN in the action item at all.
+
+**Fix**: `flag_new_and_failing_senders()`'s bullets now include the real first/last-seen date span, plus a
+new `_recency_note()` line with three tiers: "Recently active" (<=2 days), "last seen N days ago, still
+worth watching" (<=14 days), or "Hasn't recurred in N days" (older). Jev-tested the wording (operator
+context) through two real revision rounds: the first attempt ("Still happening", "...likely a settled,
+one-off pattern") scored as overclaiming -- asserting continuity or a conclusion the evidence doesn't
+actually prove on its own. The version shipped states only the bare recency gap and leaves the
+interpretation to the reader, which scored the highest and most CONFIDENT honesty-calibration result (80%,
+not a near-coin-flip like the interpretive versions) of everything tried.
+
+**Verified against the real, currently-open action items**, not synthetic data: pattic.org's correctly
+shows "Recently active -- most recently 2026-10-04" (a genuine ongoing pattern, 479 messages across 5
+months); both aikyamhq.com items now clearly read "Hasn't recurred in 48-49 days" instead of looking
+identical to an active problem; aikyamjobs.org's sits in the middle tier correctly. Full 37-domain
+portfolio sweep: zero regressions. Service restarted, scheduled sends left on, no email sent.
