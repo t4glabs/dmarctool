@@ -30,6 +30,7 @@ import datetime
 import ipaddress
 import socket
 import subprocess
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -238,14 +239,27 @@ def _valid_ip(ip: str) -> bool:
 
 
 def _reverse_dns(ip: str, timeout: float = 1.5):
+    """socket.gethostbyaddr() calls libc's gethostbyaddr(3) directly, which
+    ignores socket.setdefaulttimeout() entirely on macOS -- there's no
+    PySocketSockObject involved, so nothing enforces a deadline. Against an
+    unresponsive/blackholed nameserver this can block for hours with no way
+    to interrupt it, and it runs inline in the main sweep thread. Run it in a
+    throwaway thread and give up (leaving the thread to die on its own) if it
+    doesn't return in time, instead of trusting a timeout that doesn't apply."""
     if not _valid_ip(ip):
         return None
-    try:
-        socket.setdefaulttimeout(timeout)
-        host, _, _ = socket.gethostbyaddr(ip)
-        return host
-    except Exception:
-        return None
+    result = {}
+
+    def _lookup():
+        try:
+            result["host"] = socket.gethostbyaddr(ip)[0]
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_lookup, daemon=True)
+    t.start()
+    t.join(timeout)
+    return result.get("host")
 
 
 def _suggest_classification(conn, domain_id: int, domain_name: str, source_ip: str) -> str:
