@@ -663,6 +663,23 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
         )
         backlog_warn = int(settings_now["ses_backlog_warn"])
         if pending >= backlog_warn:
+            # When did the queue last look healthy? That's the point after which
+            # today's "incomplete" numbers actually start -- without it, a user
+            # has no way to tell whether this backlog means "last hour" or "the
+            # last few days" short of digging through ses_queue_status by hand.
+            since_row = conn.execute(
+                """SELECT checked_at FROM ses_queue_status
+                   WHERE pending_messages < ? ORDER BY checked_at DESC LIMIT 1""",
+                (backlog_warn,),
+            ).fetchone()
+            if since_row:
+                since_dt = datetime.datetime.strptime(since_row["checked_at"], "%Y-%m-%d %H:%M:%S")
+                since_note = (
+                    f"Campaign and bounce data since {since_dt.strftime('%b %-d')} may be incomplete as a "
+                    f"result -- treat anything sent in that window as provisional until this clears. "
+                )
+            else:
+                since_note = ""
             # Deliberately not domain-scoped: it's one shared queue, so a
             # backlog makes EVERY domain's numbers provisional, not one's.
             for domain_id in {did for did, _ in domain_map.values()}:
@@ -670,7 +687,7 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
                     conn, domain_id, "ses_event_backlog", "queue",
                     f"SES event backlog: {pending:,} event(s) still waiting to be processed",
                     f"Delivery/open/click/bounce numbers shown here are incomplete until this clears -- a "
-                    f"campaign can look like it reached far fewer people than it actually did. "
+                    f"campaign can look like it reached far fewer people than it actually did. {since_note}"
                     f"{processed:,} event(s) were processed this run. This normally clears itself within a few "
                     f"hours; if it keeps growing, raise the drain budget (ses_drain_seconds in Settings).",
                 )
