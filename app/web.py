@@ -1465,18 +1465,33 @@ def _set_lookalike_ignored(name: str, candidate: str, ignored: bool):
     )
 
 
+def _delete_domain_cascade(conn, domain_id: int) -> None:
+    """Deletes a domain and every row referencing it. Child rows are found by
+    looking for a domain_id column on every table rather than from a
+    hardcoded list, since this schema has ~30 of them and a list would
+    silently go stale the next time one is added -- leaving a foreign-key
+    error (or worse, an orphan) for someone else to find. Shared by
+    untrack_domain() (refuses if there's report history) and delete_domain()
+    (the deliberate, type-to-confirm path for a domain with real history)."""
+    tables = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )]
+    for table in tables:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if "domain_id" in cols:
+            conn.execute(f"DELETE FROM {table} WHERE domain_id=?", (domain_id,))
+    conn.execute("DELETE FROM domains WHERE id=?", (domain_id,))
+    conn.commit()
+
+
 @app.post("/domain/{name}/untrack")
 def untrack_domain(name: str):
     """Undo for add_domain -- deliberately refused once a domain has any
     ingested reports, so this can only ever remove a domain that was added
     by hand and never used (the mistyped-name case). Without it a typo would
     sit on the dashboard permanently, counting toward the portfolio KPIs and
-    the "no DMARC record at all" alert.
-
-    Child rows are found by looking for a domain_id column on every table
-    rather than from a hardcoded list, since this schema has ~30 of them and
-    a list would silently go stale the next time one is added -- leaving a
-    foreign-key error (or worse, an orphan) for someone else to find."""
+    the "no DMARC record at all" alert. For a domain with real report
+    history (e.g. a decommissioned site), see delete_domain() instead."""
     conn = get_connection()
     domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
     if not domain:
@@ -1493,17 +1508,40 @@ def untrack_domain(name: str):
             status_code=303,
         )
 
-    tables = [r["name"] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    )]
-    for table in tables:
-        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-        if "domain_id" in cols:
-            conn.execute(f"DELETE FROM {table} WHERE domain_id=?", (domain["id"],))
-    conn.execute("DELETE FROM domains WHERE id=?", (domain["id"],))
-    conn.commit()
+    _delete_domain_cascade(conn, domain["id"])
     return RedirectResponse(
         "/?flash=" + urllib.parse.quote(f"Stopped tracking {name} and removed its check history."),
+        status_code=303,
+    )
+
+
+@app.post("/domain/{name}/delete")
+def delete_domain(name: str, confirm_name: str = Form(...)):
+    """Permanent delete for a domain regardless of report history -- unlike
+    untrack_domain(), this is for a real, once-tracked domain (e.g. a site
+    that's been decommissioned) rather than an added-by-mistake typo.
+    Requires the domain's own name typed back exactly, checked server-side
+    (not just via the disabled-submit-button JS) since this deletes real
+    history and can't be undone."""
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        return RedirectResponse("/", status_code=303)
+
+    if confirm_name.strip() != name:
+        return RedirectResponse(
+            f"/domain/{name}?flash=" + urllib.parse.quote(
+                f"Typed name didn't match {name} exactly, so nothing was deleted."),
+            status_code=303,
+        )
+
+    report_count = conn.execute(
+        "SELECT COUNT(*) as n FROM reports WHERE domain_id=?", (domain["id"],)
+    ).fetchone()["n"]
+    _delete_domain_cascade(conn, domain["id"])
+    return RedirectResponse(
+        "/?flash=" + urllib.parse.quote(
+            f"Deleted {name} and its history ({report_count} ingested report(s) and everything derived from them)."),
         status_code=303,
     )
 

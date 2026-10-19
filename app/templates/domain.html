@@ -1531,6 +1531,29 @@
         <button type="submit" class="danger">Stop tracking {{ domain.name }}</button>
       </form>
     </div>
+    {% else %}
+    {# A domain with real history -- e.g. a decommissioned site. Requires
+       typing the domain's own name back to enable the button, since this
+       permanently deletes real data and can't be undone. #}
+    <div class="section">
+      <h2>🗑️ Delete this domain</h2>
+      <p class="muted" style="margin-top:0">
+        {{ domain.name }} has {{ ingested_report_count }} ingested report(s). Deleting it removes the domain
+        and everything derived from those reports -- permanently, including DNS/compliance history, action
+        items, and any sender data. This can't be undone; if the domain starts sending mail again, you'd be
+        adding it back from scratch.
+      </p>
+      <form action="/domain/{{ domain.name }}/delete" method="post" onsubmit="return confirm('Permanently delete {{ domain.name }} and all {{ ingested_report_count }} report(s)? This cannot be undone.');">
+        <div class="field">
+          <label for="confirm_name">Type <strong>{{ domain.name }}</strong> to confirm</label>
+          <input type="text" id="confirm_name" name="confirm_name" autocomplete="off"
+                 oninput="document.getElementById('confirm_delete_btn').disabled = (this.value !== '{{ domain.name }}');">
+        </div>
+        <div class="field">
+          <button type="submit" id="confirm_delete_btn" class="danger" disabled>Delete {{ domain.name }} permanently</button>
+        </div>
+      </form>
+    </div>
     {% endif %}
 
   </div>
