@@ -2429,6 +2429,45 @@ def _report_period(row, now: datetime.datetime):
     return period_start, now
 
 
+def _is_due(row, now: datetime.datetime) -> bool:
+    if not row["recipient_email"]:
+        return False
+    if not row["last_sent_at"]:
+        return True
+    interval = row["interval_days"] or DEFAULT_INTERVAL_DAYS
+    last_sent = datetime.datetime.strptime(row["last_sent_at"], "%Y-%m-%d %H:%M:%S")
+    return now - last_sent >= datetime.timedelta(days=interval)
+
+
+def due_report_targets(conn, now: datetime.datetime):
+    """What run_report_emails() would send right now, ignoring the two on/off
+    switches: (standalone domain rows, [(group row, member rows)]). Shared with
+    the dashboard's email-status panel (app/system_status.py) so "N reports are
+    due" there can never disagree with what the scheduler actually sends."""
+    # d.report_group_id IS NULL -- a grouped domain's own domain_report_settings
+    # row is left in place but unused while grouped (see send_group_report_now
+    # below), so ungrouping it later loses nothing.
+    rows = conn.execute(
+        """SELECT drs.*, d.name as domain_name FROM domain_report_settings drs
+           JOIN domains d ON d.id = drs.domain_id WHERE drs.enabled=1 AND d.report_group_id IS NULL"""
+    ).fetchall()
+    due_rows = [row for row in rows if _is_due(row, now)]
+
+    # Report groups -- same due-check logic (last_sent_at, interval_days) as the
+    # standalone domains above, reused as-is since domain_report_groups has the
+    # identical field shape. A group with no member domains is never due.
+    due_groups = []
+    for group in conn.execute("SELECT * FROM domain_report_groups WHERE enabled=1").fetchall():
+        if not _is_due(group, now):
+            continue
+        member_rows = conn.execute(
+            "SELECT id, name FROM domains WHERE report_group_id=? ORDER BY name", (group["id"],)
+        ).fetchall()
+        if member_rows:
+            due_groups.append((group, member_rows))
+    return due_rows, due_groups
+
+
 def run_report_emails(conn, verbose: bool = True) -> None:
     """Self-throttling, same shape as every other _stale()-gated check in
     this codebase: one function, called only from the existing 6-hourly job
@@ -2458,22 +2497,9 @@ def run_report_emails(conn, verbose: bool = True) -> None:
         return
 
     now = datetime.datetime.utcnow()
-    # d.report_group_id IS NULL -- a grouped domain's own domain_report_settings
-    # row is left in place but unused while grouped (see send_group_report_now
-    # below), so ungrouping it later loses nothing.
-    rows = conn.execute(
-        """SELECT drs.*, d.name as domain_name FROM domain_report_settings drs
-           JOIN domains d ON d.id = drs.domain_id WHERE drs.enabled=1 AND d.report_group_id IS NULL"""
-    ).fetchall()
+    due_rows, due_groups = due_report_targets(conn, now)
 
-    for row in rows:
-        if not row["recipient_email"]:
-            continue
-        interval = row["interval_days"] or DEFAULT_INTERVAL_DAYS
-        if row["last_sent_at"]:
-            last_sent = datetime.datetime.strptime(row["last_sent_at"], "%Y-%m-%d %H:%M:%S")
-            if now - last_sent < datetime.timedelta(days=interval):
-                continue
+    for row in due_rows:
         period_start, period_end = _report_period(row, now)
 
         send_report_now(conn, row["domain_id"], row["domain_name"], row["recipient_email"],
@@ -2481,23 +2507,7 @@ def run_report_emails(conn, verbose: bool = True) -> None:
                          sender_email, sender_domain, api_key, mark_sent=True, verbose=verbose,
                          cc_email=row["cc_email"])
 
-    # Report groups -- same due-check logic (_report_period, last_sent_at,
-    # interval_days) as the standalone domains above, reused as-is since
-    # domain_report_groups has the identical field shape.
-    groups = conn.execute("SELECT * FROM domain_report_groups WHERE enabled=1").fetchall()
-    for group in groups:
-        if not group["recipient_email"]:
-            continue
-        interval = group["interval_days"] or DEFAULT_INTERVAL_DAYS
-        if group["last_sent_at"]:
-            last_sent = datetime.datetime.strptime(group["last_sent_at"], "%Y-%m-%d %H:%M:%S")
-            if now - last_sent < datetime.timedelta(days=interval):
-                continue
-        member_rows = conn.execute(
-            "SELECT id, name FROM domains WHERE report_group_id=? ORDER BY name", (group["id"],)
-        ).fetchall()
-        if not member_rows:
-            continue
+    for group, member_rows in due_groups:
         period_start, period_end = _report_period(group, now)
 
         send_group_report_now(conn, group["id"], group["name"],

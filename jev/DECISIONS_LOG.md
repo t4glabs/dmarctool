@@ -2636,3 +2636,21 @@ shows "Recently active -- most recently 2026-10-04" (a genuine ongoing pattern, 
 months); both aikyamhq.com items now clearly read "Hasn't recurred in 48-49 days" instead of looking
 identical to an active problem; aikyamjobs.org's sits in the middle tier correctly. Full 37-domain
 portfolio sweep: zero regressions. Service restarted, scheduled sends left on, no email sent.
+
+## 2026-10-28 -- Sidebar status panel: stale-checks banner + resume-emails confirm (operator copy)
+
+New on every dashboard page: a "Background checks" / "Report emails" status panel with a Pause/Resume
+button, and a red banner when no background check has finished in 8 hours. Two wordings Jev-tested
+(operator context, `audience_fit` + `honesty_calibration` + `actionability`):
+
+- **Stale banner**: two technical drafts ("Background checks have stopped...", listing "new reports,
+  bounces, DNS changes" with a UTC time) were both `needs_plain_language_pass` (~70%), though accurate and
+  actionable. A plainer rewrite in local time still needed a pass; the shipped version ("Heads up: this
+  dashboard last updated N hours ago, at 3:02 pm on Oct 28. It normally updates every 6 hours, so recent
+  changes may be missing. Click Refresh... Still showing an hour later? Restart the app.") was the only one
+  rated `clear_as_is`, honesty 97%, actionability 98%.
+- **Resume confirm**: "Resume scheduled report emails? 9 reports are due..." needed a plain-language pass
+  and read as non-actionable; the shipped "Turn automatic report emails back on? N reports are due and will
+  be emailed to clients at the next update, around 4:30 pm (or about a minute after the app is
+  restarted)." scored `clear_as_is` + `concrete_next_step`, honesty 88% -- the restart caveat is the fact
+  that actually prevents a surprise send.

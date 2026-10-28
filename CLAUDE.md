@@ -8,7 +8,8 @@ A self-hosted, single-user DMARC management dashboard for the user's domains (Ai
 - Managed by launchd: `~/Library/LaunchAgents/com.aikyam.dmarctool.plist`, label `com.aikyam.dmarctool`
 - `RunAtLoad` + `KeepAlive` — starts at login, auto-restarts on crash
 - Logs: `~/dmarctool/logs/dmarctool.out.log` / `dmarctool.err.log`
-- Reload after code changes: `launchctl kickstart -k gui/$(id -u)/com.aikyam.dmarctool`
+- **Deploying code changes: always `scripts/deploy.sh`, never a bare `launchctl kickstart`.** Scheduled client report emails go out ~1 minute after every restart, so the rule is: pause sends (`venv/bin/python -m app.actions pause-sends`) at the START of any dev work and keep them paused the whole time; commit; then `scripts/deploy.sh` pushes, restarts, waits for the post-restart check to pass while still paused, and only then resumes. Every failure path leaves sends paused. `--keep-paused` deploys without resuming. A bare restart mid-development (`launchctl kickstart -k gui/$(id -u)/com.aikyam.dmarctool`) is fine ONLY while `sends-status` says PAUSED.
+- The dashboard sidebar shows both states on every page: background-check health (red + a banner if no sweep has finished in 8h, from the `sweep_runs` table) and report-email status with a Pause/Resume button (same `dev_pause_scheduled_sends` switch as the CLI, never the Settings master switch).
 
 ## Stack
 
@@ -58,6 +59,7 @@ Python, FastAPI + Jinja2 (server-rendered, no JS build step), raw `sqlite3` (no 
 - `mailgun_campaigns.py` — newsletter detection + per-campaign stats for mail sent through Mailgun directly rather than SES+Listmonk (in practice, Ghost blogs with Mailgun integrated) — campaigns reconstructed by grouping on (from_address, subject) since Mailgun's Events API has no campaign identifier
 - `campaign_score.py` — evidence-weighted (not additive-demerit) newsletter deliverability scorecard: a real 0-N denominator, engagement (open/click/genuine-rate) as a scored dimension, spam-trigger wordlists de-emphasized to match their actual (low) predictive value
 - `click_quality.py` / `open_quality.py` — tell a genuine subscriber click/open apart from an automated corporate email-security-gateway pre-fetch/scan, from raw per-event SES data (`ses_campaign_clicks`/`ses_campaign_opens`)
+- `system_status.py` — sidebar status panel data: last finished sweep (`sweep_runs`, stale after 8h) and scheduled-email state + due count (via `domain_report.due_report_targets`, the same due logic the sender uses)
 - `access_log.py` — records the Cloudflare-Access-verified requester email on every request this app serves (who did what, when), complementing (not replacing) Cloudflare's own Access logs
 
 Per-newsletter engagement (opens/clicks/bounces/complaints/rejects, per-campaign-recipient tracking for inactive-subscriber detection) is built inside `ses_events.py` itself, not a separate module — Listmonk stamps every campaign email with an `X-Listmonk-Campaign` header (plus Subject and From), which SES echoes back on every event notification, so campaign-level stats come from the same trusted SES event stream rather than a second integration.

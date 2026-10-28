@@ -49,10 +49,48 @@ try {
         <span class="icon">&#128231;</span><span class="label">Email checker</span>
       </a>
     </nav>
+    {% set st = system_status() %}
+    {% set em = st.emails %}
+    <div class="sidebar-status">
+      <div class="status-row" title="Everything on this dashboard is re-checked automatically every 6 hours.">
+        <span class="status-dot {{ 'bad' if st.sweep.stale else 'ok' }}"></span>
+        <div class="status-text">
+          <div class="status-title">Background checks</div>
+          <div class="status-sub">
+            {% if st.sweep.running_since %}Running now{% elif st.sweep_ago %}Last {{ st.sweep_ago }}{% else %}None finished yet{% endif %}{% if st.next_run_label %} · next {{ st.next_run_label }}{% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="status-row" title="Automatic domain health emails to clients, each on its own schedule. The &quot;Send a test now&quot; and notify buttons work either way.">
+        <span class="status-dot {{ 'ok' if em.sending else ('warn' if em.master_on else 'muted') }}"></span>
+        <div class="status-text">
+          <div class="status-title">Report emails</div>
+          <div class="status-sub">
+            {% if not em.master_on %}<a href="/settings">Off in Settings</a>
+            {% elif em.paused %}Paused{% else %}Sending automatically{% endif %}{% if em.master_on %} · {{ em.due_count }} due{% endif %}
+          </div>
+          {% if em.master_on %}
+          <form method="post" action="/scheduled_sends" class="status-form"
+            {% if em.paused %}onsubmit="return confirm({{ (('Turn automatic report emails back on? ' ~ (('1 report is' if em.due_count == 1 else em.due_count ~ ' reports are') ~ ' due and will be emailed to clients at the next update, around ' ~ (st.next_run_label or 'the next check') ~ ' (or about a minute after the app is restarted).') if em.due_count else 'Turn automatic report emails back on? No reports are due right now; each one goes out when its own schedule comes round.')) | tojson | forceescape }})"{% endif %}>
+            <input type="hidden" name="action" value="{{ 'resume' if em.paused else 'pause' }}">
+            <input type="hidden" name="next_path" value="{{ current_path }}">
+            <button type="submit" class="small">{{ 'Resume' if em.paused else 'Pause' }}</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+    </div>
   </aside>
   <div class="content-area">
     <main>
     {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+    {% if st.sweep.stale %}
+    <div class="verdict bad stale-banner">
+      Heads up: {% if st.sweep.last_finished %}this dashboard last updated {{ st.sweep_hours }} hours ago, at {{ st.sweep_since_label }}{% else %}this dashboard hasn't finished an update since the app started {{ st.sweep_hours }} hours ago, at {{ st.sweep_since_label }}{% endif %}. It normally
+      updates every 6 hours, so recent changes may be missing. Click Refresh on the <a href="/">Overview</a> page.
+      Still showing an hour later? Restart the app.
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
     </main>
   </div>

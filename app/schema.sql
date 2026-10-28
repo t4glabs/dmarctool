@@ -931,3 +931,15 @@ CREATE TABLE IF NOT EXISTS lookalike_domains (
     UNIQUE (domain_id, candidate)
 );
 CREATE INDEX IF NOT EXISTS idx_lookalike_domain ON lookalike_domains(domain_id, registered, has_mx, ignored);
+
+-- One row per full check sweep (web.py::run_all_checks), scheduled or manual.
+-- finished_at stays NULL while a sweep runs -- and forever if one hangs, which
+-- is exactly what app/system_status.py's "checks have stopped" banner looks
+-- for (a 31-hour silent hang went unnoticed once because nothing recorded this).
+CREATE TABLE IF NOT EXISTS sweep_runs (
+    id          INTEGER PRIMARY KEY,
+    trigger     TEXT NOT NULL,          -- 'scheduled' | 'manual'
+    started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sweep_runs_started ON sweep_runs(started_at);

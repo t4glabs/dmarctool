@@ -22,7 +22,7 @@ import tempfile
 import threading
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -43,7 +43,7 @@ from app.analysis import (
 )
 from app.access_log import prune_old_access_log, record_access, recent_access_log
 from app.bounce_reasons import categorize_bounce
-from app.actions import log_action, resolve_action
+from app.actions import log_action, resolve_action, set_scheduled_sends_paused
 from app.blocklist import run_blocklist_checks
 from app.charts import (
     disposition_donut_chart, email_verdict_donut, health_score_sparkline, metric_trend_chart, pass_rate_sparkline,
@@ -54,6 +54,9 @@ from app.config import get_secret
 from app.db import get_connection, get_or_create_domain, init_db
 from app.dns_check import check_domain, discover_untracked_subdomains, run_dns_checks
 from app.domain_expiry import days_until, run_domain_expiry_checks
+from app.system_status import (
+    email_status, humanize_hours, record_sweep_finish, record_sweep_start, sweep_status,
+)
 from app.domain_report import (
     all_report_groups, create_report_group, delete_report_group, get_report_settings, preview_domain_report,
     preview_group_report, report_period_for_domain, report_period_for_group, run_report_emails,
@@ -172,13 +175,18 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 _scheduler = BackgroundScheduler()
 
+# Reference point for app/system_status.py's stale-checks banner before any
+# sweep has finished in this process's lifetime. Naive UTC, like the DB's
+# datetime('now') timestamps it's compared against.
+_APP_STARTED_AT = _datetime.utcnow()
+
 # Serialises the full check sweep so a manual "Refresh now" and the 6-hourly
 # job never write the DB at the same time. Non-blocking acquire: if a sweep is
 # already running, a second trigger just skips rather than piling up.
 _checks_lock = threading.Lock()
 
 
-def run_all_checks(conn) -> bool:
+def run_all_checks(conn, trigger: str = "manual") -> bool:
     """The full refresh sweep, shared by the background job and the "Refresh
     now" button. Deliberately excludes run_report_emails() -- sending mail to
     third parties is a scheduled action, never something a manual refresh
@@ -188,6 +196,7 @@ def run_all_checks(conn) -> bool:
     if not _checks_lock.acquire(blocking=False):
         return False
     try:
+        run_id = record_sweep_start(conn, trigger)
         for step in (
             run_imap_ingest,  # pull new DMARC reports from the mailbox FIRST, so this sweep analyses them
             run_analysis, run_dns_checks, discover_untracked_subdomains, run_blocklist_checks,
@@ -201,6 +210,7 @@ def run_all_checks(conn) -> bool:
                 step(conn, verbose=False)
             except Exception as e:  # one flaky check shouldn't sink the whole sweep
                 print(f"[refresh] {getattr(step, '__name__', step)} failed: {e}")
+        record_sweep_finish(conn, run_id)
         return True
     finally:
         _checks_lock.release()
@@ -231,7 +241,7 @@ def _startup():
 
     def _job():
         c = get_connection()
-        run_all_checks(c)  # the full sweep (shared with the Refresh button)
+        run_all_checks(c, trigger="scheduled")  # the full sweep (shared with the Refresh button)
         # Scheduled-only, never part of a manual refresh: sending mail to third
         # parties, and log pruning.
         run_report_emails(c, verbose=False)
@@ -2044,6 +2054,56 @@ def run_checks():
            if already_running else
            "Refresh started in the background. It takes about a minute; reload this page to see updated results.")
     return RedirectResponse(f"/?flash={msg}", status_code=303)
+
+
+def _system_status() -> dict:
+    """Backs base.html's sidebar status panel and stale-checks banner, on every
+    page. Cheap (a handful of indexed queries), so computed per render rather
+    than cached -- a cached "all fine" is exactly what this must never show."""
+    conn = get_connection()
+    sweep = sweep_status(conn, _APP_STARTED_AT)
+    emails = email_status(conn)
+    job = _scheduler.get_job("periodic_refresh") if _scheduler.running else None
+    next_run = job.next_run_time if job else None
+
+    def _clock(dt):  # "4:30 pm" -- this machine's local time, which is what the team reads
+        return dt.strftime("%-I:%M %p").lower()
+
+    local_now = _datetime.now().astimezone()
+    if next_run:
+        next_run_label = _clock(next_run) if next_run.date() == local_now.date() else next_run.strftime("%a ") + _clock(next_run)
+    else:
+        next_run_label = None
+    reference = (sweep["last_finished"] or _APP_STARTED_AT).replace(tzinfo=_timezone.utc).astimezone()
+    return {
+        "sweep": sweep,
+        "sweep_ago": humanize_hours(sweep["hours_since"]) if sweep["last_finished"] else None,
+        "sweep_hours": int(sweep["hours_since"]),
+        "sweep_since_label": f"{_clock(reference)} on {reference.strftime('%b %-d')}",
+        "emails": emails,
+        "next_run_label": next_run_label,
+    }
+
+
+templates.env.globals["system_status"] = _system_status
+
+
+@app.post("/scheduled_sends")
+def toggle_scheduled_sends(action: str = Form(...), next_path: str = Form("/")):
+    """The sidebar's pause/resume button -- the same dev_pause_scheduled_sends
+    switch as `python -m app.actions pause-sends/resume-sends`, never the
+    user's own report_emails_enabled setting."""
+    if action not in ("pause", "resume"):
+        raise HTTPException(status_code=400, detail="Unknown action.")
+    set_scheduled_sends_paused(get_connection(), action == "pause")
+    # Only ever redirect back within this app (no scheme/host, no "//evil").
+    if not next_path.startswith("/") or next_path.startswith("//"):
+        next_path = "/"
+    msg = ("Scheduled report emails paused. Nothing goes out automatically until you resume."
+           if action == "pause" else
+           "Scheduled report emails resumed. Due reports go out at the next background check.")
+    sep = "&" if "?" in next_path else "?"
+    return RedirectResponse(f"{next_path}{sep}flash={urllib.parse.quote(msg)}", status_code=303)
 
 
 @app.get("/other-domains", response_class=HTMLResponse)
