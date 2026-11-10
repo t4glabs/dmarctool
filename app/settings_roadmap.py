@@ -488,6 +488,94 @@ def _link_tracking_row(conn, domain_id):
     return _row("Newsletter link tracking", now, "keep", "", "Tracked links use HTTPS.")
 
 
+def incoming_mail_status(conn, domain_id, name):
+    """(verdict, action, why, now, kind) for the domain's MX setup -- kind is
+    none | split | backup | no_route | ok -- or None if not
+    checked yet. Shared by the roadmap row and the overview panel so the two
+    can't disagree."""
+    from app.mx_check import (RELAY_PROVIDERS, latest_mx_check, mx_provider_label, sending_addresses,
+                              split_summary)
+    check = latest_mx_check(conn, domain_id)
+    if not check:
+        return None
+    records = check["records"]
+    keys = []
+    for _p, _h, k in records:
+        if k not in keys:
+            keys.append(k)
+    now = " · ".join(f"{p} {h}" for p, h, _k in records[:4]) + (f" +{len(records) - 4} more" if len(records) > 4 else "")
+    if check["status"] == "none":
+        return "keep", "", f"No MX records, so {name} doesn't receive email. Fine if nobody writes to it.", "none", "none"
+    if check["status"] == "split":
+        from app.mx_check import bounce_share
+        main, others, rejecting, remove = split_summary(name, check)
+        nowhere = ", which has nowhere to put it" if check.get("mailgun_route") == 0 else ""
+        evidence = (f" We tested it: {main} accepts {check['probe_address']}, {' and '.join(rejecting)} bounces it. "
+                    f"So you can expect {bounce_share(check, main)} emails sent to you to bounce back to the sender."
+                    if rejecting else "")
+        return ("change", f"Delete the {' and '.join(others)} MX records ({', '.join(remove)})",
+                f"Email sent to {name} is split at random between {main}, where your mailboxes are, and "
+                f"{' and '.join(others)}{nowhere}.{evidence} Deleting those records sends everything to {main}."
+                + (" Your Mailgun sending keeps working." if "Mailgun" in others else ""), now, "split")
+    if check["status"] == "backup":
+        main, others, rejecting, remove = split_summary(name, check)
+        bounce = (f", and it would bounce it (checked: it rejects {check['probe_address']})" if rejecting else "")
+        return ("optional", f"Remove the backup MX records for {', '.join(remove)}",
+                f"{main} handles your incoming mail. {' and '.join(others)} is listed only as a backup, so it gets "
+                f"mail only if {main} is unreachable{bounce}.", now, "backup")
+    # single provider
+    key = keys[0]
+    if key in RELAY_PROVIDERS and check.get("mailgun_route") == 0:
+        senders = sending_addresses(conn, domain_id, name)
+        if senders:
+            return ("change", f"Add a Mailgun route for {name}, or point its MX at a real mailbox",
+                    f"Only Mailgun receives mail for {name}, and your Mailgun account has no route for it, so "
+                    f"every email sent to an @{name} address bounces. That includes replies to mail you send from "
+                    f"{', '.join(senders[:2])}, unless those emails set a different Reply-To. Fix in Mailgun: "
+                    f"Receiving -> Create route -> match recipient \".*@{name}\" -> forward to an inbox you read.",
+                    now, "no_route")
+        return ("keep", "", f"Only Mailgun receives mail here and nothing forwards it, which is normal for a domain "
+                            f"used only for sending.", now, "ok")
+    return "keep", "", f"All incoming mail goes to {mx_provider_label(key)}.", now, "ok"
+
+
+def _incoming_mail_row(conn, domain_id, name):
+    status = incoming_mail_status(conn, domain_id, name)
+    if not status:
+        return None
+    verdict, action, why, now, _kind = status
+    return _row("Incoming mail (MX)", now, verdict, action, why)
+
+
+def shared_sending_domain(conn, domain_id, name):
+    """(mailbox provider name) when Mailgun sends AS the root domain that
+    also hosts real mailboxes -- the "cross" setup behind captains.ngo's MX
+    mix-up -- else None."""
+    from app.mx_check import RELAY_PROVIDERS, latest_mx_check, mx_provider_label
+    if not conn.execute(
+        "SELECT 1 FROM mailgun_domain_settings WHERE domain_id=? AND mailgun_domain=?", (domain_id, name)
+    ).fetchone():
+        return None
+    check = latest_mx_check(conn, domain_id)
+    if not check:
+        return None
+    mailbox = [k for _p, _h, k in sorted(check["records"]) if k not in RELAY_PROVIDERS]
+    return mx_provider_label(mailbox[0]) if mailbox else None
+
+
+def _sending_domain_row(conn, domain_id, name):
+    provider = shared_sending_domain(conn, domain_id, name)
+    if not provider:
+        return None
+    return _row("Newsletter sending domain", f"Mailgun sends as {name}", "optional",
+                f"Move Mailgun sending to its own subdomain (e.g. mails.{name})",
+                f"Mailgun sends as {name} itself, the same domain your {provider} mailboxes use, so the two share "
+                f"one sending reputation: if Gmail slows down a bulk send (as it did for iLAB on 9 Nov), it is "
+                f"slowing down {name}, staff email included. A subdomain keeps them apart and keeps Mailgun's "
+                f"receiving records out of {name}'s MX. Set up the subdomain in Mailgun, switch whatever sends "
+                f"through it, then remove include:mailgun.org from {name}'s SPF record.")
+
+
 def settings_roadmap(conn, domain_id, name, latest_dns, rec_row, spf_checks, dkim_checks, report_auth, mta_sts,
                      open_items):
     """Rows for the domain page, most important setting first. Takes what
@@ -504,6 +592,8 @@ def settings_roadmap(conn, domain_id, name, latest_dns, rec_row, spf_checks, dki
         _dkim_row(conn, domain_id, name, dkim_checks, open_items),
         _report_address_row(tags, report_auth),
         _leftover_tags_row(latest_dns["txt_value"] if latest_dns else None),
+        _incoming_mail_row(conn, domain_id, name),
+        _sending_domain_row(conn, domain_id, name),
         _link_tracking_row(conn, domain_id),
         _mta_sts_row(mta_sts),
     ]

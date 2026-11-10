@@ -26,6 +26,7 @@ CATEGORY_LABELS = {
     "mailgun_throttled": "Gmail or another provider delayed your mail",
     "pct_not_honoured": "A provider now ignores your pct setting",
     "google_dkim_not_signing": "Google Workspace DKIM not switched on",
+    "mx_split": "Incoming mail split between two providers",
     "postmaster_compliance": "Gmail Postmaster compliance",
     "postmaster_domain_missing": "Not added to Postmaster Tools",
     "chronic_transient_bounce": "Chronic transient bounces",
@@ -56,6 +57,7 @@ CATEGORY_LABELS = {
 # top_categories() below. Any category not listed here (e.g. a new one added
 # without updating this) still shows, just after everything ranked.
 CATEGORY_PRIORITY_ORDER = [
+    "mx_split",
     "domain_expiring_soon",
     "pct_not_honoured",
     "lookalike_domain",
@@ -126,6 +128,7 @@ CATEGORY_HELP = {
     "no_report_history": "This domain has never had a single DMARC report ingested, so every other check here has nothing to go on. This is a live DNS snapshot instead (MX/SPF/DMARC) -- it tells you whether that's because the domain has no custom email at all, is missing basic protection, or is actually configured fine and just hasn't had any real mail volume yet.",
     "mailgun_reputation": "Mailgun's reported bounce or complaint rate for this domain crossed the warning threshold -- worth checking your list quality before sending more. Note: this only reflects providers that feed complaints back to Mailgun (e.g. Yahoo) -- Gmail generally doesn't, so a low number here doesn't mean Gmail recipients are happy too.",
     "mailgun_new_suppressions": "Mailgun automatically suppressed new addresses (bounced or complained) since the last check -- these won't receive mail from you again unless removed from Mailgun's suppression list, and are worth pruning from your Listmonk list too.",
+    "mx_split": "A domain's MX records say which servers receive its email. When two different providers share the top priority, every sender picks one at random -- so part of your incoming mail goes to a server that may not hold your mailboxes and bounces it back to the sender. Usually left over from an old setup (e.g. Mailgun's optional receiving records added to a domain that also uses Google Workspace).",
     "google_dkim_not_signing": "Google Workspace signs your team's mail with a generic Google key until someone switches on the domain's own key in Google Admin. That generic signature doesn't count for your domain, so DMARC relies on SPF alone for all that mail -- and SPF breaks whenever an email is forwarded.",
     "pct_not_honoured": "The new DMARC standard (RFC 9989, May 2026) removed pct. A mail provider that has adopted it ignores pct and applies your full policy to all mail that fails DMARC. This was measured from your own reports, not assumed: the provider applied your policy to far more failing mail than pct asked for.",
     "mailgun_throttled": "Gmail (or another big provider) told Mailgun \"not now, try again later\" for some of your mail, and said why: an unusual rate of mail from your sending domain. Mailgun retries on its own, so this normally means a delay, not lost mail -- but Mailgun's own log shows every refusal as a red \"failed\" line even when the retry worked. It happens most to domains that send rarely and then release a whole list within seconds: the provider hasn't seen enough of your mail to trust a sudden burst, even when authentication and spam rates are perfect.",
@@ -174,6 +177,7 @@ CATEGORY_REMEDIATION = {
     # Jev-tested 2026-11-10 (3 drafts): all were fully actionable; this
     # plain-language-first one was least "too technical" (68% vs 80%). The
     # config line can't go -- without it there's nothing concrete to do.
+    "mx_split": "In this domain's DNS, delete the MX records of the provider that doesn't hold your mailboxes (the action item names the exact hosts), keeping only your real mail provider's. For Mailgun this only stops Mailgun RECEIVING mail -- sending through Mailgun is unaffected, since that uses the SPF, DKIM and tracking records. MX records usually update within minutes (their TTL); this item clears at the next check.",
     "google_dkim_not_signing": "In admin.google.com: Apps -> Google Workspace -> Gmail -> Authenticate email -> pick this domain. If a key is already set up, click Start authentication and you're done. If not: Generate new record (2048-bit), add the TXT record it shows to this domain's DNS, wait an hour or so, then click Start authentication. This item clears on its own once your reports show Google signing as your domain (usually within two days).",
     "pct_not_honoured": "Check this domain's pass rate on its Overview tab. If its own mail passes cleanly, nothing is lost: set pct=100 so the record says what's really happening. If some of its own mail still fails, add t=y to the record (for example v=DMARC1; p=quarantine; pct=10; t=y). Providers following the new standard then treat the policy as a test and hold back, while older ones keep reading pct. Remove t=y once the failing sender is fixed.",
     "mailgun_throttled": "Nothing to clean up: these people are fine and should stay on your list. The fix is to send each newsletter out a bit more slowly, in small batches over half an hour instead of all at once, because Gmail is wary of a sudden burst from a sender it rarely hears from. It is a one-time change on the Ghost server. For whoever manages that server: add \"bulkEmail\": {\"batchSize\": 50, \"targetDeliveryWindow\": 1800000} to config.production.json and restart Ghost. If any messages never got through, or the reason mentions authentication rather than rate, check this domain's Gmail Postmaster data before the next send.",

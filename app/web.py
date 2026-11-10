@@ -67,9 +67,10 @@ from app.lookalike import findings_for_domain, run_lookalike_checks
 from app.mailgun import run_mailgun_checks, send_message, _suppression_watermark as _mailgun_suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.mailgun_deferrals import deferral_summary, deferral_verdict
+from app.mx_check import run_mx_checks
 from app.pct_watch import latest_pct_watch, reporter_label, run_pct_watch
-from app.settings_roadmap import (ROADMAP_INTRO, UNUSED_INCLUDE_MIN_MSGS, leftover_tags, settings_roadmap,
-                                  unused_spf_includes)
+from app.settings_roadmap import (ROADMAP_INTRO, UNUSED_INCLUDE_MIN_MSGS, incoming_mail_status, leftover_tags,
+                                  settings_roadmap, shared_sending_domain, unused_spf_includes)
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
 from app.bounce_notify import build_notification, last_notification, pending_notify_counts, record_notification_sent
@@ -207,7 +208,7 @@ def run_all_checks(conn, trigger: str = "manual") -> bool:
             run_imap_ingest,  # pull new DMARC reports from the mailbox FIRST, so this sweep analyses them
             run_analysis, run_dns_checks, run_pct_watch,  # pct watch reads this cycle's fresh DNS + reports
             discover_untracked_subdomains, run_blocklist_checks,
-            run_compliance_checks, run_mailgun_checks, run_mailgun_campaign_sync, run_postmaster_checks,
+            run_compliance_checks, run_mx_checks, run_mailgun_checks, run_mailgun_campaign_sync, run_postmaster_checks,
             run_ses_event_ingest, run_ses_account_checks, run_listmonk_content_sync, run_listmonk_blocklist_sync,
             run_chronic_bounce_checks,  # after mailgun/ses checks above, so it sees this cycle's fresh suppressions
             run_safe_browsing_checks, run_mta_sts_checks, run_report_auth_checks,
@@ -399,7 +400,18 @@ def build_portfolio_overview(conn, domains: list) -> dict:
     ).fetchall()]
     leftover = []
     unused_spf = []
+    mx_split, mx_bounces, mx_backup, shared_sending = [], [], [], []
     for d in conn.execute("SELECT id, name FROM domains ORDER BY name").fetchall():
+        mx = incoming_mail_status(conn, d["id"], d["name"])
+        kind = mx[4] if mx else None
+        if kind == "split":
+            mx_split.append(d["name"])
+        elif kind == "no_route" and mx[0] == "change":
+            mx_bounces.append(d["name"])
+        elif kind == "backup":
+            mx_backup.append(d["name"])
+        if shared_sending_domain(conn, d["id"], d["name"]):
+            shared_sending.append(d["name"])
         dns = conn.execute(
             "SELECT txt_value FROM dns_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (d["id"],)
         ).fetchone()
@@ -425,6 +437,10 @@ def build_portfolio_overview(conn, domains: list) -> dict:
         "http_tracking": http_tracking,
         "unused_spf": unused_spf,
         "leftover_tags": leftover,
+        "mx_split": mx_split,
+        "mx_bounces": mx_bounces,
+        "mx_backup": mx_backup,
+        "shared_sending": shared_sending,
     }
 
 

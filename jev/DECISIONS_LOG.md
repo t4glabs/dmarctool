@@ -2720,3 +2720,19 @@ tracking on 13 click-tracked domains. Jev, operator framing (`audience_fit`/`hon
 - Evidence checked before wording: 0 failure (ruf) reports in ~6,000 mailbox messages since August, so the
   tags row says "nothing uses them", not "privacy risk". Chrome 154 HTTPS-by-default (Oct 2026) confirmed
   via search before the link-tracking row was rated Change now.
+
+## 2026-11-10 -- Incoming-mail (MX) check + "Forwarded by a recipient" (operator copy)
+
+Trigger: captains.ngo MX had Google Workspace and Mailgun at equal priority 10 (old setup); live RCPT probe:
+Google 250 for a real mailbox, mxa.mailgun.org "550 5.0.1 Recipient rejected" (account has zero routes).
+Also: a 2-message Google source on thudippu.in (mail-sor-f69.google.com) shown only as "Not enough data".
+
+- **MX split row**, 2 rounds: mechanism-first draft 77% too technical / 75% calibrated. Plain draft
+  ("Email sent to captains.ngo is split at random between Google Workspace, where your mailboxes are, and
+  Mailgun, which has nowhere to put it... about 2 in 3 emails... bounce") -> 49% too technical but 61%
+  calibrated: the bounce share is an expectation from RFC 5321 random choice, not a count. Shipped with
+  "you can expect about N in M" (computed from the actual top-priority hosts) to keep it an expectation.
+- **No-route row**, **shared sending domain row**: 71-75% too technical, 78-91% calibrated, 100%
+  actionable on first draft; shipped as-is (Mailgun-route steps are inherently technical; operator-facing).
+- **Forwarded-by-a-recipient help**: plain draft cut too-technical 81% -> 68% at equal calibration;
+  dropped the "~all is safer" aside to keep it to what the evidence shows.

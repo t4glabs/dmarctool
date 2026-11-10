@@ -78,7 +78,7 @@
       <td><a href="/domain/{{ d.domain_name }}">{{ d.domain_name }}</a></td>
       <td>
         {% if d.kind %}
-          {% set badge = {'aligned':'ok','forwarded':'muted','third_party':'warn','unverified':'bad','unknown':'muted'}[d.kind] %}
+          {% set badge = {'aligned':'ok','forwarded_ok':'ok','forwarded':'muted','third_party':'warn','unverified':'bad','unknown':'muted'}[d.kind] %}
           <span class="badge {{ badge }}" title="{{ d.help }}">{{ d.label }}</span>
         {% else %}<span class="muted">--</span>{% endif %}
       </td>

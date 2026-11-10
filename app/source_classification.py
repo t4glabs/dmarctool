@@ -37,6 +37,7 @@ network, no new tables.
 """
 
 import datetime
+import ipaddress
 
 # A source needs a bit of history before its shape means anything -- one
 # failing message proves nothing either way.
@@ -47,8 +48,27 @@ MIN_MSGS_TO_CLASSIFY = 3
 # already uses, so the two can't disagree about who has a problem.
 HEALTHY_PASS_RATE = 0.95
 
+# Networks Gmail and Outlook.com/Microsoft 365 auto-forward from (Gmail's
+# forwarding hosts are mail-sor-*.google.com, e.g. 209.85.220.69). Only used to
+# name a tiny, all-passing source as forwarding -- never to excuse a failing one.
+FORWARDER_NETWORKS = [ipaddress.ip_network(n) for n in (
+    "209.85.128.0/17", "74.125.0.0/16", "64.233.160.0/19", "66.102.0.0/20", "108.177.0.0/17",
+    "172.217.0.0/16", "173.194.0.0/16", "2607:f8b0::/32", "2a00:1450::/32", "2404:6800::/32",
+    "40.92.0.0/15", "40.107.0.0/16", "52.100.0.0/14", "104.47.0.0/17", "2a01:111:f400::/48",
+)]
+
+
+def _in_forwarder_network(ip):
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in FORWARDER_NETWORKS if net.version == addr.version)
+
+
 KIND_LABELS = {
     "aligned": "Passing",
+    "forwarded_ok": "Forwarded by a recipient",
     "forwarded": "Forwarded mail",
     "third_party": "Third-party sender",
     "unverified": "Unverified",
@@ -57,6 +77,12 @@ KIND_LABELS = {
 
 KIND_HELP = {
     "aligned": "This source's mail passes authentication. Nothing to do.",
+    # Jev-tested 2026-11-10: plainer than the first draft (68% vs 81% too-technical), same calibration.
+    "forwarded_ok": (
+        "Someone who received your email has their Gmail or Outlook set to forward it to another inbox. "
+        "Forwarding makes one check (SPF) fail, but your email's signature (DKIM) came through intact, so it "
+        "still passed and was delivered normally. Nothing to do."
+    ),
     "forwarded": (
         "Some of this source's mail carries a valid signature for your own domain, but not all of it "
         "passes. That is what forwarding looks like: the message started out as yours, and something "
@@ -149,6 +175,26 @@ def classify_sources(conn, domain_id: int, domain_name: str,
     def _informative(names):
         return sorted(names, key=lambda d: (breadth.get(d, 1), d))
 
+    # Messages that passed DMARC on our own DKIM signature while SPF *for our
+    # own domain* failed -- the envelope was ours, the server wasn't. From a
+    # mailbox provider's network that's auto-forwarding (thudippu.in,
+    # 2026-11-10: 209.85.220.69 = mail-sor-f69.google.com, 2 msgs, DKIM pass,
+    # SPF softfail). Own-domain SPF only: an ESP that just isn't using a
+    # custom bounce domain fails SPF for amazonses.com etc., not for us.
+    forwarded_msgs = {
+        r["source_ip"]: r["n"] for r in conn.execute(
+            f"""SELECT rr.source_ip, SUM(rr.count) AS n
+                FROM report_records rr JOIN reports r ON r.id = rr.report_id
+                WHERE {clause} AND rr.dkim_result = 'pass'
+                  AND EXISTS (SELECT 1 FROM record_auth_results ar
+                              WHERE ar.record_id = rr.id AND ar.mechanism = 'spf'
+                                AND ar.result IN ('fail', 'softfail')
+                                AND (lower(ar.domain) = lower(?) OR lower(ar.domain) LIKE '%.' || lower(?)))
+                GROUP BY rr.source_ip""",
+            params + [domain_name, domain_name],
+        ).fetchall()
+    }
+
     out = {}
     for row in totals:
         ip, total, passed = row["source_ip"], row["total"] or 0, row["passed"] or 0
@@ -161,7 +207,14 @@ def classify_sources(conn, domain_id: int, domain_name: str,
         own = {d for d in domains if _is_own(d, domain_name)}
         others = domains - own
 
-        if total < MIN_MSGS_TO_CLASSIFY:
+        if (total < MIN_MSGS_TO_CLASSIFY and total and forwarded_msgs.get(ip, 0) == total
+                and _in_forwarder_network(ip)):
+            # Too few to judge a pattern, but every one of them has the exact
+            # shape of a recipient's auto-forward -- say so instead of a bare
+            # "Not enough data", which left the operator wondering whether a
+            # Google IP on a domain without Google Workspace was an attack.
+            kind = "forwarded_ok"
+        elif total < MIN_MSGS_TO_CLASSIFY:
             kind = "unknown"
         elif rate is not None and rate >= HEALTHY_PASS_RATE:
             kind = "aligned"

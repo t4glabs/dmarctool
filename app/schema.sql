@@ -920,6 +920,23 @@ CREATE TABLE IF NOT EXISTS google_dkim_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_google_dkim_domain ON google_dkim_checks(domain_id, checked_at);
 
+-- Where each domain's INCOMING mail goes (app/mx_check.py). status: none |
+-- single | split (two providers share the most-preferred priority, so mail is
+-- divided at random -- captains.ngo, 2026-11-10) | backup (another provider
+-- only as a fallback). probe: live RCPT results for a known-real mailbox,
+-- only gathered when providers are mixed.
+CREATE TABLE IF NOT EXISTS mx_checks (
+    id             INTEGER PRIMARY KEY,
+    domain_id      INTEGER NOT NULL REFERENCES domains(id),
+    checked_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    records        TEXT NOT NULL,   -- JSON [[priority, host, provider_key], ...]
+    status         TEXT NOT NULL,
+    probe_address  TEXT,            -- the known-real mailbox tested, if any
+    probe          TEXT,            -- JSON [{provider, host, code, message}, ...]
+    mailgun_route  INTEGER          -- 1/0: does a Mailgun inbound route cover this domain (NULL = not applicable)
+);
+CREATE INDEX IF NOT EXISTS idx_mx_checks_domain ON mx_checks(domain_id, checked_at);
+
 -- Each Mailgun domain's current tracking settings, from the same
 -- /domains/<d>/tracking call app.mailgun_campaigns already makes. Mainly for
 -- web_scheme: 'http' means every tracked newsletter link is a plain-HTTP
