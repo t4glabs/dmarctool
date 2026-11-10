@@ -205,7 +205,11 @@ def run_mx_checks(conn, verbose: bool = True) -> None:
     routes_loaded = False
     for d in conn.execute("SELECT id, name FROM domains ORDER BY name").fetchall():
         domain_id, name = d["id"], d["name"]
-        if _stale(conn, domain_id, hours):
+        # A mixed setup is one you're expected to fix, so re-check it hourly:
+        # otherwise the warning outlives the DNS change by up to a day (and
+        # the Refresh button can't clear it).
+        prev = latest_mx_check(conn, domain_id)
+        if _stale(conn, domain_id, 1 if prev and prev["status"] in ("split", "backup") else hours):
             records = mx_lookup(name)
             if records is None:
                 continue  # lookup failed -- try again next cycle, don't record a false "no MX"
