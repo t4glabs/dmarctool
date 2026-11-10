@@ -296,6 +296,51 @@
       {% endif %}
     </div>
 
+    {% if roadmap %}
+    <div class="section">
+      <h2 class="first"><span class="ico">🗺️</span>Settings roadmap</h2>
+      <p class="muted" style="margin-top:0">{{ roadmap_intro }}</p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Setting</th><th>Now</th><th>What to do</th><th>Why</th></tr>
+        {% for r in roadmap %}
+        <tr>
+          <td><strong>{{ r.setting }}</strong></td>
+          <td><code style="white-space:normal">{{ r.now }}</code></td>
+          <td><span class="badge {{ r.css }}">{{ r.label }}</span>{% if r.action %}<br>{{ r.action }}{% endif %}</td>
+          <td class="muted" style="font-size:0.85rem">{{ r.why }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      {% if pct_watch %}
+      <details style="margin-top:0.6rem">
+        <summary class="muted" style="font-size:0.85rem">How Gmail and others handle pct right now</summary>
+        <p class="muted" style="font-size:0.8rem; margin:0.4rem 0">
+          Measured from your own reports, across every domain: of the emails that failed DMARC while their
+          domain used a partial pct, how many got the policy, versus how many pct asked for. Close to the asked
+          share means the provider still follows pct; close to 100% means it applies the full policy. Each provider
+          is judged on its most recent failing emails.
+        </p>
+        <div class="table-wrap">
+        <table>
+          <tr><th>Provider</th><th>Follows pct?</th><th>Policy applied</th><th>pct asked for</th><th>Based on</th></tr>
+          {% for w in pct_watch %}
+          <tr>
+            <td>{{ pct_reporter_label(w.reporter) }}</td>
+            <td>{% if w.verdict == 'honours' %}<span class="badge ok">Yes</span>{% elif w.verdict == 'ignores' %}<span class="badge bad">No, applies full policy</span>{% else %}<span class="badge muted">Not enough data</span>{% endif %}</td>
+            <td>{{ "%.0f"|format(100 * w.applied_share) }}%</td>
+            <td>{{ "%.0f"|format(100 * w.expected_share) }}%</td>
+            <td>{{ w.failing_msgs }} emails over {{ w.window_days }} days<br><span class="muted" style="font-size:0.8em">checked {{ w.checked_at[:10] }}</span></td>
+          </tr>
+          {% endfor %}
+        </table>
+        </div>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
+
     <div class="section">
       <h2 class="first">📈 How this domain is doing ({{ window_days }}d window, {{ window_total }} msgs
         {% if window_rate is not none %}, {{ "%.1f"|format(window_rate*100) }}% pass{% endif %})</h2>

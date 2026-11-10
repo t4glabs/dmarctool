@@ -24,6 +24,7 @@ CATEGORY_LABELS = {
     "mailgun_reputation": "Mailgun bounce/complaint rate",
     "mailgun_new_suppressions": "New Mailgun suppressions",
     "mailgun_throttled": "Gmail or another provider delayed your mail",
+    "pct_not_honoured": "A provider now ignores your pct setting",
     "postmaster_compliance": "Gmail Postmaster compliance",
     "postmaster_domain_missing": "Not added to Postmaster Tools",
     "chronic_transient_bounce": "Chronic transient bounces",
@@ -55,6 +56,7 @@ CATEGORY_LABELS = {
 # without updating this) still shows, just after everything ranked.
 CATEGORY_PRIORITY_ORDER = [
     "domain_expiring_soon",
+    "pct_not_honoured",
     "lookalike_domain",
     "dns_policy_weakened",
     "blocklist",
@@ -122,6 +124,7 @@ CATEGORY_HELP = {
     "no_report_history": "This domain has never had a single DMARC report ingested, so every other check here has nothing to go on. This is a live DNS snapshot instead (MX/SPF/DMARC) -- it tells you whether that's because the domain has no custom email at all, is missing basic protection, or is actually configured fine and just hasn't had any real mail volume yet.",
     "mailgun_reputation": "Mailgun's reported bounce or complaint rate for this domain crossed the warning threshold -- worth checking your list quality before sending more. Note: this only reflects providers that feed complaints back to Mailgun (e.g. Yahoo) -- Gmail generally doesn't, so a low number here doesn't mean Gmail recipients are happy too.",
     "mailgun_new_suppressions": "Mailgun automatically suppressed new addresses (bounced or complained) since the last check -- these won't receive mail from you again unless removed from Mailgun's suppression list, and are worth pruning from your Listmonk list too.",
+    "pct_not_honoured": "The new DMARC standard (RFC 9989, May 2026) removed pct. A mail provider that has adopted it ignores pct and applies your full policy to all mail that fails DMARC. This was measured from your own reports, not assumed: the provider applied your policy to far more failing mail than pct asked for.",
     "mailgun_throttled": "Gmail (or another big provider) told Mailgun \"not now, try again later\" for some of your mail, and said why: an unusual rate of mail from your sending domain. Mailgun retries on its own, so this normally means a delay, not lost mail -- but Mailgun's own log shows every refusal as a red \"failed\" line even when the retry worked. It happens most to domains that send rarely and then release a whole list within seconds: the provider hasn't seen enough of your mail to trust a sudden burst, even when authentication and spam rates are perfect.",
     "postmaster_compliance": "Google's own verdict (from Postmaster Tools) on one of its published sender requirements for this domain -- this is Gmail telling you directly what's wrong, not an inference from DMARC reports.",
     "postmaster_domain_missing": "Gmail reported seeing real, meaningful mail volume for this domain, but it isn't verified on this Postmaster Tools account -- so its actual Gmail spam rate and compliance verdicts are invisible to every check that depends on Postmaster (unlike DMARC reports, which every domain gets regardless).",
@@ -168,6 +171,7 @@ CATEGORY_REMEDIATION = {
     # Jev-tested 2026-11-10 (3 drafts): all were fully actionable; this
     # plain-language-first one was least "too technical" (68% vs 80%). The
     # config line can't go -- without it there's nothing concrete to do.
+    "pct_not_honoured": "Check this domain's pass rate on its Overview tab. If its own mail passes cleanly, nothing is lost: set pct=100 so the record says what's really happening. If some of its own mail still fails, add t=y to the record (for example v=DMARC1; p=quarantine; pct=10; t=y). Providers following the new standard then treat the policy as a test and hold back, while older ones keep reading pct. Remove t=y once the failing sender is fixed.",
     "mailgun_throttled": "Nothing to clean up: these people are fine and should stay on your list. The fix is to send each newsletter out a bit more slowly, in small batches over half an hour instead of all at once, because Gmail is wary of a sudden burst from a sender it rarely hears from. It is a one-time change on the Ghost server. For whoever manages that server: add \"bulkEmail\": {\"batchSize\": 50, \"targetDeliveryWindow\": 1800000} to config.production.json and restart Ghost. If any messages never got through, or the reason mentions authentication rather than rate, check this domain's Gmail Postmaster data before the next send.",
     "ses_reputation_watch": "No urgent action yet -- but check the \"Download suppressions\" CSV for this configuration set to see if a pattern is forming, and consider slowing send frequency until the rate settles back down.",
     "ses_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
@@ -384,6 +388,16 @@ SETTINGS_META = {
         "label": "Minimum volume to trust the health score",
         "help": "Below this many messages/attempts in the last 30 days, a signal (DMARC pass rate, or bounce/complaint rate) counts as 'not enough data' instead of a real score. Without this, a quiet domain with no recent DMARC reports would look like it's failing 100% of its mail, and a single stray bounce with nothing else sent would look like a 100% bounce rate.",
         "example": "50 means we want to see at least 50 messages/attempts before trusting that particular rate.",
+    },
+    "pct_watch_max_days": {
+        "label": "pct watch -- furthest back to look",
+        "help": "The new DMARC standard (RFC 9989, May 2026) dropped pct, so a mail provider that adopts it applies your full policy no matter what pct says. Each provider is judged on its most recent failing emails (see the next setting), reaching back at most this many days to find them. If one stops treating pct as a percentage, every domain using a partial pct gets flagged.",
+        "example": "120 means a provider with too few recent failing emails is judged on up to the last 120 days of reports.",
+    },
+    "pct_watch_min_failing": {
+        "label": "pct watch -- minimum failing emails before judging a provider",
+        "help": "Each provider is judged on its most recent emails that failed DMARC under a partial pct, this many of them. Fewer than that and a handful of messages could swing the percentage either way; using only the most recent ones means a change shows up quickly.",
+        "example": "30 means each provider is judged on its latest 30 such emails.",
     },
     "ramp_steps": {
         "label": "Enforcement ladder (percent steps)",
@@ -699,6 +713,7 @@ SETTINGS_GROUPS = [
     ("📈 DMARC ramp-up & recommendations", [
         "min_pass_rate", "low_pass_rate", "min_days_stable", "rolling_window_days",
         "min_volume_for_recommendation", "health_score_min_volume", "ramp_steps",
+        "pct_watch_max_days", "pct_watch_min_failing",
     ]),
     ("📡 Sender monitoring & data freshness", [
         "new_sender_window_days", "high_volume_fail_threshold", "high_fail_rate_threshold",

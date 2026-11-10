@@ -45,6 +45,8 @@ DEFAULT_SETTINGS = {
     "min_volume_for_recommendation": "50",  # total msgs in window needed to trust the rate
     "health_score_min_volume": "50",   # below this many msgs/attempts in the 30d window, a component (pass/bounce/complaint rate) is "not enough data" rather than a real score -- otherwise a quiet domain with zero DMARC volume scores as if every message failed, or one stray bounce with no other traffic scores as a 100% bounce rate
     "ramp_steps": "10,25,50,100",      # pct ramp ladder
+    "pct_watch_max_days": "120",       # app/pct_watch.py: furthest back to reach for a receiver's most recent failing msgs
+    "pct_watch_min_failing": "30",     # app/pct_watch.py: DMARC-failing msgs a receiver must have seen under a partial pct before its behaviour is judged
     "new_sender_window_days": "14",    # a sender first seen within this window is "new"
     "high_volume_fail_threshold": "20",  # msgs in window to flag a failing sender
     "high_fail_rate_threshold": "0.5",   # pass rate below this + high volume => flag

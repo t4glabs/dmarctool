@@ -889,6 +889,23 @@ CREATE TABLE IF NOT EXISTS mailgun_deferrals (
 );
 CREATE INDEX IF NOT EXISTS idx_mailgun_deferrals_domain ON mailgun_deferrals(domain_id, first_deferred_at);
 
+-- Per-receiver measurement of whether DMARC's pct= is still honoured (see
+-- app/pct_watch.py): RFC 9989 removed pct, so a receiver adopting it applies
+-- the full policy regardless. Portfolio-wide (receiver behaviour, not a
+-- per-domain property); history kept so a change shows WHEN it happened.
+CREATE TABLE IF NOT EXISTS pct_watch_checks (
+    id              INTEGER PRIMARY KEY,
+    checked_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    reporter        TEXT NOT NULL,     -- aggregate-report org_name, e.g. google.com
+    window_days     INTEGER NOT NULL,
+    failing_msgs    INTEGER NOT NULL,  -- DMARC-failing msgs seen under a partial pct
+    applied_msgs    INTEGER NOT NULL,  -- of those, how many got the published policy
+    expected_share  REAL,              -- what pct asked for (volume-weighted)
+    applied_share   REAL,
+    verdict         TEXT NOT NULL      -- honours | ignores | not_enough_data
+);
+CREATE INDEX IF NOT EXISTS idx_pct_watch_reporter ON pct_watch_checks(reporter, checked_at);
+
 -- When each Mailgun domain was last scanned for newsletters. Needed because
 -- most domains legitimately have NO newsletters, so "newest row in
 -- mailgun_campaigns" can never serve as a last-checked marker for them --

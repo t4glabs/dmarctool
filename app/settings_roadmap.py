@@ -1,0 +1,340 @@
+"""
+"Settings roadmap": for each email-authentication DNS setting on a domain,
+what it is now, whether to keep it or change it (and when), and the evidence.
+
+The pct ramp (app.analysis.recommend) already does this for ONE setting. The
+operator asked for the same guidance across the rest, after meeting advice
+elsewhere to "tighten SPF from ~all to -all after a few clean weeks" -- advice
+that's wrong for a domain already enforcing DMARC: RFC 9989 s7.1 warns that
+-all can get a message rejected "before any DMARC processing takes place", so
+forwarded mail that would have passed on its DKIM signature is lost, and
+those losses "will never appear in aggregate DMARC reports". So most rows here
+deliberately say Keep: knowing what NOT to touch is half the value.
+
+Every verdict is computed from data already collected (live DNS, SPF/DKIM
+checks, report auth results, open action items, the pct watch) -- nothing
+new is fetched at page load. Wording Jev-tested, see jev/DECISIONS_LOG.md.
+"""
+
+import datetime
+import json
+
+from app.dns_check import parse_dmarc_tags
+from app.pct_watch import latest_pct_watch, reporter_label
+
+# Jev-tested 2026-11-10: this set read clear as-is (56%); "Keep / Change /
+# Not yet / Optional / Can't tell yet" needed a plain-language pass.
+VERDICT_LABELS = {"keep": "Leave as is", "change": "Change now", "wait": "Wait", "optional": "Nice to have",
+                  "unknown": "Not enough data"}
+ROADMAP_INTRO = ("For each email setting on this domain: leave it as is, change it now, or wait. Worked out from "
+                 "this domain's own reports and rechecked every 6 hours. On a healthy domain most rows say Leave "
+                 "as is.")
+VERDICT_CLASS = {"keep": "ok", "change": "warn", "wait": "muted", "optional": "muted", "unknown": "muted"}
+_SEVERITY = {"change": 4, "unknown": 3, "wait": 2, "optional": 1, "keep": 0}
+_POLICY_RANK = {"none": 0, "quarantine": 1, "reject": 2}
+LOOKBACK_DAYS = 90
+
+
+def _row(setting, now, verdict, action, why):
+    return {"setting": setting, "now": now, "verdict": verdict, "label": VERDICT_LABELS[verdict],
+            "css": VERDICT_CLASS[verdict], "action": action, "why": why}
+
+
+def _strip_domain(title, name):
+    return title[len(name) + 2:] if title.startswith(name + ": ") else title
+
+
+def _mail_volume(conn, domain_id):
+    """(own messages -- ones that PASSED DMARC -- in the last LOOKBACK_DAYS,
+    whether any report ever arrived). Passing only, so a parked domain that's
+    merely being spoofed doesn't look like it sends mail."""
+    since = int((datetime.datetime.utcnow() - datetime.timedelta(days=LOOKBACK_DAYS)).timestamp())
+    recent = conn.execute(
+        """SELECT COALESCE(SUM(rr.count), 0) n FROM report_records rr JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND r.date_begin >= ?
+             AND (rr.dkim_result = 'pass' OR rr.spf_result = 'pass')""",
+        (domain_id, since),
+    ).fetchone()["n"]
+    ever = conn.execute("SELECT 1 FROM reports WHERE domain_id = ? LIMIT 1", (domain_id,)).fetchone()
+    return recent, bool(ever)
+
+
+def _subdomain_signers(conn, domain_id, name, mechanism):
+    """[(auth_domain, messages)] for mail that passed `mechanism` as a SUBDOMAIN
+    of this domain -- mail that only counts for DMARC under relaxed alignment."""
+    since = int((datetime.datetime.utcnow() - datetime.timedelta(days=LOOKBACK_DAYS)).timestamp())
+    return [(r["d"], r["n"]) for r in conn.execute(
+        """SELECT lower(ra.domain) d, SUM(rr.count) n
+           FROM record_auth_results ra JOIN report_records rr ON rr.id = ra.record_id
+           JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND r.date_begin >= ? AND ra.mechanism = ? AND ra.result = 'pass'
+             AND lower(ra.domain) LIKE '%.' || lower(?)
+           GROUP BY lower(ra.domain) ORDER BY n DESC""",
+        (domain_id, since, mechanism, name),
+    ).fetchall()]
+
+
+def _pct_note(watch):
+    """One sentence on whether receivers still honour pct, for a domain using a partial one."""
+    judged = [w for w in watch if w["verdict"] in ("honours", "ignores")]
+    if not judged:
+        return ("The new DMARC standard (RFC 9989) drops pct, and there isn't enough recent data yet to tell "
+                "whether Gmail and Microsoft still follow it.")
+    ignoring = [reporter_label(w["reporter"]) for w in judged if w["verdict"] == "ignores"]
+    honouring = [reporter_label(w["reporter"]) for w in judged if w["verdict"] == "honours"]
+    checked = max(w["checked_at"] for w in judged)[:10]
+    if ignoring:
+        return (f"{' and '.join(ignoring)} already ignore{'s' if len(ignoring) == 1 else ''} pct and apply the "
+                f"full policy (RFC 9989 dropped pct). Checked {checked}.")
+    return (f"The new DMARC standard (RFC 9989) drops pct. {' and '.join(honouring)} still follow it as of "
+            f"{checked}; you'll get an alert here if that changes.")
+
+
+def _dmarc_row(name, tags, rec_row, watch):
+    if tags is None:
+        return _row("DMARC policy", "No record", "change", "Publish a DMARC record",
+                    "Without one, anyone can send email pretending to be this domain, and receiving servers "
+                    "have no instructions for what to do with it.")
+    p = tags.get("p", "none")
+    try:
+        pct = int(tags.get("pct", "100"))
+    except ValueError:
+        pct = 100
+    now = f"p={p}" + (f", pct={pct}" if pct != 100 else "") + ("; t=y" if tags.get("t") == "y" else "")
+    note = f" {_pct_note(watch)}" if p != "none" and 1 <= pct <= 99 else ""
+    if p == "reject" and pct == 100 and tags.get("t") != "y":
+        return _row("DMARC policy", now, "keep", "",
+                    "This is the strongest setting: mail that fails the checks is refused. Nothing further to do.")
+    if not rec_row:
+        return _row("DMARC policy", now, "unknown", "Wait for more reports",
+                    "Not enough DMARC reports yet to say whether the next step is safe." + note)
+    title = _strip_domain(rec_row["title"], name)
+    ready = title.startswith(("safe to raise", "ready to"))
+    return _row("DMARC policy", now, "change" if ready else "wait",
+                title[0].upper() + title[1:], (rec_row["detail"] or "") + note)
+
+
+def _spf_qualifier(record):
+    for token in reversed((record or "").split()):
+        t = token.lower()
+        if t in ("all", "+all", "-all", "~all", "?all"):
+            return "+all" if t == "all" else t
+    return None
+
+
+# Jev-tested 2026-11-10 (3 drafts): this framing moved from "too technical"
+# to the best audience fit, 96% actionable. Its claim is kept to exactly what
+# RFC 9989 s7.1 says: rejected early, never in aggregate reports.
+_KEEP_SOFTFAIL_WHY = ("Switching to -all wouldn't stop any more fake emails, because your DMARC setting already does "
+                      "that. It would only add a risk: some emails your readers forward could be refused, and it "
+                      "wouldn't show up in your reports (RFC 9989 section 7.1).")
+_DROP_HARDFAIL_WHY = ("-all doesn't stop any more fake emails than your DMARC setting already does. It only adds a "
+                      "risk: some emails your readers forward can be refused, and it doesn't show up in your "
+                      "reports (RFC 9989 section 7.1).")
+
+
+def _envelope_own_mail(conn, domain_id, spf_domain):
+    """Own mail (passed DMARC) in the last LOOKBACK_DAYS whose SPF was checked
+    against `spf_domain` -- i.e. that used it as the bounce/envelope domain.
+    SPF only ever judges that domain, so this is the mail -all could actually
+    cost: folktaler.com's apex had -all with just 1 such message in 90 days,
+    everything else going out via mails./send.mail. subdomains."""
+    since = int((datetime.datetime.utcnow() - datetime.timedelta(days=LOOKBACK_DAYS)).timestamp())
+    return conn.execute(
+        """SELECT COALESCE(SUM(rr.count), 0) n
+           FROM record_auth_results ra JOIN report_records rr ON rr.id = ra.record_id
+           JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND r.date_begin >= ? AND ra.mechanism = 'spf' AND lower(ra.domain) = lower(?)
+             AND (rr.dkim_result = 'pass' OR rr.spf_result = 'pass')""",
+        (domain_id, since, spf_domain),
+    ).fetchone()["n"]
+
+
+# Own emails per 90 days using a -all domain as their bounce domain before
+# switching to ~all is "Change now" rather than "Nice to have".
+HARDFAIL_CHANGE_MIN = 10
+
+
+def _spf_verdict(qualifier, sends, has_reports, envelope_msgs):
+    if qualifier is None:
+        return "change", "End the record with ~all", "Without an ending, receivers get no guidance about servers you didn't list."
+    if qualifier == "+all":
+        return "change", "Replace +all with ~all", "+all tells receivers that any server in the world may send as you."
+    if qualifier == "?all":
+        return "change", "Replace ?all with ~all", "?all tells receivers to treat unlisted servers as neutral, which protects nothing."
+    if qualifier == "-all":
+        # Judged on mail that actually uses THIS domain as its bounce domain:
+        # that's the only mail -all can cost.
+        if envelope_msgs >= HARDFAIL_CHANGE_MIN:
+            return "change", "Switch to ~all", _DROP_HARDFAIL_WHY
+        if envelope_msgs:
+            return "optional", "Switch to ~all", (f"Only {envelope_msgs} of your emails in 90 days used this as their "
+                                                  f"bounce address, so the risk is small. " + _DROP_HARDFAIL_WHY)
+        if has_reports:
+            return "keep", "", ("None of your mail in 90 days used this as its bounce address, so -all costs nothing "
+                                "here and locks it down.")
+        return "unknown", "Keep -all only if this domain never sends email", "No DMARC reports yet, so there's no way to tell whether it sends mail. If it does, switch to ~all."
+    # ~all
+    if sends:
+        return "keep", "", _KEEP_SOFTFAIL_WHY
+    return "optional", "Lock down with v=spf1 -all, if this domain never sends email", (
+        "No mail from this domain in 90 days. For a domain that never sends, -all is the right lock-down. "
+        "If it still sends now and then, keep ~all.")
+
+
+def _spf_row(conn, domain_id, name, spf_checks, sends, has_reports):
+    own = [c for c in spf_checks if c["spf_domain"] == name or c["spf_domain"].endswith("." + name)]
+    if not own:
+        return _row("SPF ending", "Not checked yet", "unknown", "Wait for the next check", "")
+    results = []
+    for c in sorted(own, key=lambda c: (c["spf_domain"] != name, c["spf_domain"])):
+        if c["status"] == "missing":
+            if c["spf_domain"] == name:
+                results.append((c["spf_domain"], "none", "change", "Publish an SPF record",
+                                "Without one, receivers have nothing to check your sending servers against."))
+            continue
+        record = None
+        try:
+            record = json.loads(c["lookup_tree"] or "{}").get("record")
+        except (ValueError, TypeError):
+            pass
+        if record is None:
+            continue
+        # A subdomain only gets an SPF check because mail was seen using it as
+        # the envelope (bounce) domain, so it sends by definition.
+        is_apex = c["spf_domain"] == name
+        q = _spf_qualifier(record)
+        verdict, action, why = _spf_verdict(q, sends if is_apex else True, has_reports,
+                                            _envelope_own_mail(conn, domain_id, c["spf_domain"]) if q == "-all" else 0)
+        results.append((c["spf_domain"], q or "no ending", verdict, action, why))
+    if not results:
+        return _row("SPF ending", "Couldn't read", "unknown", "Wait for the next check", "")
+    now = " · ".join(f"{d}: {q}" for d, q, *_ in results)
+    worst = max(results, key=lambda r: _SEVERITY[r[2]])
+    domain, _q, verdict, action, why = worst
+    if len(results) > 1:
+        # Several SPF domains listed under "Now": say which one this is about.
+        if action:
+            action = f"{domain}: {action[0].lower()}{action[1:]}"
+        why = f"{domain}: {why}"
+    return _row("SPF ending", now, verdict, action, why)
+
+
+def _alignment_row(conn, domain_id, name, tags):
+    adkim = (tags or {}).get("adkim", "r")
+    aspf = (tags or {}).get("aspf", "r")
+    now = "relaxed" if adkim == "r" and aspf == "r" else f"adkim={adkim}, aspf={aspf}"
+    dkim_subs = _subdomain_signers(conn, domain_id, name, "dkim")
+    spf_subs = _subdomain_signers(conn, domain_id, name, "spf")
+    broken = (dkim_subs if adkim == "s" else []) + (spf_subs if aspf == "s" else [])
+    if broken:
+        sub, n = max(broken, key=lambda s: s[1])
+        return _row("Alignment", now, "change", "Switch back to relaxed (remove adkim=s / aspf=s)",
+                    f"Mail authenticated as {sub} ({n} messages in 90 days) can't count for {name} under strict "
+                    f"alignment, so it fails DMARC.")
+    subs = dkim_subs or spf_subs
+    if adkim == "r" and aspf == "r":
+        if subs:
+            sub, n = subs[0]
+            # Jev-tested: leading with the concrete count read less technical than the mechanism.
+            return _row("Alignment", now, "keep", "",
+                        f"{n:,} of your emails in the last 90 days went out signed as {sub}. Relaxed lets those "
+                        f"count as {name}; strict would make every one of them fail.")
+        return _row("Alignment", now, "keep", "",
+                    "Relaxed also accepts mail signed by your own subdomains. Strict adds little protection and "
+                    "breaks the moment you add a newsletter or mail service on a subdomain.")
+    return _row("Alignment", now, "keep", "Keep, but switch to relaxed before adding any subdomain sender",
+                f"Strict works today because all your mail is signed as {name} itself.")
+
+
+def _subdomain_policy_row(name, tags):
+    if tags is None:
+        return _row("Subdomain policy", "-", "unknown", "Publish a DMARC record first", "")
+    p, sp = tags.get("p", "none"), tags.get("sp")
+    if not sp:
+        return _row("Subdomain policy", "not set (follows p=)", "keep", "",
+                    f"Subdomains get the same policy as {name}, so a fake like billing.{name} is treated the same "
+                    f"as a fake {name}.")
+    if _POLICY_RANK.get(sp, 0) < _POLICY_RANK.get(p, 0):
+        return _row("Subdomain policy", f"sp={sp}", "change", f"Remove sp= (or set sp={p})",
+                    f"Subdomains are less protected than {name} itself, so a fake like billing.{name} gets weaker "
+                    f"treatment. Only keep this if a subdomain deliberately sends mail that can't pass yet.")
+    return _row("Subdomain policy", f"sp={sp}", "keep", "", "Subdomains are at least as protected as the main domain.")
+
+
+def _dkim_row(conn, domain_id, name, dkim_checks, open_items):
+    item = next((i for i in open_items if i["category"] in ("dkim_weak_key", "dkim_alignment_gap")), None)
+    keys = [c for c in dkim_checks if c["status"] in ("ok", "weak")]
+    now = (", ".join(f"{c['selector']} ({c['key_bits']}-bit)" if c["key_bits"] else c["selector"] for c in keys[:3])
+           + (f" +{len(keys) - 3} more" if len(keys) > 3 else "")) if keys else "no keys checked"
+    if item:
+        title = _strip_domain(item["title"], name)
+        return _row("DKIM", now, "change", title[0].upper() + title[1:], "See the open action item for the fix.")
+    if not keys:
+        # compliance._run_dkim only checks selectors with real recent volume,
+        # so on a quiet domain "no keys checked" doesn't mean "not signing".
+        signing = _subdomain_signers(conn, domain_id, name, "dkim") or conn.execute(
+            """SELECT 1 FROM record_auth_results ra JOIN report_records rr ON rr.id = ra.record_id
+               JOIN reports r ON r.id = rr.report_id
+               WHERE r.domain_id = ? AND ra.mechanism = 'dkim' AND ra.result = 'pass' AND lower(ra.domain) = lower(?)
+                 AND r.date_begin >= ? LIMIT 1""",
+            (domain_id, name, int((datetime.datetime.utcnow() - datetime.timedelta(days=LOOKBACK_DAYS)).timestamp())),
+        ).fetchone()
+        if signing:
+            return _row("DKIM", "signing (key not checked)", "keep", "",
+                        "Your mail is DKIM-signed with your own domain's key. Volume is too low for the tool to "
+                        "check the key's strength yet.")
+        return _row("DKIM", now, "unknown", "Wait for reports",
+                    "No mail signed with this domain's own DKIM key in the last 90 days.")
+    small = [c for c in keys if c["key_bits"] and c["key_bits"] < 2048]
+    if small:
+        return _row("DKIM", now, "optional", f"Upgrade {small[0]['selector']} to a 2048-bit key when convenient",
+                    f"{small[0]['key_bits']}-bit meets Gmail's minimum today, but 2048-bit is the recommended size. "
+                    f"Your email provider's DKIM settings can generate a new key.")
+    return _row("DKIM", now, "keep", "",
+                "Signing keys are 2048-bit and no DKIM problems were found in your reports.")
+
+
+def _report_address_row(tags, report_auth):
+    rua = (tags or {}).get("rua")
+    if not rua:
+        return _row("Report address", "none", "change", "Add a rua= address",
+                    "Without it no DMARC reports are sent, so this tool can't see what happens to your mail.")
+    missing = [r for r in report_auth if r["status"] == "missing"]
+    if missing:
+        dest = missing[0]["destination_domain"]
+        return _row("Report address", rua, "change", f"Publish the permission record on {dest}",
+                    "Reports to another domain need that domain's permission record (RFC 9990). Some receivers "
+                    "already stop sending reports without it, with no error.")
+    return _row("Report address", rua, "keep", "", "Reports are reaching this tool and the destination is authorised.")
+
+
+def _mta_sts_row(mta_sts):
+    if not mta_sts or mta_sts["mta_sts_status"] == "not_set_up":
+        return _row("MTA-STS", "not set up", "optional", "Once everything above says Leave as is",
+                    "Makes mail servers use encryption when delivering email TO you, so it can't be read in "
+                    "transit. Newer and optional; most small domains don't have it yet.")
+    if mta_sts["mta_sts_status"] == "broken":
+        return _row("MTA-STS", "broken", "change", "Fix or remove the MTA-STS record", mta_sts["mta_sts_note"] or "")
+    if mta_sts["mta_sts_mode"] == "enforce":
+        return _row("MTA-STS", "enforce", "keep", "", "Incoming mail must be delivered encrypted.")
+    return _row("MTA-STS", mta_sts["mta_sts_mode"] or "set up", "wait", "Move to mode: enforce after a few clean weeks",
+                "In testing mode nothing is enforced yet. Switch once your TLS reports show no failures.")
+
+
+def settings_roadmap(conn, domain_id, name, latest_dns, rec_row, spf_checks, dkim_checks, report_auth, mta_sts,
+                     open_items):
+    """Rows for the domain page, most important setting first. Takes what
+    domain_detail() has already loaded rather than re-querying it."""
+    tags = parse_dmarc_tags(latest_dns["txt_value"]) if latest_dns and latest_dns["txt_value"] else None
+    recent_msgs, has_reports = _mail_volume(conn, domain_id)
+    watch = latest_pct_watch(conn)
+    return [
+        _dmarc_row(name, tags, rec_row, watch),
+        _spf_row(conn, domain_id, name, spf_checks, recent_msgs > 0, has_reports),
+        _alignment_row(conn, domain_id, name, tags),
+        _subdomain_policy_row(name, tags),
+        _dkim_row(conn, domain_id, name, dkim_checks, open_items),
+        _report_address_row(tags, report_auth),
+        _mta_sts_row(mta_sts),
+    ]

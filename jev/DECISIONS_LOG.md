@@ -2679,3 +2679,24 @@ data: 29 of 491 Google-hosted recipients deferred, all 29 delivered on retry 10-
   (`bulkEmail.batchSize` / `targetDeliveryWindow`) is unavoidable. Shipped the plain-language-first draft
   that hands the config to "whoever manages that server" -- least too-technical (68% vs 79-80%). Kept the
   config line anyway: without it there is nothing concrete to do, and this note is operator-facing.
+
+## 2026-11-10 -- "Settings roadmap" panel + pct watch (operator copy)
+
+Trigger: operator met advice elsewhere to "tighten SPF ~all to -all after a few clean weeks" and asked for
+step-by-step keep/change guidance for every setting. That advice is wrong for an enforcing domain (RFC 9989
+s7.1), so most rows deliberately say keep. Jev-tested, operator framing (`audience_fit` +
+`honesty_calibration` + `actionability`):
+
+- **Verdict vocabulary**: "Leave as is / Change now / Wait / Nice to have / Not enough data" read
+  `clear_as_is` (56%); "Keep / Change / Not yet / Optional / Can't tell yet" needed a plain-language pass
+  (53%). Shipped the first.
+- **SPF keep reason**, 3 drafts: the mechanism-first draft ("Your DMARC policy already decides... RFC 9989")
+  was 86% `too_technical_reader_will_skip`; consequence-first "Switching to -all wouldn't stop any more fake
+  emails... some emails your readers forward could be refused" moved to `needs_plain_language_pass`, 96%
+  actionable, but only 54% calibrated. Shipped it with the last clause narrowed to exactly what RFC 9989
+  s7.1 says ("it wouldn't show up in your reports" instead of "you'd never find out").
+- **Alignment keep reason**: leading with the real count ("1,673 of your emails in the last 90 days went
+  out signed as news.ilabindia.org...") was less too-technical (64%) than the mechanism-first version (77%),
+  both ~90% calibrated/actionable. Shipped count-first.
+- **Panel intro**, 3 drafts: all `needs_plain_language_pass` (inherently meta); shipped the shortest
+  ("For each email setting on this domain: leave it as is, change it now, or wait...") at 95% calibrated.

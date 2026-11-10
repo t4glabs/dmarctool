@@ -67,6 +67,8 @@ from app.lookalike import findings_for_domain, run_lookalike_checks
 from app.mailgun import run_mailgun_checks, send_message, _suppression_watermark as _mailgun_suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.mailgun_deferrals import deferral_summary, deferral_verdict
+from app.pct_watch import latest_pct_watch, reporter_label, run_pct_watch
+from app.settings_roadmap import ROADMAP_INTRO, settings_roadmap
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
 from app.bounce_notify import build_notification, last_notification, pending_notify_counts, record_notification_sent
@@ -136,6 +138,8 @@ templates.env.globals.update({
     "dns_status_help": dns_status_help,
     "postmaster_requirement_label": postmaster_requirement_label,
     "category_remediation": category_remediation,
+    "pct_reporter_label": reporter_label,
+    "roadmap_intro": ROADMAP_INTRO,
     "postmaster_remediation": postmaster_remediation,
     "csrf_token": lambda request: request.state.csrf_token,
 })
@@ -200,7 +204,8 @@ def run_all_checks(conn, trigger: str = "manual") -> bool:
         run_id = record_sweep_start(conn, trigger)
         for step in (
             run_imap_ingest,  # pull new DMARC reports from the mailbox FIRST, so this sweep analyses them
-            run_analysis, run_dns_checks, discover_untracked_subdomains, run_blocklist_checks,
+            run_analysis, run_dns_checks, run_pct_watch,  # pct watch reads this cycle's fresh DNS + reports
+            discover_untracked_subdomains, run_blocklist_checks,
             run_compliance_checks, run_mailgun_checks, run_mailgun_campaign_sync, run_postmaster_checks,
             run_ses_event_ingest, run_ses_account_checks, run_listmonk_content_sync, run_listmonk_blocklist_sync,
             run_chronic_bounce_checks,  # after mailgun/ses checks above, so it sees this cycle's fresh suppressions
@@ -962,6 +967,9 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "report_run": {"p": report_run["p"], "pct": report_run["pct"], "observed_from": _fmt_date(report_run["observed_from"])} if report_run else None,
         "manual_run": {"p": manual_run["p"], "pct": manual_run["pct"], "observed_from": _fmt_date(manual_run["observed_from"])} if manual_run else None,
         "recommendation": {"title": rec_row["title"], "detail": rec_row["detail"]} if rec_row else None,
+        "roadmap": settings_roadmap(conn, domain_id, name, latest_dns, rec_row, spf_checks, dkim_checks, report_auth,
+                                    mta_sts, open_items),
+        "pct_watch": latest_pct_watch(conn),
         "window_days": window_days, "window_total": window_total, "window_rate": window_rate,
         # Same min-volume floor already used for the health score (catches a
         # pass rate like "14%" from just ~11 messages, which swings wildly
