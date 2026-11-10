@@ -1038,6 +1038,57 @@
       {{ rate_trend_block("Bounce rate", mailgun_bounce_summary, mailgun_bounce_chart_svg) }}
       {{ rate_trend_block("Complaint rate", mailgun_complaint_summary, mailgun_complaint_chart_svg) }}
 
+      <h3 id="delivery-delays" style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0"><span class="ico">🐢</span>Delivery delays</h3>
+      <p class="muted" style="font-size:0.78rem; margin:0 0 0.6rem 0">
+        When a receiving server says "not now, try again later", Mailgun retries on its own, and its log shows each
+        refusal as a red "failed" line even when the retry worked. Gmail's refusals also say <em>why</em>: "an unusual
+        rate of mail from your sending domain" means Gmail is pacing you, usually because a domain that sends rarely
+        released its whole list within seconds. That's a delay, not lost mail, and not a reason to remove anyone from
+        your list. Mailgun only keeps these reasons for about 5 days, so they're saved here as they happen.
+      </p>
+      <div class="verdict {{ verdicts.mailgun_deferrals[0] }}">{{ verdicts.mailgun_deferrals[1] }}</div>
+      {% if verdicts.mailgun_deferrals[0] in ('warn', 'bad') %}{{ fix_note(category_remediation('mailgun_throttled')) }}{% endif %}
+      {% if mailgun_deferrals.sends %}
+      <div class="table-wrap">
+      <table>
+        <tr><th>Sent</th><th>What</th><th>Held back</th><th>Why</th><th>Outcome</th><th>Waited</th><th>How fast it went out</th></tr>
+        {% for s in mailgun_deferrals.sends %}
+        <tr>
+          <td>{{ s.send_day }}</td>
+          <td>{{ s.subject if s.is_newsletter else "Other mail (sign-in codes, confirmations, etc.)" }}<br><span class="muted" style="font-size:0.8em">{{ s.mailgun_domain }}</span></td>
+          <td title="Unique people whose copy was refused at least once">{{ s.people }}
+            {% if s.google_recipients %}<br><span class="muted" style="font-size:0.8em">of {{ s.google_recipients }} on Gmail/Google{% if s.recipients %} ({{ s.recipients }} total){% endif %}</span>
+            {% elif s.recipients %}<br><span class="muted" style="font-size:0.8em">of {{ s.recipients }}</span>{% endif %}
+          </td>
+          <td>
+            {% for label, n, sender_level in s.kinds %}<span class="badge {{ 'warn' if sender_level else 'muted' }}">{{ n }}</span> {{ label }}<br>{% endfor %}
+            <details><summary class="muted" style="font-size:0.8em">Their exact words</summary><code style="font-size:0.75em; white-space:normal">{{ s.sample_reason }}</code></details>
+          </td>
+          <td>
+            {% if s.failed %}<span class="badge bad">{{ s.failed }} never arrived</span><br>{% endif %}
+            {% if s.pending %}<span class="badge warn">{{ s.pending }} still retrying</span><br>{% endif %}
+            {% if s.delivered %}<span class="badge ok">{{ s.delivered }} delivered on retry</span>{% endif %}
+          </td>
+          <td>{% if s.delay_max is not none %}{{ "%.0f"|format(s.delay_min) }}&ndash;{{ "%.0f"|format(s.delay_max) }} min<br><span class="muted" style="font-size:0.8em">typically {{ "%.0f"|format(s.delay_median) }}</span>{% else %}-{% endif %}</td>
+          <td title="Time from the first message to 95% of the list being handed to receiving servers (retries not counted)">
+            {% if s.send_span_seconds is none %}-
+            {% elif s.send_span_seconds < 120 %}95% within {{ s.send_span_seconds }} sec
+            {% else %}95% within {{ (s.send_span_seconds / 60)|round|int }} min{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      {% endif %}
+      {% if mailgun_deferrals.history %}
+      <p class="muted" style="font-size:0.78rem; margin:0.5rem 0 0 0">
+        Earlier days with temporary refusals, from Mailgun's daily totals (counts include retries; the reasons
+        weren't saved{% if mailgun_deferrals.capture_started %} before tracking began on {{ mailgun_deferrals.capture_started }}{% endif %}
+        and Mailgun has since deleted them):
+        {% for h in mailgun_deferrals.history %}{{ h.day }} &ndash; {{ h.failed_temp }} of {{ h.accepted }} sent{% if not loop.last %}; {% endif %}{% endfor %}.
+      </p>
+      {% endif %}
+
       {% if mailgun_identity_stats %}
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">By sender identity ({{ mailgun_identity_stats[0].window_days }}d)</h3>
       <p class="muted" style="margin:0 0 0.5rem 0; font-size:0.82rem">

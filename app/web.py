@@ -66,6 +66,7 @@ from app.listmonk import run_listmonk_content_sync, run_listmonk_blocklist_sync
 from app.lookalike import findings_for_domain, run_lookalike_checks
 from app.mailgun import run_mailgun_checks, send_message, _suppression_watermark as _mailgun_suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
+from app.mailgun_deferrals import deferral_summary, deferral_verdict
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
 from app.bounce_notify import build_notification, last_notification, pending_notify_counts, record_notification_sent
@@ -866,6 +867,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_volume_chart = volume_bar_chart([(r["day"], r["volume"]) for r in ses_series])
     newsletter_campaigns = recent_campaigns(conn, domain_id, limit=10, settings=settings)
     mailgun_newsletter_campaigns = recent_mailgun_campaigns(conn, domain_id, limit=10, settings=settings)
+    mailgun_deferrals = deferral_summary(conn, domain_id)
     engagement = subscriber_engagement_summary(conn, domain_id)
     subscriber_notify_pending_count = pending_subscriber_notify_count(conn, domain_id)
     subscriber_notify_last = last_subscriber_notification(conn, domain_id)
@@ -929,6 +931,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mailgun": mailgun_verdict(mailgun_stats, float(settings["mailgun_bounce_rate_warn"]), float(settings["mailgun_complaint_rate_warn"])),
         "ses": ses_verdict(ses_stats, float(settings["ses_bounce_rate_warn"]), float(settings["ses_complaint_rate_warn"])),
         "postmaster": postmaster_verdict(postmaster_compliance),
+        "mailgun_deferrals": deferral_verdict(mailgun_deferrals),
         "ses_account": ses_account_verdict(ses_account_status),
         "ses_identity": ses_identity_verdict(ses_identity),
         "vibe": (vibe_status, vibe_text),
@@ -998,6 +1001,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "ses_volume_chart": ses_volume_chart,
         "newsletter_campaigns": newsletter_campaigns,
         "mailgun_newsletter_campaigns": mailgun_newsletter_campaigns,
+        "mailgun_deferrals": mailgun_deferrals,
         "engagement": engagement,
         "subscriber_notify_pending_count": subscriber_notify_pending_count,
         "subscriber_notify_last": subscriber_notify_last,

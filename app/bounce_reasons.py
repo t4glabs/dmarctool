@@ -98,6 +98,13 @@ _PHRASE_CATEGORIES = [
      "Mailbox full or over quota"),
     (("invalid address", "invalid recipient"),
      "Bad address syntax"),
+    # The provider throttling the SENDER (Gmail's 4.7.28 "unusual rate of
+    # mail from your SPF domain", Yahoo's TSS04 "unexpected volume",
+    # Microsoft's "rate limited") -- says nothing about the address itself.
+    # Ahead of "blocked" so a throttle that mentions blocking isn't read as a
+    # hard rejection. Same label as app.mailgun_deferrals' rate_limited kind.
+    (("unusual rate", "rate limited", "rate-limited", "unexpected volume", "tss04"),
+     "Receiving provider slowed down your mail (rate limit)"),
     (("recipient rejected", "blocked", "blacklist", "access denied", "recipient address rejected"),
      "Rejected/blocked by recipient's mail server"),
     # Microsoft 365/Exchange's own internal routing bug (a misconfigured

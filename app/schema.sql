@@ -851,10 +851,43 @@ CREATE TABLE IF NOT EXISTS mailgun_campaigns (
     click_tracking    INTEGER NOT NULL DEFAULT 1,  -- ditto clicks; 0 means "can't tell", not "nobody clicked"
     tracking_open_setting  INTEGER,  -- Mailgun's CURRENT domain setting; explanatory only (tracking isn't retroactive)
     tracking_click_setting INTEGER,
+    google_recipients INTEGER,       -- recipients whose receiving server is Google's (Gmail + Workspace), from mx-host
+    send_span_seconds INTEGER,       -- first attempt to 95th-percentile first attempt: how much of a burst the send was
     updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(mailgun_domain, from_address, subject, send_day)
 );
 CREATE INDEX IF NOT EXISTS idx_mailgun_campaigns_domain ON mailgun_campaigns(domain_id, send_day);
+
+-- One row per (message, recipient) that a receiving server temporarily
+-- refused ("not now, try later" -- a 4xx deferral) at least once, see
+-- app/mailgun_deferrals.py. Mailgun retries these on its own, so most end up
+-- delivered and never show anywhere else in this tool: mailgun_daily_stats
+-- keeps only a bare failed_temp COUNT, and Mailgun's own event log keeps the
+-- reason text for just ~5 days on this account. That reason text is what says
+-- WHY -- e.g. Gmail's 4.7.28 names exactly what it's throttling (your SPF
+-- domain, DKIM domain or IP) -- so it's captured here before it expires.
+CREATE TABLE IF NOT EXISTS mailgun_deferrals (
+    id                 INTEGER PRIMARY KEY,
+    domain_id          INTEGER NOT NULL REFERENCES domains(id),
+    mailgun_domain     TEXT NOT NULL,
+    message_id         TEXT NOT NULL,
+    recipient          TEXT NOT NULL,
+    from_address       TEXT,
+    subject            TEXT,
+    is_newsletter      INTEGER NOT NULL DEFAULT 0,  -- same newsletter test as mailgun_campaigns
+    mx_host            TEXT,          -- receiving server that deferred it (e.g. gmail-smtp-in.l.google.com)
+    kind               TEXT NOT NULL, -- see mailgun_deferrals.DEFERRAL_KINDS
+    enhanced_code      TEXT,          -- e.g. 4.7.28
+    reason             TEXT,          -- the receiving server's own words, latest attempt
+    attempts           INTEGER NOT NULL DEFAULT 1,  -- deferrals seen for this message+recipient
+    first_deferred_at  TEXT NOT NULL,
+    last_deferred_at   TEXT NOT NULL,
+    outcome            TEXT NOT NULL, -- 'delivered' | 'failed' | 'pending' (still retrying, or events expired first)
+    delivered_at       TEXT,
+    updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(mailgun_domain, message_id, recipient)
+);
+CREATE INDEX IF NOT EXISTS idx_mailgun_deferrals_domain ON mailgun_deferrals(domain_id, first_deferred_at);
 
 -- When each Mailgun domain was last scanned for newsletters. Needed because
 -- most domains legitimately have NO newsletters, so "newest row in

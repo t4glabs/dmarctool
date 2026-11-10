@@ -64,6 +64,7 @@ DEFAULT_SETTINGS = {
     "mailgun_bounce_rate_warn": "0.05",  # bounce rate (of accepted) that triggers a flag
     "mailgun_complaint_rate_warn": "0.001",  # complaint rate (of accepted) that triggers a flag
     "mailgun_min_volume_for_rate": "50",  # don't flag a bounce/complaint RATE until this many were accepted -- 1 bounce out of 11 is 9% but meaningless noise
+    "mailgun_throttle_lookback_days": "14",  # how long a provider slowing a Mailgun domain down (e.g. Gmail 4.7.28) stays an open action item -- longer than Mailgun's ~5-day log so a monthly newsletter's item doesn't vanish unseen
     # SES drain: a single background run should fully EMPTY the queue, not clear
     # a fixed slice and leave a residue -- the laptop sleeps, so if each run only
     # drained 3000 the backlog grew faster than it cleared. The time budget is

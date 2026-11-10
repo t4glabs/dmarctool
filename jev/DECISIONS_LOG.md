@@ -2654,3 +2654,28 @@ button, and a red banner when no background check has finished in 8 hours. Two w
   be emailed to clients at the next update, around 4:30 pm (or about a minute after the app is
   restarted)." scored `clear_as_is` + `concrete_next_step`, honesty 88% -- the restart caveat is the fact
   that actually prevents a surprise send.
+
+## 2026-11-10 -- "Delivery delays" panel: Gmail 4.7.28 rate-limit symptoms (operator copy)
+
+Trigger: iLAB's 9 Nov Ghost newsletter drew 35 red "failed" Gmail lines in Mailgun's log (`421 4.7.28
+... unusual rate of mail originating from your SPF domain`); the operator read it as a disaster. Real
+data: 29 of 491 Google-hosted recipients deferred, all 29 delivered on retry 10-35 min later. New
+`app/mailgun_deferrals.py` + panel + `mailgun_throttled` action item. Jev-tested, operator framing:
+
+- **Verdict line** (`audience_fit` + `honesty_calibration` + `natural_voice`), 5 drafts over 2 rounds.
+  Round 1 (A "Gmail slowed down your newsletter: 29 people got it 10-35 minutes late. All 29 were
+  delivered, nobody missed it."; B "...briefly held back 29 of the 491 Gmail recipients and accepted them
+  on retry..."; C "...asked Mailgun to slow down... Mailgun's red failed lines were these retries...") --
+  all `needs_plain_language_pass` (best A at 44% clear). Round 2: shipped **D** "🐢 Gmail made 29 people
+  wait 10 to 35 minutes for your 9 Nov newsletter. Everyone still got it." -- first rated `clear_as_is`
+  (49%), 84% accurately calibrated, 96% natural. E ("held back 29 copies... then let them all through")
+  was more calibrated (94%) but needed a plain-language pass (53%).
+- **Category label** (`audience_fit` + `honesty_calibration`), 5 drafts: shipped **"Gmail or another
+  provider delayed your mail"** (54% clear / 83% calibrated). "Some of your mail arrived late" was far
+  clearer (89%) but only 48% calibrated (understates: no who/why); "Gmail/provider slowing down your
+  sends" 63%/72%.
+- **How-to-fix note** (`audience_fit` + `actionability` + `natural_voice`), 3 drafts: all 100%
+  `concrete_next_step`, all rated `too_technical_reader_will_skip` because the Ghost config line
+  (`bulkEmail.batchSize` / `targetDeliveryWindow`) is unavoidable. Shipped the plain-language-first draft
+  that hands the config to "whoever manages that server" -- least too-technical (68% vs 79-80%). Kept the
+  config line anyway: without it there is nothing concrete to do, and this note is operator-facing.

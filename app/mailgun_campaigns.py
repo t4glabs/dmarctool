@@ -55,6 +55,7 @@ import urllib.parse
 from app.analysis import ensure_default_settings
 from app.config import get_secret
 from app.mailgun import API_BASE, _get, list_mailgun_domains, match_tracked_domains
+from app.mailgun_deferrals import record_deferrals, update_throttle_action_items
 
 # Tags Ghost puts on bulk newsletter sends (and on nothing else).
 NEWSLETTER_TAGS = {"bulk-email", "ghost-email"}
@@ -109,9 +110,13 @@ def _fetch_event_pages(mailgun_domain, api_key, event, begin, limit=300):
 
 def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
                      tracking_open=None, tracking_click=None):
-    """Returns (campaigns, error). Each campaign is a dict of raw counts --
-    see the module docstring for how sends are grouped and how newsletters
-    are told apart from Ghost's transactional mail."""
+    """Returns (campaigns, deferrals, error). Each campaign is a dict of raw
+    counts -- see the module docstring for how sends are grouped and how
+    newsletters are told apart from Ghost's transactional mail. `deferrals`
+    is one record per (message, recipient) that got a temporary refusal, for
+    app.mailgun_deferrals -- built from this same event pass, since these
+    temporary-failure events are the only place the receiving server's
+    reason ever appears and Mailgun expires them within days."""
     begin = email.utils.format_datetime(
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=window_days)
     )
@@ -131,6 +136,15 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
     # ascending, so keeping the last outcome per (recipient, message) gives
     # the true final result.
     outcomes = {}
+    # Per (group_key, recipient, message_id): earliest attempt of any kind
+    # (for how much of a burst the send was), the receiving server's
+    # hostname (Google's MX hosts identify Gmail + Workspace recipients, which
+    # an address's own domain can't), when it finally delivered, and its
+    # temporary refusals if any.
+    first_attempt = {}
+    mx_hosts = {}
+    delivered_ts = {}
+    deferred = {}
 
     def group_for(from_raw, subject):
         display, addr = email.utils.parseaddr(from_raw or "")
@@ -167,11 +181,27 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
             if event == "complained":
                 g["complained"].add(recipient)
                 continue
+            triple = (key, recipient, msg_id)
+            if ts:
+                first_attempt[triple] = min(first_attempt.get(triple, ts), ts)
+            ds = item.get("delivery-status") or {}
+            if ds.get("mx-host"):
+                mx_hosts[triple] = ds["mx-host"]
             if event == "failed" and item.get("severity") != "permanent":
                 # A temporary failure says nothing final -- Mailgun retries, and
-                # a later delivered/failed event for this pair settles it.
+                # a later delivered/failed event for this pair settles it. Its
+                # reason text is kept, though: it's the only record of WHY.
+                d = deferred.setdefault(triple, {"attempts": 0, "first_ts": ts, "last_ts": ts})
+                d["attempts"] += 1
+                d["first_ts"] = min(d["first_ts"] or ts, ts or d["first_ts"])
+                d["last_ts"] = max(d["last_ts"] or ts, ts or d["last_ts"])
+                d["reason"] = ds.get("message") or ds.get("description") or item.get("reason") or ""
+                d["enhanced_code"] = ds.get("enhanced-code")
+                d["mx_host"] = ds.get("mx-host")
                 continue
-            outcomes[(key, recipient, msg_id)] = "delivered" if event == "delivered" else "bounced"
+            if event == "delivered" and ts and triple not in delivered_ts:
+                delivered_ts[triple] = ts
+            outcomes[triple] = "delivered" if event == "delivered" else "bounced"
 
     # Collapse per-message outcomes to per-recipient: someone who got any copy
     # of the send counts as delivered, otherwise a permanent failure is a bounce.
@@ -200,7 +230,12 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
     domain_has_opens = any(g["open_events"] for g in groups.values())
     domain_has_clicks = any(g["click_events"] for g in groups.values())
 
+    triples_by_key = collections.defaultdict(list)
+    for triple in first_attempt:
+        triples_by_key[triple[0]].append(triple)
+
     campaigns = []
+    deferrals = []
     for key, g in groups.items():
         addr, subject = key
         delivered = len(delivered_by_key[key])
@@ -209,8 +244,23 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
         is_newsletter = bool(g["tags"] & NEWSLETTER_TAGS) or (
             delivered >= min_recipients and recipients_per_message >= BROADCAST_RATIO
         )
+        for triple in triples_by_key[key]:
+            d = deferred.get(triple)
+            if not d:
+                continue
+            outcome = outcomes.get(triple)
+            deferrals.append({
+                "message_id": triple[2], "recipient": triple[1], "from_address": addr, "subject": subject,
+                "is_newsletter": is_newsletter, "mx_host": d["mx_host"] or mx_hosts.get(triple),
+                "reason": d["reason"], "enhanced_code": d["enhanced_code"], "attempts": d["attempts"],
+                "first_ts": d["first_ts"], "last_ts": d["last_ts"],
+                "outcome": {"delivered": "delivered", "bounced": "failed"}.get(outcome, "pending"),
+                "delivered_ts": delivered_ts.get(triple) if outcome == "delivered" else None,
+            })
         if not is_newsletter:
             continue
+        starts = sorted(first_attempt[t] for t in triples_by_key[key])
+        google = {t[1] for t in triples_by_key[key] if "google" in (mx_hosts.get(t) or "").lower()}
         campaigns.append({
             "mailgun_domain": mailgun_domain,
             "from_address": addr,
@@ -238,9 +288,16 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
             # to decide scorability. See fetch_tracking_settings().
             "tracking_open_setting": tracking_open,
             "tracking_click_setting": tracking_click,
+            "google_recipients": len(google),
+            # First attempt to the 95th-percentile first attempt: how fast the
+            # list was released. Retries are excluded (only each message's
+            # FIRST attempt counts) and the slowest 5% trimmed, so a few late
+            # stragglers don't make a burst look spread out.
+            "send_span_seconds": (round(starts[int(0.95 * (len(starts) - 1))] - starts[0])
+                                  if starts else None),
         })
     campaigns.sort(key=lambda c: (c["send_day"] or "", c["delivered"]), reverse=True)
-    return campaigns, None
+    return campaigns, deferrals, None
 
 
 def _stale(conn, mailgun_domain, recheck_hours):
@@ -267,6 +324,7 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
     window_days = int(settings["mailgun_newsletter_window_days"])
     min_recipients = int(settings["mailgun_newsletter_min_recipients"])
     recheck_hours = int(settings["mailgun_recheck_hours"])
+    throttle_lookback_days = int(settings["mailgun_throttle_lookback_days"])
 
     mg_domains, err = list_mailgun_domains(api_key)
     if err:
@@ -285,8 +343,8 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
         if not _stale(conn, mailgun_domain, recheck_hours):
             continue
         t_open, t_click = fetch_tracking_settings(mailgun_domain, api_key)
-        campaigns, cerr = fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
-                                           tracking_open=t_open, tracking_click=t_click)
+        campaigns, deferrals, cerr = fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
+                                                      tracking_open=t_open, tracking_click=t_click)
         if cerr:
             if verbose:
                 print(f"[mailgun-campaigns] {mailgun_domain}: {cerr}")
@@ -297,8 +355,8 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
                    (domain_id, mailgun_domain, from_address, from_display_name, subject, message_id, tags,
                     send_day, delivered, bounced, complained, unique_openers, unique_clickers,
                     open_events, click_events, open_tracking, click_tracking,
-                    tracking_open_setting, tracking_click_setting)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    tracking_open_setting, tracking_click_setting, google_recipients, send_span_seconds)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(mailgun_domain, from_address, subject, send_day) DO UPDATE SET
                      from_display_name=excluded.from_display_name, message_id=excluded.message_id,
                      tags=excluded.tags, delivered=excluded.delivered, bounced=excluded.bounced,
@@ -308,15 +366,20 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
                      click_tracking=excluded.click_tracking,
                      tracking_open_setting=excluded.tracking_open_setting,
                      tracking_click_setting=excluded.tracking_click_setting,
+                     google_recipients=excluded.google_recipients,
+                     send_span_seconds=COALESCE(excluded.send_span_seconds, send_span_seconds),
                      updated_at=datetime('now')""",
                 (domain_id, mailgun_domain, c["from_address"], c["from_display_name"], c["subject"],
                  c["message_id"], c["tags"], c["send_day"], c["delivered"], c["bounced"], c["complained"],
                  c["unique_openers"], c["unique_clickers"], c["open_events"], c["click_events"],
                  int(c["open_tracking"]), int(c["click_tracking"]),
                  None if c["tracking_open_setting"] is None else int(c["tracking_open_setting"]),
-                 None if c["tracking_click_setting"] is None else int(c["tracking_click_setting"])),
+                 None if c["tracking_click_setting"] is None else int(c["tracking_click_setting"]),
+                 c["google_recipients"], c["send_span_seconds"]),
             )
             total += 1
+        record_deferrals(conn, domain_id, mailgun_domain, deferrals)
+        update_throttle_action_items(conn, domain_id, domain_name, mailgun_domain, throttle_lookback_days)
         conn.execute(
             """INSERT INTO mailgun_campaign_scans (mailgun_domain, scanned_at) VALUES (?, datetime('now'))
                ON CONFLICT(mailgun_domain) DO UPDATE SET scanned_at=datetime('now')""",

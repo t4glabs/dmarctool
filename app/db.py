@@ -76,6 +76,8 @@ def init_db(conn: sqlite3.Connection) -> None:
         "click_tracking": "INTEGER NOT NULL DEFAULT 1",
         "tracking_open_setting": "INTEGER",
         "tracking_click_setting": "INTEGER",
+        "google_recipients": "INTEGER",
+        "send_span_seconds": "INTEGER",
     })
     _ensure_columns(conn, "spf_checks", {
         # The include tree as JSON: nested, variable-depth, and only ever read

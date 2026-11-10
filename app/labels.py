@@ -23,6 +23,7 @@ CATEGORY_LABELS = {
     "no_report_history": "Mail/DMARC setup summary",
     "mailgun_reputation": "Mailgun bounce/complaint rate",
     "mailgun_new_suppressions": "New Mailgun suppressions",
+    "mailgun_throttled": "Gmail or another provider delayed your mail",
     "postmaster_compliance": "Gmail Postmaster compliance",
     "postmaster_domain_missing": "Not added to Postmaster Tools",
     "chronic_transient_bounce": "Chronic transient bounces",
@@ -64,6 +65,7 @@ CATEGORY_PRIORITY_ORDER = [
     "ses_reputation",
     "ses_reputation_watch",
     "mailgun_new_suppressions",
+    "mailgun_throttled",
     "ses_new_suppressions",
     "chronic_transient_bounce",
     "ses_account_health",
@@ -120,6 +122,7 @@ CATEGORY_HELP = {
     "no_report_history": "This domain has never had a single DMARC report ingested, so every other check here has nothing to go on. This is a live DNS snapshot instead (MX/SPF/DMARC) -- it tells you whether that's because the domain has no custom email at all, is missing basic protection, or is actually configured fine and just hasn't had any real mail volume yet.",
     "mailgun_reputation": "Mailgun's reported bounce or complaint rate for this domain crossed the warning threshold -- worth checking your list quality before sending more. Note: this only reflects providers that feed complaints back to Mailgun (e.g. Yahoo) -- Gmail generally doesn't, so a low number here doesn't mean Gmail recipients are happy too.",
     "mailgun_new_suppressions": "Mailgun automatically suppressed new addresses (bounced or complained) since the last check -- these won't receive mail from you again unless removed from Mailgun's suppression list, and are worth pruning from your Listmonk list too.",
+    "mailgun_throttled": "Gmail (or another big provider) told Mailgun \"not now, try again later\" for some of your mail, and said why: an unusual rate of mail from your sending domain. Mailgun retries on its own, so this normally means a delay, not lost mail -- but Mailgun's own log shows every refusal as a red \"failed\" line even when the retry worked. It happens most to domains that send rarely and then release a whole list within seconds: the provider hasn't seen enough of your mail to trust a sudden burst, even when authentication and spam rates are perfect.",
     "postmaster_compliance": "Google's own verdict (from Postmaster Tools) on one of its published sender requirements for this domain -- this is Gmail telling you directly what's wrong, not an inference from DMARC reports.",
     "postmaster_domain_missing": "Gmail reported seeing real, meaningful mail volume for this domain, but it isn't verified on this Postmaster Tools account -- so its actual Gmail spam rate and compliance verdicts are invisible to every check that depends on Postmaster (unlike DMARC reports, which every domain gets regardless).",
     "chronic_transient_bounce": "A 'temporary' bounce (mailbox full, greylisted, a brief server error) is supposed to be self-healing -- Mailgun/SES keep retrying and never add it to their own suppression list as permanent. Some addresses never actually recover: the same inbox stays full for months, or a filter rejects every send indefinitely. Neither ESP's own suppression handling ever notices this, because each bounce looks fine in isolation -- it's only wrong in aggregate, over time.",
@@ -162,6 +165,10 @@ CATEGORY_REMEDIATION = {
     "no_report_history": "See the message above for exactly what's missing (no email at all, no SPF/DMARC, or just no volume yet) and what to do about it -- the specific fix differs case by case, so it's spelled out there rather than repeated generically here.",
     "mailgun_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of exactly which addresses recently bounced or complained, prune them from your Listmonk subscriber list, and review your opt-in practices and sending frequency before your next campaign.",
     "mailgun_new_suppressions": "These addresses are now suppressed in Mailgun and won't receive mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list (with reasons and dates) and remove them from your Listmonk list too.",
+    # Jev-tested 2026-11-10 (3 drafts): all were fully actionable; this
+    # plain-language-first one was least "too technical" (68% vs 80%). The
+    # config line can't go -- without it there's nothing concrete to do.
+    "mailgun_throttled": "Nothing to clean up: these people are fine and should stay on your list. The fix is to send each newsletter out a bit more slowly, in small batches over half an hour instead of all at once, because Gmail is wary of a sudden burst from a sender it rarely hears from. It is a one-time change on the Ghost server. For whoever manages that server: add \"bulkEmail\": {\"batchSize\": 50, \"targetDeliveryWindow\": 1800000} to config.production.json and restart Ghost. If any messages never got through, or the reason mentions authentication rather than rate, check this domain's Gmail Postmaster data before the next send.",
     "ses_reputation_watch": "No urgent action yet -- but check the \"Download suppressions\" CSV for this configuration set to see if a pattern is forming, and consider slowing send frequency until the rate settles back down.",
     "ses_reputation": "Use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get a CSV of this configuration set's bounce/complaint addresses, prune them from Listmonk, and review list quality and send frequency before your next campaign.",
     "ses_new_suppressions": "These addresses are now suppressed in SES and won't receive further mail -- use the \"Download suppressions\" button at the top of this Deliverability & Spam tab to get the exact list and remove them from Listmonk too.",
@@ -478,6 +485,11 @@ SETTINGS_META = {
         "help": "A percentage means nothing on tiny volume -- 1 bounce out of 11 emails is '9%' but not a real problem. The bounce/complaint flag stays quiet until at least this many emails were accepted in the window, so you only hear about rates that are actually meaningful. Doesn't affect the numbers shown, only whether they raise an action item.",
         "example": "50 means a bounce/complaint rate won't be flagged unless you sent at least 50 emails in the window.",
     },
+    "mailgun_throttle_lookback_days": {
+        "label": "How long a \"provider delayed your mail\" item stays open",
+        "help": "When Gmail (or another provider) temporarily slows down mail from one of your Mailgun domains, you get an action item. It closes on its own once this many days pass without it happening again. Kept longer than Mailgun's own ~5-day log so a monthly newsletter's item doesn't disappear before anyone sees it.",
+        "example": "14 means the item stays up for two weeks after the last time a provider slowed your mail down.",
+    },
     "postmaster_recheck_hours": {
         "label": "Minimum gap between Postmaster Tools polls",
         "help": "How often we re-fetch spam rate and compliance status from Google. Postmaster Tools' own data is aggregated/lagged by about a day, so polling more often than this wouldn't show anything new.",
@@ -702,6 +714,7 @@ SETTINGS_GROUPS = [
     ("📨 Mailgun", [
         "mailgun_recheck_hours", "mailgun_stats_window_days", "mailgun_events_window_days",
         "mailgun_bounce_rate_warn", "mailgun_complaint_rate_warn", "mailgun_min_volume_for_rate",
+        "mailgun_throttle_lookback_days",
     ]),
     ("📮 Google Postmaster Tools", [
         "postmaster_recheck_hours", "postmaster_stats_window_days",
