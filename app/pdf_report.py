@@ -307,7 +307,12 @@ def _domain_kpi_header(context: dict, show_name_heading: bool = False) -> str:
         tiles.append(f'stat-tile("Since " + {since}, "{sign}{delta}", unit: "pts")')
 
     if tiles:
-        cols = "(1fr, " * (len(tiles) - 1) + "1fr)" if len(tiles) > 1 else "(1fr)"
+        # Was `"(1fr, " * (n - 1) + "1fr)"`, which nests a paren per extra
+        # tile -- fine at 2 tiles, "(1fr, (1fr, 1fr)" at 3. The third tile
+        # ("Since ...") only appears once enough health history exists, so
+        # it sat latent until it broke the aikyamjobs group report from
+        # 2026-11-04 on (36 failed runs before it was noticed).
+        cols = "(" + ", ".join(["1fr"] * len(tiles)) + ")"
         tiles_joined = ",\n  ".join(tiles)
         parts.append(f'''
 #v(0.6cm)

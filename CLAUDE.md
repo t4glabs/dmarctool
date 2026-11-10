@@ -1,6 +1,6 @@
 # DMARCTool
 
-A self-hosted, single-user DMARC management dashboard for the user's domains (Aikyam / Tiny Bridge LLP / Muziris Bazaar). Runs locally on the user's MacBook Air, no public exposure, no team/multi-user concerns.
+A self-hosted, single-user DMARC management dashboard for the user's domains (Aikyam / Tiny Bridge LLP / Muziris Bazaar). Runs on an always-on office MacBook Air M2 (moved there from the original Air on 2026-10-28), reachable only through a Cloudflare Tunnel + Cloudflare Access at `vigil.aikyamfellows.org`; single operator, no multi-user concerns. "Always-on" depends on the charger staying plugged in: on 2026-11-08 it ran on battery, hit 1%, and slept for 35 hours with no background checks (`pmset -g log`).
 
 ## Running service
 
