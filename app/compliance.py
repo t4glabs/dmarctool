@@ -345,6 +345,7 @@ def run_compliance_checks(conn, verbose: bool = True) -> None:
     _run_ptr(conn, settings, recheck_hours, verbose)
     _run_spf(conn, settings, recheck_hours, spf_warn, verbose)
     _run_dkim(conn, recheck_hours, dkim_min_bits, verbose, settings)
+    _run_google_dkim(conn, recheck_hours, verbose)
     conn.commit()
 
 
@@ -614,6 +615,79 @@ def _run_dkim(conn, recheck_hours, min_bits, verbose, settings):
                    WHERE category='dkim_weak_key' AND ref_key=? AND status='open'""",
                 (ref_key,),
             )
+
+
+# ---------------------------------------------------------------------------
+# Google Workspace signing with its default key instead of the domain's own
+# ---------------------------------------------------------------------------
+
+# Own mail per GOOGLE_DKIM_WINDOW_DAYS signed only with Google's default key
+# before it's worth raising -- a couple of stray messages aren't a pattern.
+GOOGLE_DKIM_MIN_MSGS = 5
+GOOGLE_DKIM_WINDOW_DAYS = 30
+
+
+def _run_google_dkim(conn, recheck_hours, verbose):
+    """Google Workspace signs every tenant's mail with a default key under
+    <domain-with-dashes>.<date>.gappssmtp.com until someone clicks "Start
+    authentication" in Google Admin. That signature passes DKIM but never
+    aligns with the domain, so DMARC rests on SPF alone for all Workspace
+    mail -- found 2026-11-10 behind ilabindia.org's "DKIM aligns on only 11%"
+    item. The generic dkim_alignment_gap item can't say which of two very
+    different fixes applies, so this checks: is the key already published at
+    google._domainkey.<domain> (Google just hasn't been told to use it: one
+    click), or not (generate + publish + click)?
+
+    Counts only messages whose DKIM did NOT align -- once authentication is
+    started Google signs as the domain, the item clears on its own."""
+    since = int((datetime.datetime.utcnow() - datetime.timedelta(days=GOOGLE_DKIM_WINDOW_DAYS)).timestamp())
+    found = {r["domain_id"]: r for r in conn.execute(
+        """SELECT d.id AS domain_id, d.name AS domain_name, SUM(rr.count) AS msgs, MIN(lower(ra.domain)) AS example
+           FROM record_auth_results ra JOIN report_records rr ON rr.id = ra.record_id
+           JOIN reports r ON r.id = rr.report_id JOIN domains d ON d.id = r.domain_id
+           WHERE ra.mechanism = 'dkim' AND ra.result = 'pass'
+             AND lower(ra.domain) LIKE replace(lower(d.name), '.', '-') || '.%.gappssmtp.com'
+             AND COALESCE(rr.dkim_result, '') != 'pass'
+             AND r.date_begin >= ?
+           GROUP BY d.id HAVING SUM(rr.count) >= ?""",
+        (since, GOOGLE_DKIM_MIN_MSGS),
+    ).fetchall()}
+
+    for domain_id, row in found.items():
+        name = row["domain_name"]
+        if _stale(conn, "google_dkim_checks", "domain_id", domain_id, recheck_hours):
+            records = _dig_txt(f"google._domainkey.{name}") or []
+            published = any("p=" in r and "v=dkim1" in r.lower().replace(" ", "") for r in records)
+            conn.execute(
+                "INSERT INTO google_dkim_checks (domain_id, default_signed_msgs, example_signer, key_published) "
+                "VALUES (?,?,?,?)",
+                (domain_id, row["msgs"], row["example"], int(published)),
+            )
+        latest = conn.execute(
+            "SELECT * FROM google_dkim_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
+        ).fetchone()
+        if latest["key_published"]:
+            title = f"{name}: switch on Google's DKIM signing -- one click in Google Admin"
+            state = "The key is already set up (published at google._domainkey); it just needs switching on."
+        else:
+            title = f"{name}: Google Workspace mail isn't signed with your own DKIM key"
+            state = "No key is set up yet (nothing published at google._domainkey)."
+        upsert_system_action(
+            conn, domain_id, "google_dkim_not_signing", None, title,
+            f"{row['msgs']} emails your team sent from Google Workspace in the last {GOOGLE_DKIM_WINDOW_DAYS} days "
+            f"were signed with Google's generic key ({row['example']}) instead of {name}'s own, so they don't count "
+            f"toward your protection. {state}",
+        )
+        if verbose:
+            print(f"[google-dkim] {name}: {row['msgs']} default-signed msgs, key published: "
+                  f"{bool(latest['key_published'])}")
+
+    for row in conn.execute(
+        "SELECT id, domain_id FROM action_items WHERE category='google_dkim_not_signing' AND status='open'"
+    ).fetchall():
+        if row["domain_id"] not in found:
+            conn.execute("UPDATE action_items SET status='dismissed', resolved_at=datetime('now') WHERE id=?",
+                         (row["id"],))
 
 
 def main() -> None:

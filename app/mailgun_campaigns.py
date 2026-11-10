@@ -70,8 +70,10 @@ MAX_PAGES = 20  # safety bound on Events API pagination per event type
 
 
 def fetch_tracking_settings(mailgun_domain, api_key):
-    """(open_enabled, click_enabled) straight from Mailgun's own domain
-    settings, or (None, None) if it couldn't be read.
+    """(open_enabled, click_enabled, web_scheme) straight from Mailgun's own
+    domain settings, or (None, None, None) if it couldn't be read. web_scheme
+    'http' means tracked links are plain-HTTP addresses (see
+    mailgun_domain_settings in schema.sql).
 
     This is authoritative, unlike inferring from whether events showed up --
     but it describes the domain RIGHT NOW, and Mailgun tracking only applies
@@ -84,10 +86,11 @@ def fetch_tracking_settings(mailgun_domain, api_key):
     """
     data, err = _get(f"{API_BASE}/domains/{mailgun_domain}/tracking", api_key)
     if err or not data:
-        return None, None
+        return None, None, None
     tracking = data.get("tracking") or {}
     return ((tracking.get("open") or {}).get("active"),
-            (tracking.get("click") or {}).get("active"))
+            (tracking.get("click") or {}).get("active"),
+            tracking.get("web_scheme"))
 
 
 def _fetch_event_pages(mailgun_domain, api_key, event, begin, limit=300):
@@ -342,7 +345,18 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
         # button block for over two minutes on every press.
         if not _stale(conn, mailgun_domain, recheck_hours):
             continue
-        t_open, t_click = fetch_tracking_settings(mailgun_domain, api_key)
+        t_open, t_click, web_scheme = fetch_tracking_settings(mailgun_domain, api_key)
+        if web_scheme is not None:
+            conn.execute(
+                """INSERT INTO mailgun_domain_settings
+                   (mailgun_domain, domain_id, web_scheme, open_tracking, click_tracking)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(mailgun_domain) DO UPDATE SET domain_id=excluded.domain_id,
+                     web_scheme=excluded.web_scheme, open_tracking=excluded.open_tracking,
+                     click_tracking=excluded.click_tracking, checked_at=datetime('now')""",
+                (mailgun_domain, domain_id, web_scheme,
+                 None if t_open is None else int(t_open), None if t_click is None else int(t_click)),
+            )
         campaigns, deferrals, cerr = fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
                                                       tracking_open=t_open, tracking_click=t_click)
         if cerr:

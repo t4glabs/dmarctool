@@ -68,7 +68,8 @@ from app.mailgun import run_mailgun_checks, send_message, _suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.mailgun_deferrals import deferral_summary, deferral_verdict
 from app.pct_watch import latest_pct_watch, reporter_label, run_pct_watch
-from app.settings_roadmap import ROADMAP_INTRO, settings_roadmap
+from app.settings_roadmap import (ROADMAP_INTRO, UNUSED_INCLUDE_MIN_MSGS, leftover_tags, settings_roadmap,
+                                  unused_spf_includes)
 from app.postmaster import run_postmaster_checks
 from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
 from app.bounce_notify import build_notification, last_notification, pending_notify_counts, record_notification_sent
@@ -387,6 +388,32 @@ def build_portfolio_overview(conn, domains: list) -> dict:
     for row in suspicious:
         suspicious_by_ip.setdefault(row["source_ip"], []).append(row["domain_name"])
 
+    # Portfolio-wide reminders for the Settings roadmap's fix-it-yourself rows
+    # (see app/settings_roadmap.py) -- one line each here rather than an action
+    # item per domain, so e.g. 32 domains with leftover record tags don't all
+    # turn "needs attention" over something harmless.
+    google_dkim_off = [d["name"] for d in domains if "google_dkim_not_signing" in d["open_counts"]]
+    http_tracking = [r["name"] for r in conn.execute(
+        """SELECT DISTINCT d.name FROM mailgun_domain_settings m JOIN domains d ON d.id = m.domain_id
+           WHERE m.web_scheme = 'http' AND m.click_tracking = 1 ORDER BY d.name"""
+    ).fetchall()]
+    leftover = []
+    unused_spf = []
+    for d in conn.execute("SELECT id, name FROM domains ORDER BY name").fetchall():
+        dns = conn.execute(
+            "SELECT txt_value FROM dns_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (d["id"],)
+        ).fetchone()
+        if dns and leftover_tags(dns["txt_value"]):
+            leftover.append(d["name"])
+        apex = conn.execute(
+            "SELECT spf_domain, lookup_tree FROM spf_checks WHERE domain_id=? AND spf_domain=? "
+            "ORDER BY checked_at DESC LIMIT 1", (d["id"], d["name"]),
+        ).fetchone()
+        if apex:
+            total, unused = unused_spf_includes(conn, d["id"], d["name"], [dict(apex)])
+            if total >= UNUSED_INCLUDE_MIN_MSGS and unused:
+                unused_spf.append(d["name"])
+
     return {
         "no_dmarc": no_dmarc,
         "stale": stale,
@@ -394,6 +421,10 @@ def build_portfolio_overview(conn, domains: list) -> dict:
         "mta_sts_broken": mta_sts_broken,
         "expiring_soon": [{"name": d["name"], "days_left": d["expiry_days_left"]} for d in expiring_soon],
         "suspicious_by_ip": suspicious_by_ip,
+        "google_dkim_off": google_dkim_off,
+        "http_tracking": http_tracking,
+        "unused_spf": unused_spf,
+        "leftover_tags": leftover,
     }
 
 

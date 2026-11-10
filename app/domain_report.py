@@ -2865,16 +2865,20 @@ def send_report_now(conn, domain_id: int, domain_name: str, recipient_email: str
         return "skipped_no_data", None
 
     settings = ensure_default_settings(conn)
-    context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
     sender_name = settings["report_sender_name"]
     from_header = f"{sender_name} <{sender_email}>" if sender_name else sender_email
     reply_to = settings.get("report_reply_to") or None
     subject = settings["report_subject_template"].replace("{domain}", domain_name)
-    html = templates.env.get_template("email_report.html").render(**context)
-    text = templates.env.get_template("email_report.txt").render(**context)
+    try:
+        context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
+        html = templates.env.get_template("email_report.html").render(**context)
+        text = templates.env.get_template("email_report.txt").render(**context)
 
-    from app.pdf_report import render_domain_report_pdf
-    pdf_bytes = render_domain_report_pdf(conn, domain_id, domain_name, recipient_label, period_start, period_end)
+        from app.pdf_report import render_domain_report_pdf
+        pdf_bytes = render_domain_report_pdf(conn, domain_id, domain_name, recipient_label, period_start, period_end)
+    except Exception as e:
+        return _build_failed(conn, lambda status, err: _log_send(conn, domain_id, period_start, period_end,
+                                                                  recipient_email, status, err), domain_name, e, verbose)
     attachment = (f"{domain_name}-email-report.pdf", pdf_bytes, "application/pdf")
 
     message_id, err = send_message(sender_domain, api_key, from_header, recipient_email, subject, text, html,
@@ -2895,6 +2899,23 @@ def send_report_now(conn, domain_id: int, domain_name: str, recipient_email: str
     if verbose:
         print(f"[domain_report] {domain_name}: sent to {recipient_email}")
     return "sent", None
+
+
+def _build_failed(conn, log, label, exc, verbose):
+    """A report that can't even be BUILT (PDF/template error) is recorded as a
+    failed send and returned, never raised. Raising used to abort the whole
+    scheduled run with nothing recorded anywhere: a Typst bug in the
+    aikyamjobs group report failed 36 runs in a row (2026-11-04 to 11-10)
+    visible only as tracebacks in the error log, and any due target after it
+    in the loop never got its turn either."""
+    import traceback
+    traceback.print_exc()
+    first_line = (str(exc).strip().splitlines() or [type(exc).__name__])[0]
+    err = f"Could not build the report: {type(exc).__name__}: {first_line}"[:500]
+    log("failed", err)
+    if verbose:
+        print(f"[domain_report] {label}: {err}")
+    return "failed", err
 
 
 def _log_send(conn, domain_id, period_start, period_end, recipient_email, status, error_message):
@@ -2945,14 +2966,19 @@ def send_group_report_now(conn, group_id: int, group_name: str, member_domains: 
     reply_to = settings.get("report_reply_to") or None
     subject = settings["report_subject_template"].replace("{domain}", group_name)
 
-    group_context = _build_group_context(conn, group_id, group_name, recipient_label, member_domains,
-                                          period_start, period_end)
-    html = templates.env.get_template("email_report.html").render(**group_context)
-    text = templates.env.get_template("email_report.txt").render(**group_context)
+    try:
+        group_context = _build_group_context(conn, group_id, group_name, recipient_label, member_domains,
+                                              period_start, period_end)
+        html = templates.env.get_template("email_report.html").render(**group_context)
+        text = templates.env.get_template("email_report.txt").render(**group_context)
 
-    from app.pdf_report import render_group_report_pdf
-    pdf_bytes = render_group_report_pdf(conn, [did for did, _ in member_domains], group_name,
-                                         recipient_label, period_start, period_end)
+        from app.pdf_report import render_group_report_pdf
+        pdf_bytes = render_group_report_pdf(conn, [did for did, _ in member_domains], group_name,
+                                             recipient_label, period_start, period_end)
+    except Exception as e:
+        return _build_failed(conn, lambda status, err: _log_group_send(conn, group_id, period_start, period_end,
+                                                                        recipient_email, status, err),
+                             f"{group_name} (group)", e, verbose)
     attachment = (f"{group_name}-email-report.pdf", pdf_bytes, "application/pdf")
 
     message_id, err = send_message(sender_domain, api_key, from_header, recipient_email, subject, text, html,

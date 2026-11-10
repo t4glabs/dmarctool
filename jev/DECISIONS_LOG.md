@@ -2700,3 +2700,23 @@ s7.1), so most rows deliberately say keep. Jev-tested, operator framing (`audien
   both ~90% calibrated/actionable. Shipped count-first.
 - **Panel intro**, 3 drafts: all `needs_plain_language_pass` (inherently meta); shipped the shortest
   ("For each email setting on this domain: leave it as is, change it now, or wait...") at 95% calibrated.
+
+## 2026-11-10 -- Roadmap rows for fix-it-yourself items (operator copy)
+
+Operator asked to SEE (not auto-fix) four findings in the tool: Google Workspace signing with its generic
+key (ilabindia.org: key published, never started; theigniteindia.com + captains.ngo: no key), leftover
+DMARC tags in 32 records, ilabindia.org's unused `include:spf.flockmail.com`, and plain-HTTP Mailgun link
+tracking on 13 click-tracked domains. Jev, operator framing (`audience_fit`/`honesty_calibration`/
+`actionability`):
+
+- All four first drafts: accurate (81-93%) and actionable (89-100%). Audience fit weakest on leftover tags
+  (87% too technical) and Google DKIM (64%).
+- **Google DKIM**: "...signed with Google's generic key instead of X's own, so they don't count toward your
+  protection. The key is already set up; it just needs switching on" -> 48% too technical (from 64%), 80%
+  calibrated, 100% actionable. Shipped.
+- **Leftover tags**: the plainer rewrite ("no longer do anything for you... Safe to remove") only moved fit
+  87% -> 78% but dropped calibration 93% -> 57% (overclaims). Kept the accurate draft; borrowed only
+  "Paste this instead:" for the cleaned record.
+- Evidence checked before wording: 0 failure (ruf) reports in ~6,000 mailbox messages since August, so the
+  tags row says "nothing uses them", not "privacy risk". Chrome 154 HTTPS-by-default (Oct 2026) confirmed
+  via search before the link-tracking row was rated Change now.

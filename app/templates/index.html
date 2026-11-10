@@ -169,7 +169,7 @@
       </div>
 
       {# Portfolio security overview #}
-      {% if overview.no_dmarc or overview.weakened or overview.expiring_soon or overview.suspicious_by_ip or overview.mta_sts_broken or overview.stale %}
+      {% if overview.no_dmarc or overview.weakened or overview.expiring_soon or overview.suspicious_by_ip or overview.mta_sts_broken or overview.stale or overview.google_dkim_off or overview.http_tracking or overview.unused_spf or overview.leftover_tags %}
       <div class="cc-panel">
         <h2>🛡️ Worth checking across every domain</h2>
         {% if overview.no_dmarc %}<div class="cc-secrow"><span class="csr-lbl" title="No DMARC record at all">No DMARC record</span><span>{% for name in overview.no_dmarc %}<a href="/domain/{{ name }}" class="cc-badge-bad">{{ name }}</a>{% endfor %}</span></div>{% endif %}
@@ -178,6 +178,10 @@
         {% if overview.suspicious_by_ip %}<div class="cc-secrow"><span class="csr-lbl" title="IPs flagged suspicious while reviewing a domain">Flagged sender IPs</span><span>{% for ip, names in overview.suspicious_by_ip.items() %}<span class="cc-badge-warn" title="{{ names|join(', ') }}">{{ ip }}</span>{% endfor %}</span></div>{% endif %}
         {% if overview.mta_sts_broken %}<div class="cc-secrow"><span class="csr-lbl" title="MTA-STS advertised but the policy file is broken">MTA-STS misconfigured</span><span>{% for name in overview.mta_sts_broken %}<a href="/domain/{{ name }}" class="cc-badge-warn">{{ name }}</a>{% endfor %}</span></div>{% endif %}
         {% if overview.stale %}<div class="cc-secrow"><span class="csr-lbl" title="No fresh DMARC reports in a while">No fresh reports</span><span>{% for name in overview.stale %}<a href="/domain/{{ name }}" class="cc-badge-muted">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.google_dkim_off %}<div class="cc-secrow"><span class="csr-lbl" title="{{ category_help('google_dkim_not_signing') }}">Google DKIM not switched on</span><span>{% for name in overview.google_dkim_off %}<a href="/domain/{{ name }}" class="cc-badge-warn">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.http_tracking %}<div class="cc-secrow"><span class="csr-lbl" title="Mailgun rewrites newsletter links to plain-HTTP addresses; Chrome now warns before opening those. One setting per Mailgun domain -- see the Settings roadmap on each domain.">Plain-HTTP newsletter links</span><span>{% for name in overview.http_tracking %}<a href="/domain/{{ name }}" class="cc-badge-warn">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.unused_spf %}<div class="cc-secrow"><span class="csr-lbl" title="The SPF record lists a sending service that none of this domain's mail came from in 90 days -- see the Settings roadmap on each domain.">Unused SPF entries</span><span>{% for name in overview.unused_spf %}<a href="/domain/{{ name }}" class="cc-badge-muted">{{ name }}</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.leftover_tags %}<div class="cc-secrow"><span class="csr-lbl" title="ri=, ruf= or fo= in the DMARC record: nothing uses them any more. Harmless; tidy them next time you edit each record (the cleaned-up record is on each domain's Settings roadmap).">Leftover DMARC record tags</span><span><details><summary class="muted" style="cursor:pointer">{{ overview.leftover_tags|length }} domain{{ 's' if overview.leftover_tags|length != 1 else '' }}, tidy when you next edit</summary>{% for name in overview.leftover_tags %}<a href="/domain/{{ name }}" class="cc-badge-muted">{{ name }}</a>{% endfor %}</details></span></div>{% endif %}
       </div>
       {% endif %}
 

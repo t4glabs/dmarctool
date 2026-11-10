@@ -906,6 +906,33 @@ CREATE TABLE IF NOT EXISTS pct_watch_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_pct_watch_reporter ON pct_watch_checks(reporter, checked_at);
 
+-- Google Workspace signing a domain's mail with its default key
+-- (<domain>.<date>.gappssmtp.com) instead of the domain's own -- see
+-- compliance._run_google_dkim. Only written for domains where that's
+-- happening; key_published says which fix applies (one click vs. set up).
+CREATE TABLE IF NOT EXISTS google_dkim_checks (
+    id                  INTEGER PRIMARY KEY,
+    domain_id           INTEGER NOT NULL REFERENCES domains(id),
+    checked_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    default_signed_msgs INTEGER NOT NULL,  -- own mail in the window signed only by Google's default key
+    example_signer      TEXT,              -- e.g. ilabindia-org.20251104.gappssmtp.com
+    key_published       INTEGER NOT NULL   -- 1 if google._domainkey.<domain> has a DKIM key
+);
+CREATE INDEX IF NOT EXISTS idx_google_dkim_domain ON google_dkim_checks(domain_id, checked_at);
+
+-- Each Mailgun domain's current tracking settings, from the same
+-- /domains/<d>/tracking call app.mailgun_campaigns already makes. Mainly for
+-- web_scheme: 'http' means every tracked newsletter link is a plain-HTTP
+-- address, which Chrome warns about before opening (Chrome 154, Oct 2026).
+CREATE TABLE IF NOT EXISTS mailgun_domain_settings (
+    mailgun_domain  TEXT PRIMARY KEY,
+    domain_id       INTEGER NOT NULL REFERENCES domains(id),
+    web_scheme      TEXT,             -- 'http' | 'https'
+    open_tracking   INTEGER,
+    click_tracking  INTEGER,
+    checked_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- When each Mailgun domain was last scanned for newsletters. Needed because
 -- most domains legitimately have NO newsletters, so "newest row in
 -- mailgun_campaigns" can never serve as a last-checked marker for them --

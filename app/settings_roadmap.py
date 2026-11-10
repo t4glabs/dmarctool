@@ -17,6 +17,7 @@ new is fetched at page load. Wording Jev-tested, see jev/DECISIONS_LOG.md.
 """
 
 import datetime
+import ipaddress
 import json
 
 from app.dns_check import parse_dmarc_tags
@@ -267,6 +268,16 @@ def _dkim_row(conn, domain_id, name, dkim_checks, open_items):
     keys = [c for c in dkim_checks if c["status"] in ("ok", "weak")]
     now = (", ".join(f"{c['selector']} ({c['key_bits']}-bit)" if c["key_bits"] else c["selector"] for c in keys[:3])
            + (f" +{len(keys) - 3} more" if len(keys) > 3 else "")) if keys else "no keys checked"
+    google = google_dkim_status(conn, domain_id, open_items)
+    if google:
+        lead = (f"{google['msgs']} emails your team sent from Google Workspace in the last 30 days were signed "
+                f"with Google's generic key instead of {name}'s own, so they don't count toward your protection.")
+        if google["key_published"]:
+            return _row("DKIM", now, "change", "Switch on Google's DKIM signing (one click)",
+                        f"{lead} The key is already set up; it just needs switching on. "
+                        + GOOGLE_START_STEPS.format(name=name))
+        return _row("DKIM", now, "change", "Set up Google's DKIM signing",
+                    f"{lead} No key is set up yet. " + GOOGLE_SETUP_STEPS.format(name=name))
     if item:
         title = _strip_domain(item["title"], name)
         return _row("DKIM", now, "change", title[0].upper() + title[1:], "See the open action item for the fix.")
@@ -322,6 +333,161 @@ def _mta_sts_row(mta_sts):
                 "In testing mode nothing is enforced yet. Switch once your TLS reports show no failures.")
 
 
+# Jev-tested 2026-11-10: "generic key ... don't count toward your protection"
+# read clearly less technical (48% vs 64% too-technical), 100% actionable.
+GOOGLE_START_STEPS = ("In admin.google.com: Apps -> Google Workspace -> Gmail -> Authenticate email -> pick {name} -> "
+                      "Start authentication.")
+GOOGLE_SETUP_STEPS = ("In admin.google.com: Apps -> Google Workspace -> Gmail -> Authenticate email -> pick {name} -> "
+                      "Generate new record (2048-bit) -> add the TXT record it shows to {name}'s DNS -> wait an hour "
+                      "or so -> Start authentication.")
+
+
+def google_dkim_status(conn, domain_id, open_items):
+    """Latest compliance._run_google_dkim finding while its action item is
+    still open (the item auto-dismisses once Google signs as the domain)."""
+    if not any(i["category"] == "google_dkim_not_signing" for i in open_items):
+        return None
+    row = conn.execute(
+        "SELECT * FROM google_dkim_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (domain_id,)
+    ).fetchone()
+    return {"msgs": row["default_signed_msgs"], "key_published": bool(row["key_published"])} if row else None
+
+
+# DMARC tags with nothing left to do for these domains. pct is NOT here: the
+# ramp still uses it, see app.pct_watch.
+LEFTOVER_TAGS = {
+    "ri": "ri= was dropped by the new DMARC standard (RFC 9989), so providers ignore it.",
+    "rf": "rf= was dropped by the new DMARC standard (RFC 9989), so providers ignore it.",
+    "ruf": ("ruf= asks providers to email you copies of individual failing messages. This tool never reads them, "
+            "and most big providers stopped sending them for privacy reasons."),
+    "fo": "fo= only controls those same failure copies.",
+}
+
+
+def leftover_tags(txt):
+    return [k for k in LEFTOVER_TAGS if k in parse_dmarc_tags(txt or "")]
+
+
+def cleaned_record(txt):
+    """The same record with LEFTOVER_TAGS removed, original order kept."""
+    keep = []
+    for part in (txt or "").split(";"):
+        part = part.strip()
+        if part and part.split("=", 1)[0].strip().lower() not in LEFTOVER_TAGS:
+            keep.append(part)
+    return "; ".join(keep)
+
+
+def _leftover_tags_row(txt):
+    if txt is None:
+        return None
+    found = leftover_tags(txt)
+    if not found:
+        return _row("Leftover record tags", "none", "keep", "", "The record has no tags that nothing uses any more.")
+    return _row("Leftover record tags", ", ".join(f"{t}=" for t in found), "optional",
+                f"Remove {', '.join(f'{t}=' for t in found)} next time you edit the record",
+                " ".join(LEFTOVER_TAGS[t] for t in found if t != "rf" or "ri" not in found)
+                + f" Paste this instead: {cleaned_record(txt)}")
+
+
+def _ip_ranges(node):
+    out = []
+    for token in (node.get("record") or "").split():
+        t = token.lstrip("+~?-").lower()
+        if t.startswith(("ip4:", "ip6:")):
+            try:
+                out.append(ipaddress.ip_network(t[4:], strict=False))
+            except ValueError:
+                pass
+    for child in node.get("children") or []:
+        out += _ip_ranges(child)
+    return out
+
+
+# Own mail using the main domain as its bounce address, per 90 days, before
+# an SPF entry with no matching mail is judged unused rather than unknowable.
+UNUSED_INCLUDE_MIN_MSGS = 20
+
+
+def unused_spf_includes(conn, domain_id, name, spf_checks):
+    """(own messages that used `name` as their bounce domain, [include
+    domains none of that mail came from]). An include only matters for mail
+    whose envelope is `name` itself, so that's the only mail looked at.
+    Includes that resolve to no IP ranges (a:/mx:-only) can't be judged and
+    are skipped. Found 2026-11-10: ilabindia.org still had
+    include:spf.flockmail.com, 66 ranges, zero of 91 reports' mail from them."""
+    apex = next((c for c in spf_checks if c["spf_domain"] == name and c.get("lookup_tree")), None)
+    if not apex:
+        return 0, []
+    try:
+        tree = json.loads(apex["lookup_tree"])
+    except (ValueError, TypeError):
+        return 0, []
+    since = int((datetime.datetime.utcnow() - datetime.timedelta(days=LOOKBACK_DAYS)).timestamp())
+    rows = conn.execute(
+        """SELECT rr.source_ip ip, SUM(rr.count) n
+           FROM record_auth_results ra JOIN report_records rr ON rr.id = ra.record_id
+           JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND r.date_begin >= ? AND ra.mechanism = 'spf' AND ra.result = 'pass'
+             AND lower(ra.domain) = lower(?)
+           GROUP BY rr.source_ip""",
+        (domain_id, since, name),
+    ).fetchall()
+    total = sum(r["n"] for r in rows)
+    addrs = []
+    for r in rows:
+        try:
+            addrs.append(ipaddress.ip_address(r["ip"]))
+        except ValueError:
+            pass
+    unused = []
+    for child in tree.get("children") or []:
+        nets = _ip_ranges(child)
+        if not nets:
+            continue
+        if not any(a in net for a in addrs for net in nets if net.version == a.version):
+            unused.append(child.get("domain"))
+    return total, unused
+
+
+def _spf_entries_row(conn, domain_id, name, spf_checks):
+    total, unused = unused_spf_includes(conn, domain_id, name, spf_checks)
+    if total < UNUSED_INCLUDE_MIN_MSGS:
+        return None  # too little mail uses the main domain as its bounce address to judge anything
+    if not unused:
+        return _row("SPF entries", "all in use", "keep", "",
+                    f"Every service listed in {name}'s SPF record sent real mail in the last 90 days.")
+    listed = ", ".join(f"include:{u}" for u in unused)
+    return _row("SPF entries", listed, "optional", f"Remove {listed} if you no longer send through it",
+                f"None of the {total:,} emails that used {name} as their bounce address in 90 days came from "
+                f"{'that service' if len(unused) == 1 else 'those services'}. Each entry lets anyone using that "
+                f"service send as {name}, so drop ones you've stopped using. Check first: something that sends "
+                f"only a few times a year might not show up in 90 days.")
+
+
+def _link_tracking_row(conn, domain_id):
+    rows = conn.execute(
+        "SELECT * FROM mailgun_domain_settings WHERE domain_id=? ORDER BY mailgun_domain", (domain_id,)
+    ).fetchall()
+    if not rows:
+        return None  # not sending through Mailgun
+    http_click = [r["mailgun_domain"] for r in rows if r["web_scheme"] == "http" and r["click_tracking"]]
+    http_only = [r["mailgun_domain"] for r in rows if r["web_scheme"] == "http" and not r["click_tracking"]]
+    now = " · ".join(f"{r['mailgun_domain']}: {r['web_scheme'] or '?'}" for r in rows)
+    if http_click:
+        mg = http_click[0]
+        return _row("Newsletter link tracking", now, "change", "Switch Mailgun link tracking to HTTPS",
+                    f"Every tracked link in mail from {mg} goes through a plain-HTTP address (http://email.{mg}). "
+                    f"Chrome now shows a warning before opening plain-HTTP links (from Chrome 154, October 2026), so "
+                    f"readers may hit a security warning when they click. Steps: Mailgun -> Domain settings for {mg} "
+                    f"-> tracking protocol -> HTTPS -> save. Mailgun sets up the certificate itself.")
+    if http_only:
+        return _row("Newsletter link tracking", now, "optional", "Switch to HTTPS before turning click tracking on",
+                    "Click tracking is off, so no links are rewritten today. If you turn it on, switch the tracking "
+                    "protocol to HTTPS in Mailgun's domain settings first.")
+    return _row("Newsletter link tracking", now, "keep", "", "Tracked links use HTTPS.")
+
+
 def settings_roadmap(conn, domain_id, name, latest_dns, rec_row, spf_checks, dkim_checks, report_auth, mta_sts,
                      open_items):
     """Rows for the domain page, most important setting first. Takes what
@@ -329,12 +495,16 @@ def settings_roadmap(conn, domain_id, name, latest_dns, rec_row, spf_checks, dki
     tags = parse_dmarc_tags(latest_dns["txt_value"]) if latest_dns and latest_dns["txt_value"] else None
     recent_msgs, has_reports = _mail_volume(conn, domain_id)
     watch = latest_pct_watch(conn)
-    return [
+    rows = [
         _dmarc_row(name, tags, rec_row, watch),
         _spf_row(conn, domain_id, name, spf_checks, recent_msgs > 0, has_reports),
+        _spf_entries_row(conn, domain_id, name, spf_checks),
         _alignment_row(conn, domain_id, name, tags),
         _subdomain_policy_row(name, tags),
         _dkim_row(conn, domain_id, name, dkim_checks, open_items),
         _report_address_row(tags, report_auth),
+        _leftover_tags_row(latest_dns["txt_value"] if latest_dns else None),
+        _link_tracking_row(conn, domain_id),
         _mta_sts_row(mta_sts),
     ]
+    return [r for r in rows if r]
