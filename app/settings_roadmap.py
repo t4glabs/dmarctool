@@ -527,16 +527,37 @@ def incoming_mail_status(conn, domain_id, name):
     key = keys[0]
     if key in RELAY_PROVIDERS and check.get("mailgun_route") == 0:
         senders = sending_addresses(conn, domain_id, name)
-        if senders:
-            return ("change", f"Add a Mailgun route for {name}, or point its MX at a real mailbox",
-                    f"Only Mailgun receives mail for {name}, and your Mailgun account has no route for it, so "
-                    f"every email sent to an @{name} address bounces. That includes replies to mail you send from "
-                    f"{', '.join(senders[:2])}, unless those emails set a different Reply-To. Fix in Mailgun: "
-                    f"Receiving -> Create route -> match recipient \".*@{name}\" -> forward to an inbox you read.",
-                    now, "no_route")
-        return ("keep", "", f"Only Mailgun receives mail here and nothing forwards it, which is normal for a domain "
-                            f"used only for sending.", now, "ok")
+        if not senders:
+            return ("keep", "", f"Only Mailgun receives mail here and nothing forwards it, which is normal for a "
+                                f"domain used only for sending.", now, "ok")
+        tested = check["probe"][0] if check.get("probe") else None
+        if not (tested and tested.get("code") and 500 <= tested["code"] < 600):
+            # Only suggest a route once it's PROVEN no inbox exists (operator's rule,
+            # 2026-11-10): a probe that didn't run or didn't clearly reject proves nothing.
+            return ("unknown", "Wait for the next check",
+                    f"Only Mailgun receives mail for {name} and there's no Mailgun route for it, but the live "
+                    f"check couldn't confirm whether mail to {senders[0]} is rejected, so no change is suggested yet.",
+                    now, "unconfirmed")
+        dest = _known_forward_destination(conn, domain_id, name)
+        to = f"to {dest} (where this domain's reports already go)" if dest else "to an inbox you read"
+        return ("change", f"Add a Mailgun route forwarding {name} mail {to}",
+                f"No inbox exists for {name}: only Mailgun receives its mail, there's no Mailgun route for it, and "
+                f"we checked live that Mailgun rejects {check['probe_address']}. So replies to your emails from "
+                f"{', '.join(senders[:2])} bounce, unless those emails set a different Reply-To. Fix in Mailgun: "
+                f"Receiving -> Create route -> match recipient \".*@{name}\" -> forward {to}.",
+                now, "no_route")
     return "keep", "", f"All incoming mail goes to {mx_provider_label(key)}.", now, "ok"
+
+
+def _known_forward_destination(conn, domain_id, name):
+    """An inbox outside this domain that the tool KNOWS someone reads: the
+    domain's report recipient. None if there isn't one -- never guessed."""
+    row = conn.execute("SELECT recipient_email FROM domain_report_settings WHERE domain_id=?", (domain_id,)).fetchone()
+    for addr in ((row["recipient_email"] if row else "") or "").split(","):
+        addr = addr.strip().lower()
+        if addr and "@" in addr and not addr.endswith("@" + name):
+            return addr
+    return None
 
 
 def _incoming_mail_row(conn, domain_id, name):

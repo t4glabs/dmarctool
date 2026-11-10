@@ -2736,3 +2736,8 @@ Also: a 2-message Google source on thudippu.in (mail-sor-f69.google.com) shown o
   actionable on first draft; shipped as-is (Mailgun-route steps are inherently technical; operator-facing).
 - **Forwarded-by-a-recipient help**: plain draft cut too-technical 81% -> 68% at equal calibration;
   dropped the "~all is safer" aside to keep it to what the evidence shows.
+- **Confirmed no-inbox route suggestion** (follow-up, same day): operator asked that a Mailgun-route
+  suggestion only appear when the tool KNOWS no inbox exists. Now gated on Mailgun-only MX + zero routes +
+  a live 550 for the domain's own sending address; otherwise "Not enough data", no suggestion. "No inbox
+  exists for X ... we checked live that Mailgun rejects <addr>" -> 96% accurately calibrated, 100%
+  actionable (75% too technical; Mailgun route steps are inherently operator-level).

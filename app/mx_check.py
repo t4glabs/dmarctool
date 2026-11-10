@@ -134,6 +134,22 @@ def _probe(conn, domain_id, name, records, settings):
     return known, results
 
 
+def _probe_relay_only(conn, domain_id, name, records, settings):
+    """Mailgun-only MX with no route: prove there's no inbox before the
+    roadmap suggests adding one. Asks the Mailgun host whether it would
+    accept one of this domain's OWN sending addresses (the ones people reply
+    to). Only domains that actually send from such an address are probed --
+    a sending-only subdomain with none needs no inbox. (address, results)."""
+    helo, mail_from = settings.get("email_verifier_helo_name"), settings.get("email_verifier_from_address")
+    senders = sending_addresses(conn, domain_id, name)
+    if not helo or not mail_from or not senders:
+        return None, []
+    host = records[0][1]
+    code, message, err = smtp_probe(host, helo, mail_from, senders[0], timeout=15)
+    return senders[0], [{"provider": provider_of(host)[0], "host": host, "code": code,
+                         "message": (message or err or "")[:160]}]
+
+
 def _mailgun_routes():
     """Expressions of every inbound route on the Mailgun account, or None if
     it can't be read. Without a matching route Mailgun's MX can't deliver an
@@ -227,6 +243,8 @@ def run_mx_checks(conn, verbose: bool = True) -> None:
                     routes, routes_loaded = _mailgun_routes(), True
                 if routes is not None:
                     has_route = int(any(name in r or "catch_all" in r for r in routes))
+            if status == "single" and has_route == 0 and all(t[2] in RELAY_PROVIDERS for t in tagged):
+                known, probe = _probe_relay_only(conn, domain_id, name, records, settings)
             conn.execute(
                 """INSERT INTO mx_checks (domain_id, records, status, probe_address, probe, mailgun_route)
                    VALUES (?,?,?,?,?,?)""",
