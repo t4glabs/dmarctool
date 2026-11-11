@@ -304,3 +304,49 @@ def postmaster_verdict(postmaster_compliance):
     labels = ", ".join(postmaster_requirement_label(c["requirement"]) for c in needs_work[:4])
     more = f" (+{len(needs_work) - 4} more)" if len(needs_work) > 4 else ""
     return "warn", f"⚠️ {len(needs_work)} requirement(s) need work: {labels}{more}."
+
+
+def full_inbox_story(summary: dict):
+    """(status, headline, note, advice) for the "Full inboxes: what to do"
+    box under the Mailgun failure table -- the operator's own question
+    (2026-11-11: "how do I know it is full for a long time?") answered from
+    chronic_bounces.full_inbox_summary, in the order the evidence builds up:
+    no names yet -> refused once -> refused again -> abandoned."""
+    if not summary or not (summary["once"] or summary["repeat"] or summary["abandoned"] or summary["unsaved"]):
+        return None
+    m = summary["min_occurrences"]
+
+    def people(n):
+        return f"{n} {'person' if n == 1 else 'people'}"
+
+    if summary["abandoned"]:
+        status, headline = "warn", (
+            f"{people(summary['abandoned'])} refused on {m} or more separate sends. That's an abandoned inbox, "
+            f"not a busy one: they're on the likely-dead cleanup list (Download NEW only, or Notify client).")
+    elif summary["repeat"]:
+        status, headline = "muted", (
+            f"{people(summary['repeat'])} refused on more than one send so far. At {m} separate sends they move "
+            f"to the cleanup list on their own.")
+    elif summary["once"]:
+        status, headline = "ok", (
+            f"{people(summary['once'])} had a full inbox on one send. Nothing to do yet: if the same address "
+            f"is refused again on a later send, it's counted here.")
+    else:
+        status, headline = "muted", (
+            f"The names behind these {summary['unsaved']} are gone. Mailgun deletes them after about 5 days, and "
+            f"this page only started saving them on 11 Nov 2026. The next send's names will be saved here within "
+            f"6 hours.")
+    note = None
+    if summary["unsaved"] and (summary["once"] or summary["repeat"] or summary["abandoned"]):
+        note = (f"The {summary['unsaved']} from {summary['unsaved_sends']} earlier "
+                f"send{'s' if summary['unsaved_sends'] != 1 else ''} have no names: Mailgun had already deleted "
+                f"them before this page started saving on 11 Nov 2026.")
+    advice = [
+        "Don't remove anyone after one full-inbox refusal. It usually means their Google storage is full, and "
+        "plenty of people clear it within days.",
+        "One refusal can't tell you how long an inbox has been full. Only the same address being refused again "
+        "on a later send can, and this page counts that for you.",
+        f"At {m} separate sends the address is treated as abandoned and added to the cleanup list. You can change "
+        f"{m} in Settings (\"Sends before a 'temporary' bounce counts as chronic\").",
+    ]
+    return status, headline, note, advice

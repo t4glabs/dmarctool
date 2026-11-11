@@ -72,7 +72,7 @@ from app.pct_watch import latest_pct_watch, reporter_label, run_pct_watch
 from app.settings_roadmap import (ROADMAP_INTRO, UNUSED_INCLUDE_MIN_MSGS, incoming_mail_status, leftover_tags,
                                   settings_roadmap, shared_sending_domain, unused_spf_includes)
 from app.postmaster import run_postmaster_checks
-from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces
+from app.chronic_bounces import run_chronic_bounce_checks, chronic_transient_bounces, full_inbox_summary
 from app.bounce_notify import build_notification, last_notification, pending_notify_counts, record_notification_sent
 from app.subscriber_notify import (build_notification as build_subscriber_notification,
                                     last_notification as last_subscriber_notification,
@@ -103,7 +103,7 @@ from app.labels import (
     postmaster_remediation, postmaster_requirement_label, top_categories,
 )
 from app.verdicts import (
-    dns_history_verdict, domain_vibe_verdict, mailgun_verdict, postmaster_verdict, provider_verdict,
+    dns_history_verdict, domain_vibe_verdict, full_inbox_story, mailgun_verdict, postmaster_verdict, provider_verdict,
     report_auth_verdict,
     senders_verdict, ses_account_verdict, ses_identity_verdict, ses_verdict, spf_dkim_verdict, stream_verdict,
 )
@@ -826,6 +826,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
                   SUM(soft_bounced) soft_bounced, SUM(skipped) skipped
            FROM mailgun_daily_stats WHERE domain_id=? AND failed_perm > 0 AND day >= date('now', '-90 days')
            GROUP BY day ORDER BY day DESC""", (domain_id,))]
+    full_inbox = full_inbox_story(full_inbox_summary(
+        conn, domain_id, int(settings["chronic_transient_min_occurrences"]))) if mailgun_failure_days else None
     mailgun_suppression_counts = {}
     for row in conn.execute(
         """SELECT mailgun_domain, kind, COUNT(*) as n FROM mailgun_suppressions
@@ -1079,6 +1081,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "dkim_checks": dkim_checks,
         "mailgun_stats": mailgun_stats,
         "mailgun_failure_days": mailgun_failure_days,
+        "full_inbox": full_inbox,
         "mailgun_suppression_counts": mailgun_suppression_counts,
         "mailgun_bounce_chart_svg": mailgun_bounce_chart_svg,
         "mailgun_complaint_chart_svg": mailgun_complaint_chart_svg,
@@ -1397,20 +1400,24 @@ def download_mailgun_failures(name: str, day: str = None):
     domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
     if not domain:
         raise HTTPException(status_code=404, detail="domain not found")
-    query = """SELECT recipient, subject, bounce_kind, mailgun_reason, category, reason, occurred_at
-               FROM mailgun_failure_log WHERE domain_id=?"""
+    query = """SELECT recipient, subject, bounce_kind, mailgun_reason, category, reason, occurred_at,
+                      (SELECT COUNT(DISTINCT substr(l.occurred_at, 1, 10)) FROM mailgun_failure_log l
+                        WHERE l.domain_id = f.domain_id AND l.recipient = f.recipient) AS sends_refused
+               FROM mailgun_failure_log f WHERE domain_id=?"""
     params = [domain["id"]]
     if day:
         query += " AND substr(occurred_at, 1, 10) = ?"
         params.append(day)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["email", "newsletter", "kind", "what_happened", "receiving_server_said", "date"])
+    writer.writerow(["email", "newsletter", "kind", "what_happened", "receiving_server_said", "date",
+                     "sends_refused_so_far"])
     kinds = {"hard": "address doesn't work", "soft": "inbox full / temporary refusal, retried next send"}
     for r in conn.execute(query + " ORDER BY occurred_at, recipient", params):
         writer.writerow([r["recipient"], r["subject"] or "",
                          kinds.get(r["bounce_kind"], "not sent: already on Mailgun's block list"),
-                         r["category"] or "", normalize_reason(r["reason"] or ""), r["occurred_at"] or ""])
+                         r["category"] or "", normalize_reason(r["reason"] or ""), r["occurred_at"] or "",
+                         r["sends_refused"]])
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name}_mailgun_failures{"_" + day if day else ""}.csv"'})
 

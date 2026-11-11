@@ -192,3 +192,39 @@ def run_chronic_bounce_checks(conn, verbose: bool = True) -> None:
     if verbose:
         print(f"[chronic_bounces] {flagged} domain(s) with chronic transient bounces "
               f"(>= {min_occurrences} sends or {min_days}+ days)")
+
+
+def full_inbox_summary(conn, domain_id: int, min_occurrences: int, days: int = 90) -> dict:
+    """Where this domain's Mailgun full inboxes stand, for the "what to do"
+    story under the Mailgun failure table: how many saved addresses were
+    refused once, on a few sends, or on enough sends to count as abandoned
+    (_mailgun_repeat_soft), and how many recent full-inbox failures have no
+    name at all because Mailgun's ~5-day log expired before
+    mailgun_failure_log existed. Counting is per send day, same as
+    _mailgun_repeat_soft, so the story and the cleanup list always agree."""
+    rows = conn.execute(
+        """SELECT f.recipient, COUNT(DISTINCT substr(f.occurred_at, 1, 10)) AS sends
+           FROM mailgun_failure_log f
+           WHERE f.domain_id = ? AND f.bounce_kind = 'soft'
+             AND f.recipient NOT IN (SELECT lower(email) FROM mailgun_suppressions WHERE domain_id = ?)
+           GROUP BY f.recipient""",
+        (domain_id, domain_id),
+    ).fetchall()
+    saved_days = {r["d"] for r in conn.execute(
+        "SELECT DISTINCT substr(occurred_at, 1, 10) d FROM mailgun_failure_log WHERE domain_id = ? AND bounce_kind = 'soft'",
+        (domain_id,))}
+    unsaved = conn.execute(
+        """SELECT COALESCE(SUM(soft_bounced), 0) n, COUNT(*) sends FROM mailgun_daily_stats
+           WHERE domain_id = ? AND soft_bounced > 0 AND day >= date('now', ?)
+             AND day NOT IN (SELECT DISTINCT substr(occurred_at, 1, 10) FROM mailgun_failure_log WHERE domain_id = ?)""",
+        (domain_id, f"-{days} days", domain_id),
+    ).fetchone()
+    return {
+        "once": sum(1 for r in rows if r["sends"] == 1),
+        "repeat": sum(1 for r in rows if 1 < r["sends"] < min_occurrences),
+        "abandoned": sum(1 for r in rows if r["sends"] >= min_occurrences),
+        "saved_sends": len(saved_days),
+        "unsaved": unsaved["n"],
+        "unsaved_sends": unsaved["sends"],
+        "min_occurrences": min_occurrences,
+    }

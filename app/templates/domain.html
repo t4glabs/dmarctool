@@ -1082,8 +1082,7 @@
         those count in the bounce rate above. "Inbox full" means the receiving server refused it for now (almost
         always a mailbox out of storage) and Mailgun gave up: that person missed the email. Mailgun doesn't
         block-list them, so they're tried again next send and never appear under Download suppressions. "Skipped"
-        were never sent: already unsubscribed or bounced. Since 11 Nov this page keeps each address; anyone refused
-        on 3 separate sends moves to the likely-dead cleanup list on its own.
+        were never sent: already unsubscribed or bounced.
       </p>
       <div class="table-wrap">
       <table>
@@ -1104,6 +1103,14 @@
         {% endfor %}
       </table>
       </div>
+      {% if full_inbox %}
+      <h4 style="font-size:0.85rem; margin:0.9rem 0 0.3rem 0">Full inboxes: what to do</h4>
+      <div class="verdict {{ full_inbox[0] }}">{{ full_inbox[1] }}</div>
+      {% if full_inbox[2] %}<p class="muted" style="font-size:0.8rem; margin:0.4rem 0 0 0">{{ full_inbox[2] }}</p>{% endif %}
+      <ul style="margin:0.4rem 0 0 0; padding-left:1.2rem; font-size:0.85rem; line-height:1.55;">
+        {% for a in full_inbox[3] %}<li>{{ a }}</li>{% endfor %}
+      </ul>
+      {% endif %}
       {% endif %}
 
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
