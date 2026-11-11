@@ -17,10 +17,10 @@ Surfaced from data already collected, no new integration:
     classification, authoritative) joined against ses_campaign_recipients
     (a real per-campaign bounce log, kept indefinitely) for an occurrence
     count across distinct sends.
-  - Mailgun: mailgun_suppressions only -- there is no persistent per-event
-    Mailgun bounce log (mailgun_identity_failures is a rolling few-day
-    window, wiped and rebuilt every check), so only the date span since
-    first_seen_at is available, not an occurrence count.
+  - Mailgun: mailgun_suppressions (date span only), plus, since 2026-11-11,
+    mailgun_failure_log -- a persistent per-event log of permanent failures,
+    which is what catches full inboxes Mailgun never suppresses
+    (_mailgun_repeat_soft).
 
 Deliberately excludes anything already categorised as a definitive permanent
 failure (app.bounce_reasons.PERMANENT_CATEGORIES) -- this check exists
@@ -114,6 +114,31 @@ def _mailgun_chronic(conn, domain_id: int, min_days: int):
     return out
 
 
+def _mailgun_repeat_soft(conn, domain_id: int, min_occurrences: int, watermark):
+    """Full inboxes that stay full: Mailgun gives up on these at once (reason
+    'overquota', bounce type 'soft') but never adds them to its bounce list, so
+    every newsletter tries again and fails again -- theigniteindia.com lost ~49
+    readers per send this way with nothing to download. From mailgun_failure_log
+    (kept past Mailgun's 5-day log), so unlike _mailgun_chronic above this has
+    an occurrence count AND acknowledgment memory: a marked-done address only
+    comes back if it fails again after that."""
+    rows = conn.execute(
+        """SELECT f.recipient AS email, MIN(f.occurred_at) AS first_seen, MAX(f.occurred_at) AS last_seen,
+                  COUNT(DISTINCT substr(f.occurred_at, 1, 10)) AS occurrences,
+                  (SELECT category FROM mailgun_failure_log l WHERE l.domain_id = f.domain_id
+                     AND l.recipient = f.recipient ORDER BY l.occurred_at DESC LIMIT 1) AS category
+           FROM mailgun_failure_log f
+           WHERE f.domain_id = ? AND f.bounce_kind = 'soft'
+             AND f.recipient NOT IN (SELECT lower(email) FROM mailgun_suppressions WHERE domain_id = ?)
+           GROUP BY f.recipient
+           HAVING occurrences >= ?""",
+        (domain_id, domain_id, min_occurrences),
+    ).fetchall()
+    return [{"email": r["email"], "source": "Mailgun", "occurrences": r["occurrences"],
+             "first_seen": r["first_seen"], "last_seen": r["last_seen"], "category": r["category"]}
+            for r in rows if not (watermark and r["last_seen"] <= watermark)]
+
+
 def chronic_transient_bounces(conn, domain_id: int, min_occurrences: int, min_days: int):
     """Every address for this domain that's been failing "temporarily" for
     longer than a fresh recovery would take, or across enough distinct sends
@@ -125,6 +150,9 @@ def chronic_transient_bounces(conn, domain_id: int, min_occurrences: int, min_da
     watermark = _chronic_watermark(conn, domain_id)
     found = (_ses_chronic(conn, domain_id, min_occurrences, min_days, watermark)
              + _mailgun_chronic(conn, domain_id, min_days))
+    seen = {f["email"].lower() for f in found}
+    found += [f for f in _mailgun_repeat_soft(conn, domain_id, min_occurrences, watermark)
+              if f["email"].lower() not in seen]
     found.sort(key=lambda x: x["first_seen"])
     return found
 

@@ -12,7 +12,30 @@ any kind of judgment beyond "count the things past a known threshold."
 """
 
 
-def domain_vibe_verdict(health_score):
+_COMPONENT_WORDS = {
+    "pass_rate": lambda v, b: f"only {v:.0%} of mail passes authentication",
+    "postmaster_spam_rate": lambda v, b: f"Gmail spam rate {v:.2%} (Gmail's limit is 0.30%)",
+    "bounce_rate": lambda v, b: f"{v:.1%} of mail bounces off addresses that don't work (5% scores zero)",
+    "complaint_rate": lambda v, b: f"complaint rate {v:.2%}",
+    "click_rate": lambda v, b: f"{v:.1%} of readers click (typical is {b:.1%})",
+}
+
+
+def health_drags(snapshot, click_benchmark: float) -> list:
+    """Plain phrases for the components costing this score real points, worst
+    first -- so a low score says WHAT is low instead of "at least one signal".
+    Uses analysis.health_component_scores, the same arithmetic as the score."""
+    from app.analysis import health_component_scores
+    if not snapshot:
+        return []
+    values = {k: snapshot[k] for k in ("pass_rate", "postmaster_spam_rate", "bounce_rate", "complaint_rate", "click_rate")}
+    parts = health_component_scores(values, click_benchmark)
+    total = sum(w for _, w in parts.values()) or 1
+    lost = sorted(((1 - c) * w / total * 100, name) for name, (c, w) in parts.items())
+    return [_COMPONENT_WORDS[name](values[name], click_benchmark) for pts, name in reversed(lost) if pts >= 5]
+
+
+def domain_vibe_verdict(health_score, snapshot=None, click_benchmark: float = 0.033):
     """The one-glance "how's this domain doing overall" read, from its
     latest composite health_score (app.analysis.snapshot_domain_health --
     already a weighted combination of pass rate, Gmail's own spam rate,
@@ -39,11 +62,13 @@ def domain_vibe_verdict(health_score):
     and every other verdict in this module."""
     if health_score is None:
         return "muted", "Not enough data yet to say."
+    drags = health_drags(snapshot, click_benchmark)
+    held = ("Held back by: " + "; ".join(drags) + ".") if drags else None
     if health_score >= 80:
-        return "ok", "Authentication, spam rate, bounce/complaint, and engagement signals all look healthy."
+        return "ok", held or "Authentication, spam rate, bounce/complaint, and engagement signals all look healthy."
     if health_score >= 50:
-        return "warn", "At least one signal (pass rate, spam rate, bounce/complaint rate, or engagement) needs attention."
-    return "bad", "Multiple signals are struggling -- worth working through the open action items below."
+        return "warn", held or "At least one signal (pass rate, spam rate, bounce/complaint rate, or engagement) needs attention."
+    return "bad", held or "Multiple signals are struggling -- worth working through the open action items below."
 
 
 def senders_verdict(senders, classifications=None):
@@ -190,16 +215,28 @@ def mailgun_verdict(mailgun_stats, bounce_warn, complaint_warn):
     for s in mailgun_stats:
         if not s["accepted"]:
             continue
-        bounce_rate = s["failed_perm"] / s["accepted"]
+        bounced = s["bounced"] if "bounced" in s.keys() and s["bounced"] is not None else s["failed_perm"]
+        bounce_rate = bounced / s["accepted"]
         complaint_rate = s["complained"] / s["accepted"]
         if bounce_rate >= bounce_warn:
             issues.append(f"{s['mailgun_domain']} bounce rate is {bounce_rate:.1%}")
         if complaint_rate >= complaint_warn:
             issues.append(f"{s['mailgun_domain']} complaint rate is {complaint_rate:.2%}")
 
+    # Full inboxes aren't bounces (bounce rate excludes them), but they are
+    # people who missed the mail -- said here so a clean bounce rate can't hide
+    # 1 in 20 readers missing every newsletter (theigniteindia.com, 2026-11-11).
+    full = sum((s["soft_bounced"] or 0) for s in mailgun_stats if "soft_bounced" in s.keys())
+    sent = sum((s["accepted"] or 0) for s in mailgun_stats)
+    full_note = ""
+    if full and sent and full / sent >= 0.01:
+        full_note = (f" Separately, {full} email{'s' if full != 1 else ''} ({full / sent:.1%} of what was sent) "
+                     f"didn't arrive: the receiving server refused them for now, usually because the inbox is "
+                     f"full, and Mailgun gave up. See \"What the failed emails were\" below.")
     if not issues:
-        return "ok", f"✅ Bounce and complaint rates look healthy across {len(mailgun_stats)} Mailgun domain(s)."
-    return "bad", "⚠️ " + "; ".join(issues) + "."
+        return ("warn" if full_note else "ok"), (
+            f"✅ Bounce and complaint rates look healthy across {len(mailgun_stats)} Mailgun domain(s)." + full_note)
+    return "bad", "⚠️ " + "; ".join(issues) + "." + full_note
 
 
 def ses_verdict(ses_stats, bounce_warn, complaint_warn):

@@ -76,7 +76,7 @@ DEFAULT_SETTINGS = {
     "postmaster_stats_window_days": "30", # lookback window for the SPAM_RATE / delivery-error metrics
     "postmaster_missing_min_volume": "50",   # don't flag a domain as missing from Postmaster until Gmail's reported at least this much volume for it -- a domain barely touching Gmail isn't worth registering
     "postmaster_missing_recent_days": "30",  # how far back to look for that Gmail-reported volume
-    "chronic_transient_min_occurrences": "3",  # SES only: flag a "transient" bounce address once it's failed this many separate sends without ever succeeding
+    "chronic_transient_min_occurrences": "3",  # SES + Mailgun full inboxes: flag an address once it's failed this many separate sends without ever succeeding
     "chronic_transient_min_days": "90",        # flag a "transient" bounce address once it's been failing this many days straight without ever succeeding
     "email_verifier_from_address": "",   # MAIL FROM used for the SMTP probe -- must be set to a real domain you control before the verifier will run at all
     "email_verifier_helo_name": "",       # HELO/EHLO hostname used for the SMTP probe -- a real-looking hostname, doesn't need to resolve
@@ -1927,7 +1927,7 @@ def mailgun_daily_series(conn, domain_id: int, days: int = 60):
     since = (datetime.datetime.utcnow().date() - datetime.timedelta(days=days)).isoformat()
     rows = conn.execute(
         """SELECT day, SUM(accepted) as accepted, SUM(delivered) as delivered,
-                  SUM(failed_perm) as failed_perm, SUM(complained) as complained
+                  SUM(COALESCE(bounced, failed_perm)) as failed_perm, SUM(complained) as complained
            FROM mailgun_daily_stats WHERE domain_id=? AND day >= ?
            GROUP BY day ORDER BY day""",
         (domain_id, since),
@@ -2224,6 +2224,50 @@ def upsert_system_action(conn, domain_id: int, category: str, ref_key, title: st
         )
 
 
+# (weight, threshold) per component, in health_score_from's argument order.
+# threshold None = the value is already 0-1 good; negative = "higher is
+# better", benchmarked against -threshold; positive = a rate where reaching
+# the threshold scores 0.
+HEALTH_WEIGHTS = (
+    ("pass_rate", 20, None),
+    ("postmaster_spam_rate", 25, 0.003),
+    ("bounce_rate", 25, 0.05),
+    ("complaint_rate", 10, 0.001),
+    ("click_rate", 20, "click"),
+)
+
+
+def health_component_scores(values: dict, click_benchmark: float) -> dict:
+    """{name: (component 0-1, weight)} for every component that has data --
+    shared by the score itself and the verdict that names what's pulling it
+    down, so the two can't disagree."""
+    out = {}
+    for name, weight, threshold in HEALTH_WEIGHTS:
+        value = values.get(name)
+        if value is None:
+            continue
+        if threshold is None:
+            component = value
+        elif threshold == "click":
+            component = min(value / click_benchmark, 1.0)
+        else:
+            component = 1 - min(value / threshold, 1)
+        out[name] = (component, weight)
+    return out
+
+
+def health_score_from(pass_rate, postmaster_spam_rate, bounce_rate, complaint_rate, click_rate,
+                      click_benchmark: float):
+    """The 0-100 composite (weights reordered 2026-09-24, jev Chapter 16:
+    authentication ranks 4th behind complaints, bounces and engagement)."""
+    parts = health_component_scores({
+        "pass_rate": pass_rate, "postmaster_spam_rate": postmaster_spam_rate, "bounce_rate": bounce_rate,
+        "complaint_rate": complaint_rate, "click_rate": click_rate,
+    }, click_benchmark)
+    total = sum(w for _, w in parts.values())
+    return (sum(c * w for c, w in parts.values()) / total) * 100 if total else None
+
+
 def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dict) -> None:
     """Once-a-day composite health snapshot for this domain, stored in
     domain_health_snapshots. Reuses the same day-keyed history tables the
@@ -2263,7 +2307,7 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     since_day = (datetime.datetime.utcnow().date() - datetime.timedelta(days=30)).isoformat()
     mg_row = conn.execute(
         """SELECT SUM(accepted) as accepted, SUM(delivered) as delivered,
-                  SUM(failed_perm) as failed_perm, SUM(complained) as complained
+                  SUM(COALESCE(bounced, failed_perm)) as failed_perm, SUM(complained) as complained
            FROM mailgun_daily_stats WHERE domain_id=? AND day >= ?""",
         (domain_id, since_day),
     ).fetchone()
@@ -2321,26 +2365,8 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     # rate, and engagement, and had no engagement component at all. This
     # reorders the weights to match that already-established research
     # instead of contradicting it.
-    weighted_sum = 0.0
-    weight_total = 0.0
-    for value, weight, threshold in (
-        (pass_rate, 20, None),
-        (postmaster_spam_rate, 25, 0.003),
-        (bounce_rate, 25, 0.05),
-        (complaint_rate, 10, 0.001),
-        (click_rate, 20, -click_benchmark),  # negative threshold marks "higher is better, benchmarked"
-    ):
-        if value is None:
-            continue
-        if threshold is None:
-            component = value
-        elif threshold < 0:
-            component = min(value / -threshold, 1.0)
-        else:
-            component = 1 - min(value / threshold, 1)
-        weighted_sum += component * weight
-        weight_total += weight
-    health_score = (weighted_sum / weight_total) * 100 if weight_total else None
+    health_score = health_score_from(pass_rate, postmaster_spam_rate, bounce_rate, complaint_rate, click_rate,
+                                     click_benchmark)
 
     conn.execute(
         """INSERT OR IGNORE INTO domain_health_snapshots

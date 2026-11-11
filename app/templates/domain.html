@@ -176,7 +176,7 @@
     <div class="pill ok"><div class="pill-top">✅</div><div class="pill-value">{{ "%.3f"|format(100 * spam_rate) }}%</div><div class="pill-label">Gmail spam rate</div></div>
     {% endif %}
   {% elif mailgun_stats and mailgun_stats[0].accepted %}
-    {% set bounce_rate = mailgun_stats[0].failed_perm / mailgun_stats[0].accepted %}
+    {% set bounce_rate = (mailgun_stats[0].bounced if mailgun_stats[0].bounced is not none else mailgun_stats[0].failed_perm) / mailgun_stats[0].accepted %}
     <div class="pill {{ 'bad' if bounce_rate >= 0.05 else 'ok' }}">
       <div class="pill-top">{{ "🔴" if bounce_rate >= 0.05 else "📨" }}</div>
       <div class="pill-value">{{ "%.2f"|format(100 * bounce_rate) }}%</div>
@@ -1059,12 +1059,13 @@
       {% if verdicts.mailgun[0] == 'bad' %}{{ fix_note(category_remediation('mailgun_reputation')) }}{% endif %}
       <div class="table-wrap">
       <table>
-        <tr><th>Mailgun domain</th><th>Accepted ({{ mailgun_stats[0].window_days if mailgun_stats else "?" }}d)</th><th>Bounce rate</th><th>Complaint rate</th><th>Bounces</th><th>Complaints</th><th>Unsubscribes</th></tr>
+        <tr><th>Mailgun domain</th><th>Accepted ({{ mailgun_stats[0].window_days if mailgun_stats else "?" }}d)</th><th title="Real bounces only (addresses that don't work). Full inboxes and skipped addresses are listed below.">Bounce rate</th><th title="Mailgun gave up after a temporary refusal, usually a full inbox. Not counted as a bounce.">Inbox full</th><th>Complaint rate</th><th>Bounces</th><th>Complaints</th><th>Unsubscribes</th></tr>
         {% for s in mailgun_stats %}
         <tr>
           <td>{{ s.mailgun_domain }}</td>
           <td>{{ s.accepted }}</td>
-          <td>{{ "%.2f"|format(100 * s.failed_perm / s.accepted) if s.accepted else "-" }}%</td>
+          <td>{{ "%.2f"|format(100 * (s.bounced if s.bounced is not none else s.failed_perm) / s.accepted) if s.accepted else "-" }}%</td>
+          <td>{% if s.soft_bounced %}<a href="#mailgun-failures">{{ s.soft_bounced }}</a>{% else %}{{ 0 if s.soft_bounced is not none else "-" }}{% endif %}</td>
           <td>{{ "%.2f"|format(100 * s.complained / s.accepted) if s.accepted else "-" }}%</td>
           <td>{{ mailgun_suppression_counts.get(s.mailgun_domain, {}).get('bounce', 0) }}</td>
           <td>{{ mailgun_suppression_counts.get(s.mailgun_domain, {}).get('complaint', 0) }}</td>
@@ -1073,6 +1074,37 @@
         {% endfor %}
       </table>
       </div>
+
+      {% if mailgun_failure_days %}
+      <h3 id="mailgun-failures" style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">What the "failed" emails were</h3>
+      <p class="muted" style="font-size:0.78rem; margin:0 0 0.6rem 0">
+        Mailgun counts three different things as "failed". Only "Bounced" means the address doesn't work, and only
+        those count in the bounce rate above. "Inbox full" means the receiving server refused it for now (almost
+        always a mailbox out of storage) and Mailgun gave up: that person missed the email. Mailgun doesn't
+        block-list them, so they're tried again next send and never appear under Download suppressions. "Skipped"
+        were never sent: already unsubscribed or bounced. Since 11 Nov this page keeps each address; anyone refused
+        on 3 separate sends moves to the likely-dead cleanup list on its own.
+      </p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Day</th><th>Sent</th><th title="The address doesn't exist or is disabled. Mailgun blocks it from then on.">Bounced</th><th title="Mailgun gave up after a temporary refusal, almost always an inbox that's out of storage. Not block-listed: retried every send.">Inbox full</th><th title="Never sent: the address was already on Mailgun's bounce, unsubscribe or complaint list.">Skipped</th><th>Who</th></tr>
+        {% for f in mailgun_failure_days %}
+        <tr>
+          <td>{{ f.day }}</td>
+          <td>{{ f.accepted }}</td>
+          {% if f.bounced is not none %}
+          <td>{% if f.bounced %}<span class="badge bad">{{ f.bounced }}</span>{% else %}0{% endif %}</td>
+          <td>{% if f.soft_bounced %}<span class="badge warn">{{ f.soft_bounced }}</span>{% else %}0{% endif %}</td>
+          <td>{{ f.skipped or 0 }}</td>
+          {% else %}
+          <td colspan="3" class="muted">{{ f.failed_perm }} failed (Mailgun no longer says which kind)</td>
+          {% endif %}
+          <td style="font-size:0.85rem;">{% if f.names %}<a href="/domain/{{ domain.name }}/mailgun_failures.csv?day={{ f.day }}" class="muted">⬇ {{ f.names }} address{{ 'es' if f.names != 1 else '' }}</a>{% else %}<span class="muted" title="Mailgun keeps addresses for about 5 days; this tool started keeping them on 11 Nov 2026.">gone from Mailgun's log</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      {% endif %}
 
       <h3 style="font-size:0.9rem; margin:1.1rem 0 0.3rem 0">Bounce &amp; complaint rate trend</h3>
       <p class="muted" style="font-size:0.78rem; margin:0 0 0.6rem 0">

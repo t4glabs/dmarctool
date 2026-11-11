@@ -431,7 +431,7 @@ def _mailgun_rate_impact(conn, mailgun_domain: str, around: datetime.datetime):
 
     def _window(start_day, end_day):
         row = conn.execute(
-            """SELECT SUM(accepted) as a, SUM(failed_perm) as f, SUM(complained) as c
+            """SELECT SUM(accepted) as a, SUM(COALESCE(bounced, failed_perm)) as f, SUM(complained) as c
                FROM mailgun_daily_stats WHERE mailgun_domain=? AND day BETWEEN ? AND ?""",
             (mailgun_domain, start_day, end_day),
         ).fetchone()
@@ -663,7 +663,7 @@ def _reputation_rate_detail(conn, category: str, ref_key: str, start_str: str, e
     start_day, end_day = start_str[:10], end_str[:10]
     if category == "mailgun_reputation":
         row = conn.execute(
-            """SELECT SUM(accepted) as total, SUM(failed_perm) as bounced, SUM(complained) as complained
+            """SELECT SUM(accepted) as total, SUM(COALESCE(bounced, failed_perm)) as bounced, SUM(complained) as complained
                FROM mailgun_daily_stats WHERE mailgun_domain=? AND day BETWEEN ? AND ?""",
             (ref_key, start_day, end_day),
         ).fetchone()

@@ -196,7 +196,10 @@ CREATE TABLE IF NOT EXISTS mailgun_stats (
     failed_perm    INTEGER,
     failed_temp    INTEGER,
     complained     INTEGER,
-    unsubscribed   INTEGER
+    unsubscribed   INTEGER,
+    soft_bounced   INTEGER,  -- same split as mailgun_daily_stats, over window_days
+    skipped        INTEGER,
+    bounced        INTEGER
 );
 
 -- Delivered/failed counts per real From-header identity, from Mailgun's
@@ -267,6 +270,30 @@ CREATE INDEX IF NOT EXISTS idx_mailgun_suppressions_email ON mailgun_suppression
 -- corrected as Mailgun finalizes them. The API actually already buckets by day
 -- within that window; this just keeps the per-day breakdown instead of
 -- discarding it into a single summed total the way mailgun_stats does.
+-- Every permanent Mailgun failure, one row per (recipient, message), kept
+-- after Mailgun's ~5-day event log forgets it. mailgun_identity_failures is a
+-- rolling window rebuilt each check; this is the history. Exists because
+-- Mailgun never adds a full inbox (reason 'overquota', bounce type 'soft') to
+-- its bounce list: Ghost keeps sending, it fails again every time, and
+-- without this nothing could say WHO -- theigniteindia.com, 2026-11-11.
+CREATE TABLE IF NOT EXISTS mailgun_failure_log (
+    id             INTEGER PRIMARY KEY,
+    domain_id      INTEGER NOT NULL REFERENCES domains(id),
+    mailgun_domain TEXT NOT NULL,
+    recipient      TEXT NOT NULL,
+    message_id     TEXT NOT NULL,
+    from_address   TEXT,
+    subject        TEXT,
+    category       TEXT,     -- bounce_reasons.categorize_bounce
+    reason         TEXT,     -- the receiving server's own words
+    mailgun_reason TEXT,     -- Mailgun's: bounce | overquota | suppress-bounce | suppress-unsubscribe | ...
+    bounce_kind    TEXT,     -- Mailgun's delivery-status bounce-type: hard | soft | NULL (skipped, never sent)
+    occurred_at    TEXT,
+    UNIQUE(mailgun_domain, recipient, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailgun_failure_log_domain ON mailgun_failure_log(domain_id, recipient);
+
 CREATE TABLE IF NOT EXISTS mailgun_daily_stats (
     id             INTEGER PRIMARY KEY,
     domain_id      INTEGER NOT NULL REFERENCES domains(id),
@@ -278,6 +305,10 @@ CREATE TABLE IF NOT EXISTS mailgun_daily_stats (
     failed_temp    INTEGER NOT NULL DEFAULT 0,
     complained     INTEGER NOT NULL DEFAULT 0,
     unsubscribed   INTEGER NOT NULL DEFAULT 0,
+    -- what failed_perm was made of (mailgun.fetch_failure_breakdown); NULL = unknown
+    soft_bounced   INTEGER,        -- Mailgun gave up on a temporary refusal, usually a full inbox
+    skipped        INTEGER,        -- never sent: already on a bounce/unsubscribe/complaint list
+    bounced        INTEGER,        -- real bounces = failed_perm - soft_bounced - skipped
     UNIQUE(mailgun_domain, day)
 );
 

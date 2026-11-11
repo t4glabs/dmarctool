@@ -318,11 +318,12 @@ def build_domain_summary(conn, domain_row, settings):
     top_issues, extra_issues_count = top_categories(open_counts, limit=3)
 
     latest_health = conn.execute(
-        "SELECT health_score FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
+        "SELECT * FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
         (domain_id,),
     ).fetchone()
     health_score = latest_health["health_score"] if latest_health else None
-    vibe_status, vibe_text = domain_vibe_verdict(health_score)
+    vibe_status, vibe_text = domain_vibe_verdict(health_score, latest_health,
+                                                 float(settings.get("campaign_click_benchmark", 0.033)))
 
     card_sparkline_svg = None
     health_series = health_score_series(conn, domain_id, days=30)
@@ -683,11 +684,12 @@ def domain_detail(request: Request, name: str, flash: str = None):
     sparkline_svg = pass_rate_sparkline(series, threshold=float(settings["min_pass_rate"]))
 
     latest_health = conn.execute(
-        "SELECT health_score FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
+        "SELECT * FROM domain_health_snapshots WHERE domain_id=? ORDER BY snapshot_date DESC LIMIT 1",
         (domain_id,),
     ).fetchone()
     health_score = latest_health["health_score"] if latest_health else None
-    vibe_status, vibe_text = domain_vibe_verdict(health_score)
+    vibe_status, vibe_text = domain_vibe_verdict(health_score, latest_health,
+                                                 float(settings.get("campaign_click_benchmark", 0.033)))
     health_series = health_score_series(conn, domain_id, days=90)
     health_sparkline_svg = health_score_sparkline(health_series) if len(health_series) >= 2 else None
 
@@ -814,6 +816,16 @@ def domain_detail(request: Request, name: str, flash: str = None):
            ORDER BY mailgun_domain""",
         (domain_id,),
     ).fetchall()
+    # What each send's "failed" count was made of (mailgun.fetch_failure_breakdown),
+    # and whether we still have the names (mailgun_failure_log, kept from 2026-11-11).
+    names_by_day = {r["d"]: r["n"] for r in conn.execute(
+        """SELECT substr(occurred_at, 1, 10) d, COUNT(DISTINCT recipient) n FROM mailgun_failure_log
+           WHERE domain_id=? GROUP BY d""", (domain_id,))}
+    mailgun_failure_days = [dict(r, names=names_by_day.get(r["day"], 0)) for r in conn.execute(
+        """SELECT day, SUM(accepted) accepted, SUM(failed_perm) failed_perm, SUM(bounced) bounced,
+                  SUM(soft_bounced) soft_bounced, SUM(skipped) skipped
+           FROM mailgun_daily_stats WHERE domain_id=? AND failed_perm > 0 AND day >= date('now', '-90 days')
+           GROUP BY day ORDER BY day DESC""", (domain_id,))]
     mailgun_suppression_counts = {}
     for row in conn.execute(
         """SELECT mailgun_domain, kind, COUNT(*) as n FROM mailgun_suppressions
@@ -1066,6 +1078,7 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "spf_checks": spf_checks,
         "dkim_checks": dkim_checks,
         "mailgun_stats": mailgun_stats,
+        "mailgun_failure_days": mailgun_failure_days,
         "mailgun_suppression_counts": mailgun_suppression_counts,
         "mailgun_bounce_chart_svg": mailgun_bounce_chart_svg,
         "mailgun_complaint_chart_svg": mailgun_complaint_chart_svg,
@@ -1371,6 +1384,35 @@ def download_chronic_transient(name: str):
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{name}_chronic_transient_bounces.csv"'},
     )
+
+
+@app.get("/domain/{name}/mailgun_failures.csv")
+def download_mailgun_failures(name: str, day: str = None):
+    """Every address Mailgun gave up on for this domain (mailgun_failure_log,
+    kept past Mailgun's ~5-day log), optionally one send day -- the names
+    behind the "Inbox full" column, which never appear in a suppressions
+    download because Mailgun doesn't block-list full inboxes."""
+    from app.mailgun_deferrals import normalize_reason
+    conn = get_connection()
+    domain = conn.execute("SELECT id FROM domains WHERE name=?", (name,)).fetchone()
+    if not domain:
+        raise HTTPException(status_code=404, detail="domain not found")
+    query = """SELECT recipient, subject, bounce_kind, mailgun_reason, category, reason, occurred_at
+               FROM mailgun_failure_log WHERE domain_id=?"""
+    params = [domain["id"]]
+    if day:
+        query += " AND substr(occurred_at, 1, 10) = ?"
+        params.append(day)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["email", "newsletter", "kind", "what_happened", "receiving_server_said", "date"])
+    kinds = {"hard": "address doesn't work", "soft": "inbox full / temporary refusal, retried next send"}
+    for r in conn.execute(query + " ORDER BY occurred_at, recipient", params):
+        writer.writerow([r["recipient"], r["subject"] or "",
+                         kinds.get(r["bounce_kind"], "not sent: already on Mailgun's block list"),
+                         r["category"] or "", normalize_reason(r["reason"] or ""), r["occurred_at"] or ""])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}_mailgun_failures{"_" + day if day else ""}.csv"'})
 
 
 @app.get("/domain/{name}/mailgun_identity_failures.csv")

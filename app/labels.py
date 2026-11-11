@@ -533,8 +533,8 @@ SETTINGS_META = {
         "example": "30 means it looks at the last 30 days of Gmail-reported volume.",
     },
     "chronic_transient_min_occurrences": {
-        "label": "Sends before a 'temporary' bounce counts as chronic (SES)",
-        "help": "SES only (Mailgun doesn't keep long-term per-send bounce history). An address that keeps bouncing 'temporarily' across this many separate newsletters, without ever succeeding, gets flagged as effectively dead.",
+        "label": "Sends before a 'temporary' bounce counts as chronic",
+        "help": "An address that keeps bouncing 'temporarily' across this many separate newsletters, without ever succeeding, gets flagged as effectively dead. Covers SES, and Mailgun full inboxes (which Mailgun never adds to its own bounce list, so they're tried again every send) -- Mailgun ones are counted from the day this tool started keeping them, 11 Nov 2026.",
         "example": "3 means an address that has bounced temporarily on 3 or more different sends gets flagged.",
     },
     "chronic_transient_min_days": {

@@ -193,6 +193,59 @@ def fetch_stats(mailgun_domain: str, api_key: str, window_days: int):
     return totals, daily, None
 
 
+METRICS_URL = "https://api.mailgun.net/v1/analytics/metrics"
+BREAKDOWN_DAYS = 90  # re-read every run so older daily rows get their split too
+_FAILURE_METRICS = ("permanent_failed_count", "hard_bounces_count", "soft_bounces_count",
+                    "suppressed_bounces_count", "suppressed_unsubscribed_count", "suppressed_complaints_count")
+
+
+def fetch_failure_breakdown(mailgun_domain: str, api_key: str, window_days: int):
+    """{day: {"hard": n, "soft": n, "skipped": n}} from Mailgun's Metrics API --
+    what each day's permanent failures actually were, which stats/total no
+    longer says (its permanent sub-fields come back 0 while the total is 51).
+    soft = Mailgun gave up on a temporary refusal, almost always a full
+    mailbox (Gmail 452 4.2.2 "out of storage space"); Mailgun does NOT add these
+    to its bounce list, so they're retried every send and never show up in a
+    suppressions download. skipped = never sent at all, the address was already
+    on a bounce/unsubscribe/complaint list. Neither reached a receiving server
+    as a bad address, so neither belongs in a bounce rate. Found 2026-11-11 on
+    theigniteindia.com: 136 "bounces" in two months, 0 hard, 136 soft, 2 skipped.
+    Kept much longer than the ~5-day event log, so it backfills."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    body = {
+        "start": email.utils.format_datetime(now - datetime.timedelta(days=window_days)),
+        "end": email.utils.format_datetime(now),
+        "resolution": "day", "dimensions": ["time"], "metrics": list(_FAILURE_METRICS),
+        "filter": {"AND": [{"attribute": "domain", "comparator": "=",
+                            "values": [{"label": mailgun_domain, "value": mailgun_domain}]}]},
+    }
+    req = urllib.request.Request(METRICS_URL, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": _auth_header(api_key), "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}: {e.reason}"
+    except (urllib.error.URLError, TimeoutError) as e:
+        return None, f"network error: {e}"
+    out = {}
+    for item in data.get("items") or []:
+        m = item.get("metrics") or {}
+        if not m.get("permanent_failed_count"):
+            continue
+        try:
+            day = email.utils.parsedate_to_datetime(item["dimensions"][0]["value"]).date().isoformat()
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+        out[day] = {
+            "hard": m.get("hard_bounces_count") or 0,
+            "soft": m.get("soft_bounces_count") or 0,
+            "skipped": sum(m.get(k) or 0 for k in ("suppressed_bounces_count", "suppressed_unsubscribed_count",
+                                                   "suppressed_complaints_count")),
+        }
+    return out, None
+
+
 def fetch_suppressions(mailgun_domain: str, kind: str, api_key: str):
     """All items for one suppression endpoint ('bounces'|'complaints'|'unsubscribes')."""
     items, url = [], f"{API_BASE}/{mailgun_domain}/{kind}?limit=300"
@@ -289,6 +342,9 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
                         "reason": reason_text,
                         "bounce_type": bounce_type,
                         "occurred_at": occurred_at,
+                        "message_id": message_id,
+                        "mailgun_reason": item.get("reason"),
+                        "bounce_kind": ds.get("bounce-type"),
                     }
             nxt = data.get("paging", {}).get("next")
             url = nxt if nxt and items else None
@@ -320,6 +376,9 @@ def fetch_identity_breakdown(mailgun_domain: str, api_key: str, window_days: int
             "reason": detail["reason"],
             "bounce_type": detail["bounce_type"],
             "occurred_at": detail["occurred_at"],
+            "message_id": detail["message_id"],
+            "mailgun_reason": detail["mailgun_reason"],
+            "bounce_kind": detail["bounce_kind"],
         })
 
     return breakdown, failures, None
@@ -363,8 +422,9 @@ def _fetch_all(mailgun_domain, api_key, window_days, events_window_days):
         items, err = fetch_suppressions(mailgun_domain, endpoint, api_key)
         suppressions[kind] = (items, err)
     identity, identity_failures, identity_err = fetch_identity_breakdown(mailgun_domain, api_key, events_window_days)
+    breakdown, breakdown_err = fetch_failure_breakdown(mailgun_domain, api_key, max(window_days, BREAKDOWN_DAYS))
     return {"stats": (stats, stats_err), "daily": daily, "suppressions": suppressions,
-            "identity": (identity, identity_failures, identity_err)}
+            "identity": (identity, identity_failures, identity_err), "breakdown": (breakdown, breakdown_err)}
 
 
 def _parse_mailgun_datetime(raw):
@@ -468,40 +528,90 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
                     (domain_id, mailgun_domain, f["from_address"], f["recipient"], f["subject"], f["category"],
                      f["reason"], f["bounce_type"], f["occurred_at"]),
                 )
+            # The permanent history -- only final, permanent failures: a
+            # temporary one may still deliver on retry (mailgun_deferrals
+            # follows those).
+            for f in identity_failures:
+                if f["bounce_type"] != "Permanent" or not f["recipient"]:
+                    continue
+                conn.execute(
+                    """INSERT OR IGNORE INTO mailgun_failure_log
+                       (domain_id, mailgun_domain, recipient, message_id, from_address, subject, category,
+                        reason, mailgun_reason, bounce_kind, occurred_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (domain_id, mailgun_domain, f["recipient"].lower(), f["message_id"] or "", f["from_address"],
+                     f["subject"], f["category"], f["reason"], f["mailgun_reason"], f["bounce_kind"],
+                     f["occurred_at"]),
+                )
+
+        breakdown, breakdown_err = fetched[mailgun_domain]["breakdown"]
+        if breakdown_err and verbose:
+            print(f"[mailgun] {mailgun_domain}: failure breakdown fetch failed -- {breakdown_err}")
+
+        def _split(day, failed_perm):
+            """(soft, skipped, real bounces) for one day; all None if unknown,
+            so readers fall back to failed_perm rather than guessing."""
+            if breakdown is None:
+                return None, None, None
+            b = breakdown.get(day, {"soft": 0, "skipped": 0})
+            return b["soft"], b["skipped"], max((failed_perm or 0) - b["soft"] - b["skipped"], 0)
 
         stats, err = fetched[mailgun_domain]["stats"]
         if err:
             if verbose:
                 print(f"[mailgun] {mailgun_domain}: stats fetch failed -- {err}")
         else:
+            soft_w = skipped_w = bounced_w = None
+            if breakdown is not None:
+                window_start = (datetime.datetime.utcnow().date() - datetime.timedelta(days=window_days)).isoformat()
+                soft_w = sum(b["soft"] for d, b in breakdown.items() if d >= window_start)
+                skipped_w = sum(b["skipped"] for d, b in breakdown.items() if d >= window_start)
+                bounced_w = max(stats["failed_perm"] - soft_w - skipped_w, 0)
             conn.execute(
                 """INSERT INTO mailgun_stats
                    (domain_id, mailgun_domain, window_days, accepted, delivered, failed_perm, failed_temp,
-                    complained, unsubscribed)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    complained, unsubscribed, soft_bounced, skipped, bounced)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (domain_id, mailgun_domain, window_days, stats["accepted"], stats["delivered"],
-                 stats["failed_perm"], stats["failed_temp"], stats["complained"], stats["unsubscribed"]),
+                 stats["failed_perm"], stats["failed_temp"], stats["complained"], stats["unsubscribed"],
+                 soft_w, skipped_w, bounced_w),
             )
             accepted = stats["accepted"] or 0
-            bounce_rate = stats["failed_perm"] / accepted if accepted else 0.0
+            # Real bounces only: full inboxes and already-suppressed skips say
+            # nothing about whether the addresses on the list exist.
+            real_bounced = bounced_w if bounced_w is not None else stats["failed_perm"]
+            bounce_rate = real_bounced / accepted if accepted else 0.0
             complaint_rate = stats["complained"] / accepted if accepted else 0.0
             if verbose:
                 print(f"[mailgun] {mailgun_domain} ({domain_name}): {accepted} accepted, "
                       f"{bounce_rate:.2%} bounced, {complaint_rate:.2%} complained (last {window_days}d)")
 
             for day_str, day_totals in fetched[mailgun_domain]["daily"] or []:
+                soft, skipped, bounced = _split(day_str, day_totals["failed_perm"])
                 conn.execute(
                     """INSERT INTO mailgun_daily_stats
                        (domain_id, mailgun_domain, day, accepted, delivered, failed_perm, failed_temp,
-                        complained, unsubscribed)
-                       VALUES (?,?,?,?,?,?,?,?,?)
+                        complained, unsubscribed, soft_bounced, skipped, bounced)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(mailgun_domain, day) DO UPDATE SET
                          accepted=excluded.accepted, delivered=excluded.delivered,
                          failed_perm=excluded.failed_perm, failed_temp=excluded.failed_temp,
-                         complained=excluded.complained, unsubscribed=excluded.unsubscribed""",
+                         complained=excluded.complained, unsubscribed=excluded.unsubscribed,
+                         soft_bounced=COALESCE(excluded.soft_bounced, soft_bounced),
+                         skipped=COALESCE(excluded.skipped, skipped),
+                         bounced=COALESCE(excluded.bounced, bounced)""",
                     (domain_id, mailgun_domain, day_str, day_totals["accepted"], day_totals["delivered"],
                      day_totals["failed_perm"], day_totals["failed_temp"], day_totals["complained"],
-                     day_totals["unsubscribed"]),
+                     day_totals["unsubscribed"], soft, skipped, bounced),
+                )
+            # Older days already stored (outside the stats window) get their
+            # split too -- the metrics API reaches back further than stats/total.
+            for day_str, b in (breakdown or {}).items():
+                conn.execute(
+                    """UPDATE mailgun_daily_stats SET soft_bounced=?, skipped=?,
+                         bounced=MAX(failed_perm - ? - ?, 0)
+                       WHERE mailgun_domain=? AND day=?""",
+                    (b["soft"], b["skipped"], b["soft"], b["skipped"], mailgun_domain, day_str),
                 )
 
             # Only flag a RATE once enough mail was sent to make the percentage
