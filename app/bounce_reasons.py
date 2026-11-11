@@ -179,3 +179,25 @@ def categorize_bounce(reason: str, bounce_type: str = None) -> str:
     if bounce_type == "Transient":
         return "Other temporary failure (see raw reason)"
     return "Other / unrecognized"
+
+
+# Never sent at all: the provider refused up front because the address was
+# already on its block list. Not a bounce from a receiving server, and (per
+# the providers) not counted against your bounce rate -- Mailgun's "skipped".
+SKIPPED_CATEGORIES = {
+    "Suppressed pre-emptively by SES (not a real mailbox bounce)",
+    "Suppressed pre-emptively by SES (address-quality check)",
+    "Already suppressed by Mailgun (remove from your sending list, not a fresh bounce)",
+    "Already suppressed by Mailgun (recipient unsubscribed)",
+}
+_SES_SKIP_SUBTYPES = {"OnAccountSuppressionList", "Suppressed"}
+
+
+def bounce_kind(reason, bounce_type, bounce_subtype=None) -> str:
+    """"hard" | "soft" | "skipped" for one SES bounce, the same split Mailgun's
+    metrics give. Only "hard" belongs in a bounce rate: SES records temporary
+    bounces (a full inbox: 177 of pattic.org's 229 "bounced" on 6 Nov 2026)
+    and suppression-list skips as Bounce events too."""
+    if bounce_subtype in _SES_SKIP_SUBTYPES or categorize_bounce(reason, bounce_type) in SKIPPED_CATEGORIES:
+        return "skipped"
+    return "hard" if bounce_type == "Permanent" else "soft"

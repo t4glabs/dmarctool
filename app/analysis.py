@@ -853,6 +853,19 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
                             f"in -- not an attack."),
                 "action": "No action needed. Never add this to your SPF record -- it isn't your sending infrastructure.",
             }
+        failing = conn.execute(
+            """SELECT COALESCE(SUM(rr.count), 0) n FROM report_records rr JOIN reports r ON r.id = rr.report_id
+               WHERE r.domain_id = ? AND rr.source_ip = ? AND rr.dkim_result != 'pass'
+                 AND COALESCE(rr.spf_result, '') != 'pass'""", (domain_id, source_ip)).fetchone()["n"]
+        if not failing:
+            return {
+                "verdict": "legitimate",
+                "icon": "✅",
+                "headline": "Your own mail, passing",
+                "summary": (f"Every message from it carried a valid {domain_name} signature and passed. If it isn't "
+                            f"one of your own servers, it's a recipient's mail system passing your mail on intact."),
+                "action": "No action needed.",
+            }
         return {
             "verdict": "legitimate",
             "icon": "✅",
@@ -1284,6 +1297,9 @@ def _recency_note(now_day: int, last_seen_epoch: int) -> str:
     return f"Hasn't recurred in {days_since} days (last seen {last_date})."
 
 
+_MAILBOX_FORWARDER_PTRS = ("unverified-forwarding.1e100.net", "mail-sor-", "outbound.protection.outlook.com")
+
+
 def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, settings: dict, now_day: int) -> list:
     new_window = int(settings["new_sender_window_days"])
     high_vol = int(settings["high_volume_fail_threshold"])
@@ -1299,6 +1315,13 @@ def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, setting
 
         if is_new and s["classification"] == "unclassified" and total >= 3:
             ptr = _reverse_dns(s["source_ip"])
+            # Every message passed and it's a mailbox provider's forwarding
+            # service (Gmail's *.unverified-forwarding.1e100.net / mail-sor-*,
+            # Outlook's outbound.protection.outlook.com): a recipient forwarding
+            # our mail on, intact. Nothing to review. By name, not IP range:
+            # Google's forwarding IPv6 block also hosts Google Cloud customers.
+            if pass_rate == 1.0 and ptr and any(h in ptr.lower() for h in _MAILBOX_FORWARDER_PTRS):
+                continue
             guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
             # Our own mail that a recipient's filter changed: nothing to
             # investigate. The overview's "blocked at the recipient's end" line
@@ -1719,7 +1742,8 @@ def ses_daily_series(conn, domain_id: int, days: int = 60):
     since a complaint requires the message to have arrived."""
     since = (datetime.datetime.utcnow().date() - datetime.timedelta(days=days)).isoformat()
     rows = conn.execute(
-        """SELECT day, SUM(delivered) as delivered, SUM(bounced) as bounced, SUM(complained) as complained
+        """SELECT day, SUM(delivered) as delivered, SUM(bounced) as all_bounced,
+                  SUM(COALESCE(hard_bounced, bounced)) as bounced, SUM(complained) as complained
            FROM ses_event_counts WHERE domain_id=? AND day >= ?
            GROUP BY day ORDER BY day""",
         (domain_id, since),
@@ -1730,8 +1754,8 @@ def ses_daily_series(conn, domain_id: int, days: int = 60):
         series.append({
             "day": r["day"],
             "volume": delivered,
-            "bounce_num": bounced,
-            "bounce_den": delivered + bounced,
+            "bounce_num": bounced,  # real hard bounces only (bounce_reasons.bounce_kind)
+            "bounce_den": delivered + (r["all_bounced"] or 0),
             "complaint_num": r["complained"] or 0,
             "complaint_den": delivered,
         })
@@ -1765,6 +1789,11 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10, settings: dict = Non
     out = []
     for r in rows:
         delivered = r["delivered"] or 0
+        # SES counts temporary bounces (full inboxes) and suppression-list
+        # skips as Bounce events; only hard ones are bounces (pattic.org,
+        # 6 Nov 2026: 229 "bounced" = 17 hard + 177 full inbox + skips).
+        all_failed = r["bounced"] or 0
+        hard = r["hard_bounced"] if r["hard_bounced"] is not None else all_failed
         bounce_breakdown = Counter()
         if r["bounced"]:
             for br in conn.execute(
@@ -1783,7 +1812,8 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10, settings: dict = Non
             "delivered": delivered,
             "opened": r["opened"] or 0,
             "clicked": r["clicked"] or 0,
-            "bounced": r["bounced"] or 0,
+            "bounced": hard,
+            "not_real_bounces": all_failed - hard,
             "complained": r["complained"] or 0,
             # NOTE the opened/clicked columns are raw EVENT counts, not people
             # -- one recipient clicking five links counts five times. Dividing
@@ -1798,8 +1828,7 @@ def recent_campaigns(conn, domain_id: int, limit: int = 10, settings: dict = Non
             "click_rate": (r["clicked"] or 0) / delivered if delivered else None,
             # delivered+bounced ("attempted"), not delivered -- a bounced
             # message was never delivered, so delivered alone can exceed 100%.
-            "bounce_rate": ((r["bounced"] or 0) / (delivered + (r["bounced"] or 0))
-                            if (delivered + (r["bounced"] or 0)) else None),
+            "bounce_rate": (hard / (delivered + all_failed) if (delivered + all_failed) else None),
             "complaint_rate": (r["complained"] or 0) / delivered if delivered else None,
             "unique_openers": open_quality["total_openers"],
             "unique_clickers": click_quality["total_clickers"],
@@ -2375,7 +2404,8 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
         (domain_id, since_day),
     ).fetchone()
     ses_row = conn.execute(
-        """SELECT SUM(delivered) as delivered, SUM(bounced) as bounced, SUM(complained) as complained
+        """SELECT SUM(delivered) as delivered, SUM(bounced) as all_bounced,
+                  SUM(COALESCE(hard_bounced, bounced)) as bounced, SUM(complained) as complained
            FROM ses_event_counts WHERE domain_id=? AND day >= ?""",
         (domain_id, since_day),
     ).fetchone()
@@ -2389,7 +2419,7 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     # and the domain's Good/Bad/Ugly grade). Mailgun's own denominator is
     # `accepted`; SES's is delivered+bounced. Complaints stay over delivered,
     # since a complaint requires the message to have arrived.
-    combined_attempted = (mg_row["accepted"] or 0) + (ses_row["delivered"] or 0) + (ses_row["bounced"] or 0)
+    combined_attempted = (mg_row["accepted"] or 0) + (ses_row["delivered"] or 0) + (ses_row["all_bounced"] or 0)
     # Same low-volume trap as pass_rate above, one level worse: one stray
     # bounce with zero other traffic (a real case seen live -- 1 bounced,
     # 0 delivered) computes as a mathematically correct but meaningless

@@ -76,8 +76,8 @@ _PROBLEM_STORY = {
     # Fallback wording only -- _resolved_items() special-cases these two with
     # a real per-report count instead of this generic phrase; this only shows
     # up if one is still open (these categories currently have no auto-dismiss).
-    "mailgun_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo, a full inbox, or an address that no longer exists)",
-    "ses_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo, a full inbox, or an address that no longer exists)",
+    "mailgun_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo or an address that no longer exists)",
+    "ses_new_suppressions": "some people's addresses have stopped accepting your mail (often a typo or an address that no longer exists)",
     "new_sender": ("we noticed a computer sending email using your website's name that we hadn't seen before. "
                    "Most new senders turn out to be something ordinary, but it's also exactly what we'd see "
                    "first if someone else started using your name without asking"),
@@ -288,7 +288,7 @@ def _times_phrase(n: int) -> str:
     return _TIMES_WORD.get(n, f"{n} times")
 
 
-def _care_ledger(conn, domain_id: int):
+def _care_ledger(conn, domain_id: int, open_items: int = None):
     """One cumulative reassurance line: since the first scan of this domain,
     how many client-facing issues Aikyam has resolved and how many are still
     open. This is the 'ongoing care' story a single before/after can't tell --
@@ -314,6 +314,11 @@ def _care_ledger(conn, domain_id: int):
         (domain_id, *excluded),
     ).fetchone()
     resolved, open_count = row["resolved"] or 0, row["open"] or 0
+    # The report's own "still working on" list, when given, is the open count
+    # the reader can see -- otherwise "we're on 3 more" sat above a 2-row
+    # table (three Google items shown as one row, aikyamjobs 2026-11-11).
+    if open_items is not None:
+        open_count = open_items
     if not resolved and not open_count:
         return None
     since = ""
@@ -449,7 +454,7 @@ def _ses_rate_impact(conn, config_set: str, around: datetime.datetime):
 
     def _window(start_day, end_day):
         row = conn.execute(
-            """SELECT SUM(delivered) as d, SUM(bounced) as b, SUM(complained) as c
+            """SELECT SUM(delivered) as d, SUM(COALESCE(hard_bounced, bounced)) as b, SUM(complained) as c
                FROM ses_event_counts WHERE configuration_set=? AND day BETWEEN ? AND ?""",
             (config_set, start_day, end_day),
         ).fetchone()
@@ -671,7 +676,7 @@ def _reputation_rate_detail(conn, category: str, ref_key: str, start_str: str, e
         ).fetchone()
     else:
         row = conn.execute(
-            """SELECT SUM(delivered) as total, SUM(bounced) as bounced, SUM(complained) as complained
+            """SELECT SUM(delivered) as total, SUM(COALESCE(hard_bounced, bounced)) as bounced, SUM(complained) as complained
                FROM ses_event_counts WHERE configuration_set=? AND day BETWEEN ? AND ?""",
             (ref_key, start_day, end_day),
         ).fetchone()
@@ -1672,6 +1677,8 @@ def _newsletter_quality_summary(conn, domain_id: int, start_date: str, end_date:
                 f"Your {noun} this period came back clean -- nothing worth flagging right now." if total == 1
                 else f"All {total} of your {noun} this period came back clean -- nothing worth flagging right now."
             )
+        elif total == 1:  # "0 of your 1 newsletter... The rest" (aikyamjobs, 2026-11-11)
+            verdict_text = "Your newsletter this period had nothing serious, just a small thing covered below."
         else:
             verdict_text = (
                 f"{clean_count} of your {total} {noun} this period came back clean. The rest had "
@@ -1680,14 +1687,16 @@ def _newsletter_quality_summary(conn, domain_id: int, start_date: str, end_date:
     elif avg_score >= 60:
         status = "warn"
         verdict_text = (
-            f"{clean_count} of your {total} {noun} this period came back clean. The other "
-            f"{total - clean_count} had a few things worth fixing, covered below."
+            "Your newsletter this period had a few things worth fixing, covered below." if total == 1
+            else f"{clean_count} of your {total} {noun} this period came back clean. The other "
+                 f"{total - clean_count} had a few things worth fixing, covered below."
         )
     else:
         status = "bad"
         verdict_text = (
-            f"Just {clean_count} of your {total} {noun} this period came back clean -- the other "
-            f"{total - clean_count} have real things worth fixing, covered below."
+            "Your newsletter this period has real things worth fixing, covered below." if total == 1
+            else f"Just {clean_count} of your {total} {noun} this period came back clean -- the other "
+                 f"{total - clean_count} have real things worth fixing, covered below."
         )
 
     return {"status": status, "verdict_text": verdict_text, "graded_count": total,
@@ -1909,7 +1918,7 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     contact_cta = _contact_aikyam_cta(still_open_categories)
     cadence = sending_cadence(conn, domain_id)
     tips = _tips_for_domain(still_open_categories, cadence["irregular"])
-    care_ledger = _care_ledger(conn, domain_id)
+    care_ledger = _care_ledger(conn, domain_id, open_items=len(still_open))
 
     # KPI-strip numbers for the email report's stat tiles. Deliberately
     # re-derived from the same locals the prose above already computed

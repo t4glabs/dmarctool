@@ -903,8 +903,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
     ses_window_days = int(settings["ses_stats_window_days"])
     ses_cutoff = (_date.today() - _timedelta(days=ses_window_days)).isoformat()
     ses_stats = conn.execute(
-        """SELECT configuration_set,
-                  SUM(delivered) as delivered, SUM(bounced) as bounced, SUM(complained) as complained
+        """SELECT configuration_set, SUM(delivered) as delivered, SUM(bounced) as all_bounced,
+                  SUM(COALESCE(hard_bounced, bounced)) as bounced, SUM(complained) as complained
            FROM ses_event_counts WHERE domain_id=? AND day >= ?
            GROUP BY configuration_set ORDER BY configuration_set""",
         (domain_id, ses_cutoff),

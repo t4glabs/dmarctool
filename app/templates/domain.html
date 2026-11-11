@@ -183,7 +183,7 @@
       <div class="pill-label">Mailgun bounce rate</div>
     </div>
   {% elif ses_stats and ses_stats[0].delivered %}
-    {% set bounce_rate = ses_stats[0].bounced / ses_stats[0].delivered %}
+    {% set bounce_rate = ses_stats[0].bounced / (ses_stats[0].delivered + ses_stats[0].all_bounced) %}
     <div class="pill {{ 'bad' if bounce_rate >= 0.05 else 'ok' }}">
       <div class="pill-top">{{ "🔴" if bounce_rate >= 0.05 else "☁️" }}</div>
       <div class="pill-value">{{ "%.2f"|format(100 * bounce_rate) }}%</div>
@@ -1270,7 +1270,7 @@
              verdicts.ses_verdict and the trend chart below -- a bounced message
              was never delivered, so delivered alone is the wrong denominator and
              can exceed 100%. Complaints stay over delivered. #}
-          <td>{{ "%.2f"|format(100 * s.bounced / (s.delivered + s.bounced)) if (s.delivered + s.bounced) else "-" }}%</td>
+          <td title="Real bounces only (addresses that don't work). Temporary refusals such as a full inbox, and addresses SES skipped because they were already suppressed, aren't counted.">{{ "%.2f"|format(100 * s.bounced / (s.delivered + s.all_bounced)) if (s.delivered + s.all_bounced) else "-" }}%</td>
           <td>{{ "%.2f"|format(100 * s.complained / s.delivered) if s.delivered else "-" }}%</td>
           <td>{{ ses_suppression_counts.get(s.configuration_set, {}).get('bounce', 0) }}</td>
           <td>{{ ses_bounce_type_counts.get(s.configuration_set, {}).get('Permanent', 0) }}</td>
@@ -1341,7 +1341,7 @@
             {% endif %}
             {% if c.clicked != c.unique_clickers %}<br><span class="muted" style="font-size:0.8em">{{ c.clicked }} total clicks</span>{% endif %}
           </td>
-          <td class="nowrap">{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}{% if c.bounce_breakdown %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Bounce reasons">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong style="display:block; margin-bottom:0.3rem;">Bounce reasons</strong>{% for cat, n in c.bounce_breakdown %}<div style="display:flex; justify-content:space-between; gap:1.5rem;"><span>{{ cat }}</span><span>{{ n }}</span></div>{% endfor %}</div></span>{% endif %}</td>
+          <td class="nowrap" title="Real bounces only. Full inboxes and addresses SES skipped as already suppressed are shown underneath, not counted.">{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.1f"|format(100 * c.bounce_rate) }}%){% endif %}{% if c.not_real_bounces %}<br><span class="muted" style="font-size:0.8em">+ {{ c.not_real_bounces }} full inbox / skipped</span>{% endif %}{% if c.bounce_breakdown %}{% set fix_note_ns.id = fix_note_ns.id + 1 %}<span class="info-wrap"><button type="button" class="info-btn" popovertarget="fix-{{ fix_note_ns.id }}" aria-label="Bounce reasons">i</button><div class="fix-popover fix" id="fix-{{ fix_note_ns.id }}" popover><strong style="display:block; margin-bottom:0.3rem;">Bounce reasons</strong>{% for cat, n in c.bounce_breakdown %}<div style="display:flex; justify-content:space-between; gap:1.5rem;"><span>{{ cat }}</span><span>{{ n }}</span></div>{% endfor %}</div></span>{% endif %}</td>
           <td>{{ c.rejected }}</td>
           <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.1f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
           <td>

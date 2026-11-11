@@ -29,6 +29,7 @@ import boto3
 import botocore.exceptions
 
 from app.analysis import ensure_default_settings, upsert_system_action
+from app.bounce_reasons import bounce_kind
 from app.config import get_secret
 from app.db import get_connection, init_db
 
@@ -125,7 +126,8 @@ def parse_event(raw_body: str):
     if event_type == "Bounce":
         bounce = event.get("bounce", {})
         recipients = [
-            {"email": r["emailAddress"], "reason": r.get("diagnosticCode"), "bounce_type": bounce.get("bounceType")}
+            {"email": r["emailAddress"], "reason": r.get("diagnosticCode"), "bounce_type": bounce.get("bounceType"),
+             "bounce_subtype": bounce.get("bounceSubType")}
             for r in bounce.get("bouncedRecipients", [])
         ]
         day = _event_day(bounce.get("timestamp")) or mail_day
@@ -280,11 +282,13 @@ def _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id,
     for r in recipients:
         conn.execute(
             """INSERT INTO ses_campaign_recipients
-               (domain_id, configuration_set, campaign_id, email, bounced, bounce_reason)
-               VALUES (?,?,?,?,1,?)
+               (domain_id, configuration_set, campaign_id, email, bounced, bounce_reason, bounce_kind)
+               VALUES (?,?,?,?,1,?,?)
                ON CONFLICT(configuration_set, campaign_id, email) DO UPDATE SET
-                 bounced=1, bounce_reason=excluded.bounce_reason, last_seen_at=datetime('now')""",
-            (domain_id, config_set, campaign_id, r["email"], r.get("reason")),
+                 bounced=1, bounce_reason=excluded.bounce_reason, bounce_kind=excluded.bounce_kind,
+                 last_seen_at=datetime('now')""",
+            (domain_id, config_set, campaign_id, r["email"], r.get("reason"),
+             bounce_kind(r.get("reason"), r.get("bounce_type"), r.get("bounce_subtype"))),
         )
 
 
@@ -366,10 +370,15 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
                 event_day = day or today
                 campaign_id = meta["campaign_id"]
 
+                hard = (sum(1 for r in recipients
+                            if bounce_kind(r.get("reason"), r.get("bounce_type"), r.get("bounce_subtype")) == "hard")
+                        if kind == "bounce" else 0)
                 if kind in EVENT_TO_COUNTER:
                     count_key = (domain_id, config_set, event_day)
-                    counts.setdefault(count_key, {"delivered": 0, "bounced": 0, "complained": 0, "rejected": 0})
+                    counts.setdefault(count_key, {"delivered": 0, "bounced": 0, "complained": 0, "rejected": 0,
+                                                  "hard_bounced": 0})
                     counts[count_key][EVENT_TO_COUNTER[kind]] += len(recipients)
+                    counts[count_key]["hard_bounced"] += hard
 
                 if campaign_id:
                     touched_campaigns.add((domain_id, config_set, campaign_id))
@@ -382,6 +391,11 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
                             _log_campaign_opens(conn, domain_id, config_set, campaign_id, recipients)
                     elif kind == "bounce":
                         _upsert_campaign_recipient_bounces(conn, domain_id, config_set, campaign_id, recipients)
+                        conn.execute(
+                            """UPDATE ses_campaigns SET hard_bounced = COALESCE(hard_bounced, 0) + ?
+                               WHERE configuration_set=? AND campaign_id=?""",
+                            (hard, config_set, campaign_id),
+                        )
 
                 if kind in ("bounce", "complaint"):
                     supp_key = (domain_id, config_set)
@@ -399,7 +413,10 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
                                  last_seen_at=datetime('now')""",
                             (domain_id, config_set, r["email"], kind, r.get("bounce_type"), r.get("reason")),
                         )
-                        if not existing:
+                        # Only what SES really blocks from now on: complaints and real
+                        # hard bounces -- a full inbox isn't one to prune.
+                        if not existing and (kind == "complaint" or bounce_kind(
+                                r.get("reason"), r.get("bounce_type"), r.get("bounce_subtype")) == "hard"):
                             new_suppressions.setdefault(supp_key, {"bounce": 0, "complaint": 0})
                             new_suppressions[supp_key][kind] += 1
 
@@ -433,12 +450,15 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
 
     for (domain_id, config_set, day), c in counts.items():
         conn.execute(
-            """INSERT INTO ses_event_counts (domain_id, configuration_set, day, delivered, bounced, complained, rejected)
-               VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO ses_event_counts (domain_id, configuration_set, day, delivered, bounced, complained, rejected,
+                                             hard_bounced)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(configuration_set, day) DO UPDATE SET
                  delivered=delivered+excluded.delivered, bounced=bounced+excluded.bounced,
-                 complained=complained+excluded.complained, rejected=rejected+excluded.rejected""",
-            (domain_id, config_set, day, c["delivered"], c["bounced"], c["complained"], c["rejected"]),
+                 complained=complained+excluded.complained, rejected=rejected+excluded.rejected,
+                 hard_bounced=COALESCE(hard_bounced, 0)+excluded.hard_bounced""",
+            (domain_id, config_set, day, c["delivered"], c["bounced"], c["complained"], c["rejected"],
+             c["hard_bounced"]),
         )
         if verbose:
             domain_name = next(n for cs, (did, n) in domain_map.items() if did == domain_id and cs == config_set)
@@ -464,16 +484,17 @@ def run_ses_event_ingest(conn, verbose: bool = True, max_seconds: float = None) 
     for domain_id, config_set in touched:
         domain_name = domain_map.get(config_set, (None, None))[1]
         row = conn.execute(
-            """SELECT SUM(delivered) as delivered, SUM(bounced) as bounced, SUM(complained) as complained
+            """SELECT SUM(delivered) as delivered, SUM(bounced) as all_bounced,
+                      SUM(COALESCE(hard_bounced, bounced)) as bounced, SUM(complained) as complained
                FROM ses_event_counts WHERE configuration_set=? AND day >= ?""",
             (config_set, cutoff),
         ).fetchone()
         delivered = row["delivered"] or 0
-        bounced = row["bounced"] or 0
-        # Bounce rate is over what was ATTEMPTED (delivered+bounced), matching
-        # verdicts.ses_verdict -- delivered alone is the wrong denominator
-        # since a bounced message was never delivered, and it can exceed 100%.
-        attempted = delivered + bounced
+        bounced = row["bounced"] or 0  # real hard bounces; temporary ones and skips aren't list quality
+        # Bounce rate is over what was ATTEMPTED (delivered + every bounce
+        # event), matching verdicts.ses_verdict -- delivered alone is the wrong
+        # denominator since a bounced message was never delivered.
+        attempted = delivered + (row["all_bounced"] or 0)
         bounce_rate = bounced / attempted if attempted else 0.0
         complaint_rate = (row["complained"] or 0) / delivered if delivered else 0.0
 

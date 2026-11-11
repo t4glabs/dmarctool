@@ -159,7 +159,7 @@ def _complaints_pillar(c):
         fix = ("Complaints usually mean people don't remember signing up, or the content drifted from what they "
                "signed up for. Two things that reliably help: make the unsubscribe link obvious in the body "
                "(people who can't find it hit \"spam\" instead), and remind subscribers who you are near the top "
-               "-- e.g. \"You're getting this because you subscribed to the PATTIC Forum Digest.\"")
+               "-- e.g. \"You're getting this because you signed up for our updates on our website.\"")
     return {
         "key": "complaints", "label": "Spam complaints", "weight": weight,
         "earned": weight * fraction, "status": status,
@@ -319,8 +319,8 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
         if open_status != "ok":
             parts.append(
                 "The subject line is probably the bigger lever here, more than the content itself -- put the "
-                "specific, concrete thing right at the front so it survives getting cut off on mobile. \"New FCRA "
-                "portal: what changed\" beats \"PATTIC Forum Digest, August 2026\"."
+                "specific, concrete thing right at the front so it survives getting cut off on mobile. \"Three "
+                "openings closing Friday\" beats \"Our Newsletter, August 2026\"."
             )
         parts.append(
             "A chunk of your list never opens anything -- mailing them again and again quietly drags down how "

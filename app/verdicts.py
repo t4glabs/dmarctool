@@ -249,7 +249,10 @@ def ses_verdict(ses_stats, bounce_warn, complaint_warn):
         # never delivered), so "attempted" -- the correct bounce-rate denominator --
         # is their sum, not delivered alone. Also means a config set with zero
         # delivered but nonzero bounced (everything bounced) must not be skipped.
-        attempted = s["delivered"] + s["bounced"]
+        # `bounced` = real hard bounces; `all_bounced` (every SES Bounce event,
+        # full inboxes included) goes in the denominator as attempted mail.
+        all_bounced = s["all_bounced"] if "all_bounced" in s.keys() else s["bounced"]
+        attempted = s["delivered"] + all_bounced
         if not attempted:
             continue
         bounce_rate = s["bounced"] / attempted

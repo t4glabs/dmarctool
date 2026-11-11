@@ -54,7 +54,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     })
     _ensure_columns(conn, "ses_event_counts", {
         "rejected": "INTEGER NOT NULL DEFAULT 0",
+        "hard_bounced": "INTEGER",  # of `bounced`: real hard bounces (bounce_reasons.bounce_kind); NULL = unknown
     })
+    _ensure_columns(conn, "ses_campaigns", {"hard_bounced": "INTEGER"})
+    _ensure_columns(conn, "ses_campaign_recipients", {"bounce_kind": "TEXT"})  # hard | soft | skipped
     _ensure_columns(conn, "domain_report_settings", {
         "cc_email": "TEXT DEFAULT 'jinso@aikyamfellows.org'",
         # Set after the first real send that included the new PDF attachment
