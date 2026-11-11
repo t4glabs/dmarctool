@@ -49,6 +49,14 @@
   <ol style="margin:0; padding-left:1.2rem; font-size:0.95rem; line-height:1.6;">
     {% for step in guide.steps %}<li style="margin-bottom:0.3rem;">{{ step }}</li>{% endfor %}
   </ol>
+  {% if guide.facts %}
+  <details style="margin-top:0.6rem;">
+    <summary style="font-size:0.9rem; cursor:pointer;">How we know it's your mail</summary>
+    <ul style="margin:0.3rem 0 0 0; padding-left:1.2rem; font-size:0.9rem; line-height:1.55; color:var(--muted);">
+      {% for f in guide.facts %}<li>{{ f }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
   {% if guide.checklist %}
   <div style="margin-top:0.7rem; background:var(--bg-subtle, #f6f8fa); border-radius:6px; padding:0.6rem 0.8rem;">
     <div style="font-size:0.88rem; font-weight:600; margin-bottom:0.3rem;">Do you (or a vendor) run any of these that would email as your domain?</div>
@@ -78,7 +86,7 @@
       <td><a href="/domain/{{ d.domain_name }}">{{ d.domain_name }}</a></td>
       <td>
         {% if d.kind %}
-          {% set badge = {'aligned':'ok','forwarded_ok':'ok','forwarded':'muted','third_party':'warn','unverified':'bad','unknown':'muted'}[d.kind] %}
+          {% set badge = {'aligned':'ok','forwarded_ok':'ok','forwarded':'muted','altered_own':'muted','third_party':'warn','unverified':'bad','unknown':'muted'}[d.kind] %}
           <span class="badge {{ badge }}" title="{{ d.help }}">{{ d.label }}</span>
         {% else %}<span class="muted">--</span>{% endif %}
       </td>

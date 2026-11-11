@@ -470,6 +470,8 @@ _SECURITY_GATEWAY_PTR_PATTERNS = (
     ("ppe-hosted.com", "Proofpoint"),
     ("iphmx.com", "Cisco Secure Email (IronPort)"),
     ("barracudanetworks.com", "Barracuda Email Security Gateway"),
+    ("perception-point.io", "Perception Point"),  # seen live 2026-11-11: nat.perception-point.io (54.227.64.76)
+    ("inkyphishfence.com", "INKY"),  # seen live 2026-11-11: ipw-outbound.inkyphishfence.com (6 AWS IPs)
 )
 
 
@@ -635,6 +637,53 @@ def _classify_whois_org(org: str) -> str:
     return "unknown"
 
 
+def _altered_own_verdict(domain_name: str, ev: dict) -> dict:
+    """guess_sender_identity()'s answer for altered_own_evidence() -- every
+    sentence is one of the evidence facts, so nothing here is a guess the
+    evidence doesn't back. Hedged ("Probably") when it isn't `certain`."""
+    selector = ev["keys"][0][1]
+    bounce = f" and your own bounce address ({', '.join(ev['bounce_domains'])})" if ev["bounce_domains"] else ""
+    facts = [f"It carries your own signature (key {selector[:10]}..., the same key {ev['key_passes']:,} of your "
+             f"normal messages pass with){bounce}, but the signature arrived broken."]
+    if ev["recipients"]:
+        names = ", ".join(d for d, _ in ev["recipients"][:3])
+        more = f" and {len(ev['recipients']) - 3} more" if len(ev["recipients"]) > 3 else ""
+        facts.append(f"The receiving server's reports say it was going to {names}{more}.")
+    if ev["own_sends"]:
+        people = len(ev["own_sends"])
+        sends = sum(o["sends"] for o in ev["own_sends"])
+        facts.append(f"Your own sending log has {sends} email{'s' if sends != 1 else ''} to "
+                     f"{f'{people} people there' if people > 1 else ev['own_sends'][0]['email']}.")
+    if ev["gateway"]:
+        facts.append(f"Its reverse-DNS name ({ev['ptr']}) is {ev['gateway']}, an email-security service that "
+                     f"checks the recipient's incoming mail, changes it, and passes it on from its own server.")
+    hit = ev["blocked"] + ev["quarantined"]
+    if hit:
+        blocked = ev["blocked"] >= ev["quarantined"]
+        facts.append(f"Your DMARC policy then made the receiver {'block' if blocked else 'spam-folder'} "
+                     f"{hit} of {ev['broken']}, so {'those' if hit > 1 else 'it'} most likely "
+                     + ("never reached the person it was for." if blocked else "landed in spam."))
+    if ev["certain"]:
+        action = ("Nothing to change in your own settings, and not a spoofer. "
+                  + ("If that reader matters, tell them their email security is blocking your mail; "
+                     "the fix is on their side." if hit else "Nothing was lost here."))
+    else:
+        action = ("Nothing to change in your own settings either way: if it is your mail, the fix is on the "
+                  "recipient's side, and if it is an altered copy, DMARC already stops it.")
+    who = f"{ev['gateway']}" if ev["gateway"] else "the recipient's mail system"
+    head = (f"Your own mail, changed on the way by {who}" if ev["certain"]
+            else "Probably your own mail, changed on the way")
+    return {
+        "verdict": "legitimate",
+        "icon": "✅",
+        "headline": head,
+        "summary": " ".join(facts),
+        "action": action,
+        "facts": facts,
+        "altered_own": True,
+    }
+
+
 def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str,
                            ptr: str = None, skip_lookup: bool = False) -> dict:
     """Best-effort, plain-language guess at what an unrecognized sending IP
@@ -729,6 +778,18 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
             "action": "Consider marking this sender suspicious here as well, and keep an eye on where else this IP shows up.",
         }
 
+    # Failing copies that carry a BROKEN signature made with our real key
+    # (and our own bounce address): the mail was ours and something changed it
+    # after we sent it. The IP only says who handed it over last. Checked
+    # ahead of the self-signed branch below because it can also say who the
+    # copies were for and whether they arrived. See
+    # source_classification.altered_own_evidence for the facts and why
+    # `certain` needs our own send log or a known security service behind it.
+    from app.source_classification import altered_own_evidence
+    altered = altered_own_evidence(conn, domain_id, domain_name, source_ip, ptr=ptr)
+    if altered:
+        return _altered_own_verdict(domain_name, altered)
+
     # This exact source has a cryptographically valid signature for THIS
     # domain on at least some of its messages -- the signature of mail that
     # genuinely started out as yours and got altered enough in transit (by a
@@ -746,8 +807,7 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
                             f"gateway -- some of your recipients route incoming mail through it for scanning "
                             f"before final delivery. It carries a valid signature for {domain_name} on some of "
                             f"its messages, confirming this really is your own mail, just reprocessed on the way "
-                            f"in. DMARC already passed at the real point of delivery; what you're seeing here is "
-                            f"a downstream processing artifact, not an attack."),
+                            f"in -- not an attack."),
                 "action": "No action needed. Never add this to your SPF record -- it isn't your sending infrastructure.",
             }
         return {
@@ -1197,6 +1257,11 @@ def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, setting
         if is_new and s["classification"] == "unclassified" and total >= 3:
             ptr = _reverse_dns(s["source_ip"])
             guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
+            # Our own mail that a recipient's filter changed: nothing to
+            # investigate. The overview's "blocked at the recipient's end" line
+            # and the source page carry it instead.
+            if guess.get("altered_own"):
+                continue
             bullets = [
                 f"First seen {day_to_date(first_seen_day)}, {total} msgs, {pass_rate:.0%} pass",
                 _recency_note(now_day, s["last_seen"]),
@@ -1215,6 +1280,8 @@ def flag_new_and_failing_senders(conn, domain_id: int, domain_name: str, setting
             ptr = _reverse_dns(s["source_ip"]) if s["classification"] == "unclassified" else None
             label = classification_label(s["classification"])
             guess = guess_sender_identity(conn, domain_id, domain_name, s["source_ip"], ptr=ptr)
+            if guess.get("altered_own"):
+                continue
             bullets = [
                 (f"{total} msgs between {day_to_date(first_seen_day)} and {day_to_date(epoch_day(s['last_seen']))}, "
                  f"{pass_rate:.0%} pass ({s['fail_msgs']} failing)"),

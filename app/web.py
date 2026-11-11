@@ -87,7 +87,7 @@ from app.ses_account import run_ses_account_checks
 from app.ses_events import run_ses_event_ingest, _suppression_watermark as _ses_suppression_watermark
 from app.safe_browsing import run_safe_browsing_checks
 from app.source_classification import (
-    classify_sources, caught_impersonation, enrich_impersonation_whois, low_volume_failing_rollup,
+    blocked_at_recipient, classify_sources, caught_impersonation, enrich_impersonation_whois, low_volume_failing_rollup,
 )
 from app.source_view import (
     portfolio_senders_needing_attention, shared_cause_verdict, source_action_guide, source_overview,
@@ -213,6 +213,7 @@ def run_all_checks(conn, trigger: str = "manual") -> bool:
             run_chronic_bounce_checks,  # after mailgun/ses checks above, so it sees this cycle's fresh suppressions
             run_safe_browsing_checks, run_mta_sts_checks, run_report_auth_checks,
             run_lookalike_checks, run_domain_expiry_checks, enrich_impersonation_whois,
+            warm_recipient_blocks,  # last: reads every report this sweep ingested
         ):
             try:
                 step(conn, verbose=False)
@@ -357,6 +358,25 @@ def build_domain_summary(conn, domain_row, settings):
     }
 
 
+# Our own mail blocked after a recipient's security filter changed it
+# (source_classification.blocked_at_recipient). ~4 s across the portfolio and
+# only changes when new reports arrive, so it's cached against the newest
+# report id and warmed at the end of every sweep instead of on page load.
+_recipient_blocks_cache = {"key": None, "rows": []}
+
+
+def recipient_blocks(conn) -> list:
+    key = conn.execute("SELECT MAX(id) FROM reports").fetchone()[0]
+    if _recipient_blocks_cache["key"] != key:
+        _recipient_blocks_cache["rows"] = blocked_at_recipient(conn)
+        _recipient_blocks_cache["key"] = key
+    return _recipient_blocks_cache["rows"]
+
+
+def warm_recipient_blocks(conn, verbose: bool = False) -> None:
+    recipient_blocks(conn)
+
+
 def build_portfolio_overview(conn, domains: list) -> dict:
     """Cross-domain security signals that don't show up on any single
     domain's own card -- meant to answer "what needs attention across
@@ -441,7 +461,21 @@ def build_portfolio_overview(conn, domains: list) -> dict:
         "mx_bounces": mx_bounces,
         "mx_backup": mx_backup,
         "shared_sending": shared_sending,
+        "recipient_blocks": _group_recipient_blocks(recipient_blocks(conn)),
     }
+
+
+def _group_recipient_blocks(rows: list) -> list:
+    """One badge per (domain, filter) for the overview -- INKY alone runs
+    six IPs for the same three recipients, which would otherwise be six
+    near-identical badges."""
+    groups = {}
+    for r in rows:
+        g = groups.setdefault((r["domain"], r["gateway"] or ""), {
+            "domain": r["domain"], "gateway": r["gateway"], "ip": r["ip"], "recipients": [], "hit": 0})
+        g["hit"] += r["hit"]
+        g["recipients"] += [x for x in r["recipients"] if x not in g["recipients"]]
+    return sorted(groups.values(), key=lambda g: (g["domain"], -g["hit"]))
 
 
 # Categories too noisy / internal to belong in the human-readable activity feed.

@@ -77,6 +77,7 @@ def parse_feedback_xml(xml_bytes: bytes) -> dict:
             "spf_result": _text(policy_evaluated, "spf"),
             "header_from": _text(identifiers, "header_from"),
             "envelope_from": _text(identifiers, "envelope_from"),
+            "envelope_to": _text(identifiers, "envelope_to"),
             "auth_results": [],
         }
 
@@ -167,10 +168,12 @@ def store_report(conn: sqlite3.Connection, report: dict, source_file: str, stats
     for rec in report["records"]:
         rcur = conn.execute(
             """INSERT INTO report_records
-               (report_id, source_ip, count, disposition, dkim_result, spf_result, header_from, envelope_from)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               (report_id, source_ip, count, disposition, dkim_result, spf_result, header_from, envelope_from,
+                envelope_to)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (report_row_id, rec.get("source_ip"), rec.get("count"), rec.get("disposition"),
-             rec.get("dkim_result"), rec.get("spf_result"), rec.get("header_from"), rec.get("envelope_from")),
+             rec.get("dkim_result"), rec.get("spf_result"), rec.get("header_from"), rec.get("envelope_from"),
+             (rec.get("envelope_to") or "").strip().lower() or None),
         )
         record_id = rcur.lastrowid
         for auth in rec["auth_results"]:

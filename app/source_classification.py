@@ -12,7 +12,7 @@ The data is `record_auth_results`: alongside the *aligned* SPF/DKIM verdicts in
 including **which domain** each signature was valid for. That last part is what
 distinguishes the cases.
 
-Four kinds, from that evidence:
+Five kinds, from that evidence:
 
   aligned      -- passing DMARC. Nothing to look at.
   forwarded    -- some of this source's mail carries a valid signature for YOUR
@@ -20,6 +20,10 @@ Four kinds, from that evidence:
                   relay or mailing list: the mail started as yours, and a hop
                   altered it enough to break the signature on the way. Benign,
                   and not something you can fix from your end.
+  altered_own  -- failing, no valid signature of ours, but a BROKEN one made
+                  with our real key (a selector that passes on our normal
+                  mail): signed by us, changed afterwards, typically by a
+                  recipient's email-security filter. See altered_own_evidence.
   third_party  -- consistently carries a valid signature for a DIFFERENT
                   domain. A real, fixable configuration problem: a shared ESP
                   account verified under one domain but sending with another
@@ -70,6 +74,7 @@ KIND_LABELS = {
     "aligned": "Passing",
     "forwarded_ok": "Forwarded by a recipient",
     "forwarded": "Forwarded mail",
+    "altered_own": "Your mail, changed on the way",
     "third_party": "Third-party sender",
     "unverified": "Unverified",
     "unknown": "Not enough data",
@@ -89,6 +94,13 @@ KIND_HELP = {
         "on the way -- a mailing list, an auto-forward rule, a spam filter that rewrites mail -- "
         "changed it enough to break the signature. It is not someone pretending to be you, and there "
         "is nothing you can fix at your end. Worth knowing so it doesn't get mistaken for an attack."
+    ),
+    "altered_own": (
+        "This mail carries your own signature, made with the same key your normal mail passes with, "
+        "but it arrived broken. That happens when something on the recipient's side (an email-security "
+        "filter, a forwarder, a mailing list) changes your message and then hands it on from its own "
+        "server. It is your mail, not someone pretending to be you, and there is nothing to fix in your "
+        "own settings. Open the source page to see who it was going to and whether they got it."
     ),
     "third_party": (
         "This source consistently authenticates as a different domain than the one in the From "
@@ -195,6 +207,30 @@ def classify_sources(conn, domain_id: int, domain_name: str,
         ).fetchall()
     }
 
+    # Failing messages that still carry OUR signature, made with a key that
+    # passes on our normal mail, but broken -- the message was signed by us and
+    # changed afterwards (aikyamjobs.org, 2026-11-11: 54.227.64.76 =
+    # nat.perception-point.io, a recipient's security filter handing our SES
+    # mail back to their Microsoft 365 with the signature broken).
+    altered_msgs = {
+        r["source_ip"]: r["n"] for r in conn.execute(
+            f"""WITH proven AS (
+                   SELECT DISTINCT lower(ar.domain) AS d, lower(ar.selector) AS s
+                   FROM record_auth_results ar JOIN report_records rr ON rr.id = ar.record_id
+                   JOIN reports r ON r.id = rr.report_id
+                   WHERE r.domain_id = ? AND ar.mechanism = 'dkim' AND ar.result = 'pass' AND ar.selector IS NOT NULL)
+                SELECT rr.source_ip, SUM(rr.count) AS n
+                FROM report_records rr JOIN reports r ON r.id = rr.report_id
+                WHERE {clause} AND rr.dkim_result != 'pass' AND COALESCE(rr.spf_result, '') != 'pass'
+                  AND EXISTS (SELECT 1 FROM record_auth_results ar JOIN proven p
+                                ON p.d = lower(ar.domain) AND p.s = lower(ar.selector)
+                              WHERE ar.record_id = rr.id AND ar.mechanism = 'dkim' AND ar.result = 'fail'
+                                AND (lower(ar.domain) = lower(?) OR lower(ar.domain) LIKE '%.' || lower(?)))
+                GROUP BY rr.source_ip""",
+            [domain_id] + params + [domain_name, domain_name],
+        ).fetchall()
+    }
+
     out = {}
     for row in totals:
         ip, total, passed = row["source_ip"], row["total"] or 0, row["passed"] or 0
@@ -218,6 +254,11 @@ def classify_sources(conn, domain_id: int, domain_name: str,
             kind = "unknown"
         elif rate is not None and rate >= HEALTHY_PASS_RATE:
             kind = "aligned"
+        elif altered_msgs.get(ip, 0) >= 0.8 * (total - passed) > 0:
+            # Ahead of "forwarded": a security filter that lets 2 of 142
+            # through intact (35.174.145.124, Avanan) is still the story of
+            # the other 140, and this kind can say who they were for.
+            kind = "altered_own"
         elif own:
             # Carries our own valid signature at least sometimes -> the mail is
             # genuinely ours and something downstream is breaking it.
@@ -486,3 +527,130 @@ def classification_summary(classifications: dict) -> dict:
         "benign_failing": counts.get("forwarded", 0),
         "total": len(classifications),
     }
+
+
+def altered_own_evidence(conn, domain_id: int, domain_name: str, source_ip: str, ptr: str = None):
+    """The proof behind an "altered_own" source, or None if its failing mail
+    doesn't mostly carry our own (proven, but broken) signature.
+
+    Answers the operator's real question -- "is this mine?" -- from what the
+    mail carried, not from whose network the IP is on (the IP only says who
+    handed it over last). Facts gathered, each one checkable:
+      - the signing key (DKIM selector) it carried, and that the same key
+        passes on our normal mail from other servers;
+      - the bounce domain (envelope from), and that it passes SPF elsewhere;
+      - who it was going to (envelope_to, when the reporter includes it), and
+        whether our own SES send log has mail to that domain;
+      - the reverse-DNS name, when it's a known email-security service;
+      - what the receiver did with it (blocked or let through).
+    `certain` is only set when the key is proven AND either our own send log
+    or a known security service backs it up -- otherwise a copied signature
+    header could look the same, and the caller must stay hedged."""
+    from app.analysis import _guess_security_gateway
+
+    own_like = "(lower({c}) = lower(:dom) OR lower({c}) LIKE '%.' || lower(:dom))"
+    args = {"did": domain_id, "dom": domain_name, "ip": source_ip}
+    proven_keys = {
+        (r["d"], r["s"]): r["n"] for r in conn.execute(
+            f"""SELECT lower(ar.domain) d, lower(ar.selector) s, SUM(rr.count) n
+                FROM record_auth_results ar JOIN report_records rr ON rr.id = ar.record_id
+                JOIN reports r ON r.id = rr.report_id
+                WHERE r.domain_id = :did AND rr.source_ip != :ip AND ar.mechanism = 'dkim'
+                  AND ar.result = 'pass' AND ar.selector IS NOT NULL AND {own_like.format(c='ar.domain')}
+                GROUP BY 1, 2""", args)
+    }
+    proven_bounce = {
+        r["d"] for r in conn.execute(
+            f"""SELECT DISTINCT lower(ar.domain) d
+                FROM record_auth_results ar JOIN report_records rr ON rr.id = ar.record_id
+                JOIN reports r ON r.id = rr.report_id
+                WHERE r.domain_id = :did AND rr.source_ip != :ip AND ar.mechanism = 'spf'
+                  AND ar.result = 'pass' AND {own_like.format(c='ar.domain')}""", args)
+    }
+    records = conn.execute(
+        """SELECT rr.id, rr.count, rr.disposition, rr.envelope_from, rr.envelope_to, r.date_begin, r.date_end
+           FROM report_records rr JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = :did AND rr.source_ip = :ip
+             AND rr.dkim_result != 'pass' AND COALESCE(rr.spf_result, '') != 'pass'""", args).fetchall()
+    if not records:
+        return None
+
+    failing = sum(r["count"] for r in records)
+    broken, keys, bounce, recipients, blocked, quarantined = 0, set(), set(), {}, 0, 0
+    first = last = None
+    for r in records:
+        sigs = conn.execute(
+            "SELECT lower(domain) d, lower(selector) s FROM record_auth_results "
+            "WHERE record_id = ? AND mechanism = 'dkim' AND result = 'fail'", (r["id"],)).fetchall()
+        hit = [(s["d"], s["s"]) for s in sigs if (s["d"], s["s"]) in proven_keys]
+        if not hit:
+            continue
+        broken += r["count"]
+        keys.update(hit)
+        if r["envelope_from"] and _is_own(r["envelope_from"], domain_name):
+            bounce.add(r["envelope_from"].lower())
+        if r["envelope_to"]:
+            recipients[r["envelope_to"]] = recipients.get(r["envelope_to"], 0) + r["count"]
+        if r["disposition"] == "reject":
+            blocked += r["count"]
+        elif r["disposition"] == "quarantine":
+            quarantined += r["count"]
+        first = min(first or r["date_begin"], r["date_begin"])
+        last = max(last or r["date_end"], r["date_end"])
+    if not broken or broken < 0.8 * failing:
+        return None
+
+    # Our own record of sending there: SES keeps one row per recipient per
+    # newsletter. Only the recipient domains the reporter named are looked up.
+    own_sends = []
+    for rdom in recipients:
+        own_sends += [dict(row) for row in conn.execute(
+            """SELECT email, COUNT(*) AS sends, MIN(first_seen_at) AS first_sent, MAX(first_seen_at) AS last_sent,
+                      SUM(delivered) AS delivered, SUM(opened) AS opened, SUM(clicked) AS clicked,
+                      SUM(bounced) AS bounced
+               FROM ses_campaign_recipients WHERE domain_id = ? AND lower(email) LIKE '%@' || ?
+               GROUP BY email ORDER BY sends DESC""", (domain_id, rdom))]
+
+    if ptr is None:
+        row = conn.execute("SELECT ptr_hostname FROM ptr_checks WHERE source_ip=? AND ptr_hostname IS NOT NULL "
+                           "ORDER BY checked_at DESC LIMIT 1", (source_ip,)).fetchone()
+        ptr = row["ptr_hostname"] if row else None
+    gateway = _guess_security_gateway(ptr)
+
+    return {
+        "failing": failing,
+        "broken": broken,
+        "keys": sorted(keys),
+        "key_passes": sum(proven_keys[k] for k in keys),
+        "bounce_domains": sorted(bounce),
+        "bounce_proven": bool(bounce) and bounce <= proven_bounce,
+        "recipients": sorted(recipients.items(), key=lambda kv: -kv[1]),
+        "own_sends": own_sends,
+        "ptr": ptr,
+        "gateway": gateway,
+        "blocked": blocked,
+        "quarantined": quarantined,
+        "first_seen": first,
+        "last_seen": last,
+        "certain": bool(own_sends or gateway),
+    }
+
+
+def blocked_at_recipient(conn, days: int = 90) -> list:
+    """Every source where our own mail was blocked or spam-foldered after a
+    recipient's mail system changed it (altered_own, `certain` only), across
+    the portfolio -- one row per (domain, source) for the overview panel.
+    Recent window only: an old one-off isn't worth a reminder."""
+    start = int((datetime.datetime.utcnow() - datetime.timedelta(days=days)).timestamp())
+    out = []
+    for d in conn.execute("SELECT id, name FROM domains ORDER BY name").fetchall():
+        for ip, info in classify_sources(conn, d["id"], d["name"], start_epoch=start).items():
+            if info["kind"] != "altered_own":
+                continue
+            ev = altered_own_evidence(conn, d["id"], d["name"], ip)
+            if not ev or not ev["certain"] or not (ev["blocked"] + ev["quarantined"]):
+                continue
+            out.append({"domain": d["name"], "ip": ip, "gateway": ev["gateway"],
+                        "recipients": [r for r, _ in ev["recipients"]],
+                        "hit": ev["blocked"] + ev["quarantined"]})
+    return out

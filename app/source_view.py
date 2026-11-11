@@ -182,6 +182,109 @@ _MINE_CHECKLIST = [
 ]
 
 
+def _altered_own_guide(conn, ip: str, primary: dict, guess: dict, owner: str) -> dict:
+    """The source-page panel for mail that carries our own, broken signature
+    (source_classification.altered_own_evidence). Replaces the "is this on
+    your network?" checklist, which asked the operator something the tool
+    could answer itself: the IP only says who handed the mail over last, the
+    signature says whose mail it was."""
+    import datetime
+    from app.pct_watch import reporter_label
+    from app.source_classification import altered_own_evidence
+
+    did = conn.execute("SELECT id FROM domains WHERE name=?", (primary["domain_name"],)).fetchone()
+    ev = altered_own_evidence(conn, did["id"], primary["domain_name"], ip)
+    facts = guess.get("facts") or [guess.get("summary", "")]
+    if not ev:
+        return {"status": "info", "title": guess.get("headline", ""), "owner": owner, "plain": guess.get("summary", ""),
+                "steps": [guess.get("action", "")], "checklist": None}
+
+    def _day(epoch):
+        return datetime.datetime.utcfromtimestamp(epoch).strftime("%-d %b") if epoch else "?"
+
+    hit = ev["blocked"] + ev["quarantined"]
+    gw = ev["gateway"] or "their email security"
+    receiver = conn.execute(
+        """SELECT r.org_name, SUM(rr.count) n FROM report_records rr JOIN reports r ON r.id = rr.report_id
+           WHERE r.domain_id = ? AND rr.source_ip = ? GROUP BY r.org_name ORDER BY n DESC LIMIT 1""",
+        (did["id"], ip),
+    ).fetchone()
+    receiver_name = reporter_label(receiver["org_name"]) if receiver else "their mail system"
+
+    if not ev["certain"]:
+        return {"status": "info", "title": guess["headline"], "owner": owner,
+                "plain": ("It carries your own signature, but broken. That is what your mail looks like after "
+                          "something on the recipient's side changes it and passes it on. The reports don't say "
+                          "who it was going to, so this can't be matched to your own sending log."),
+                "steps": [guess["action"],
+                          "Set its row to \"Ignore\" in the Senders tab once you've read this, so it stops coming up."],
+                "checklist": None, "facts": facts}
+
+    people = ev["own_sends"]
+    domains = [d for d, _ in ev["recipients"][:3]]
+    domain_list = ", ".join(domains[:-1]) + " and " + domains[-1] if len(domains) > 1 else domains[0]
+    who = people[0]["email"] if len(people) == 1 else f"people at {domain_list}"
+    # Opens/clicks within a couple of minutes of every send are the filter
+    # scanning links, not a person -- only claimed when every click fits.
+    scanned = None
+    if people:
+        rows = conn.execute(
+            f"""SELECT COUNT(*) n,
+                       SUM(CASE WHEN (julianday(last_seen_at) - julianday(first_seen_at)) * 86400 <= 120 THEN 1 ELSE 0 END) fast
+                FROM ses_campaign_recipients WHERE domain_id = ? AND clicked = 1
+                  AND email IN ({",".join("?" * len(people))})""",
+            [did["id"]] + [p["email"] for p in people],
+        ).fetchone()
+        if rows["n"] and rows["n"] == rows["fast"]:
+            scanned = rows["n"]
+
+    if hit:
+        verb = "blocked" if ev["blocked"] >= ev["quarantined"] else "sent to spam"
+        if ev["gateway"]:
+            title = f"Your own mail, {verb} after {gw} changed it at the other end"
+            middle = (f"{gw}, an email-security service {'their organisation uses' if len(ev['recipients']) == 1 else 'those organisations use'}, "
+                      f"changed it and passed it on from its own server ({ip})")
+            note = (f"If they matter to you, send them a short note: \"Our emails to you are being blocked after "
+                    f"{gw} changes them. Could your IT team check how {gw} passes mail back to {receiver_name}? "
+                    f"It affects any sender with a strict DMARC policy, not just us.\"")
+        else:
+            title = f"Your own mail, {verb} after it was changed at the other end"
+            middle = f"something on their side (a forwarding rule or a filter) changed it and passed it on from {ip}"
+            note = ("If they matter to you, send them a short note: \"Our emails to you are being blocked after "
+                    "something in your mail setup changes and re-sends them. Could your IT team take a look? It "
+                    "affects any sender with a strict DMARC policy, not just us.\"")
+        plain = (f"This is your {primary['domain_name']} mail. On its way to {who}, {middle}. {receiver_name} then "
+                 f"checked it again, found a server that isn't yours and a broken signature, and applied your "
+                 f"DMARC policy.")
+        span = f"between {_day(ev['first_seen'])} and {_day(ev['last_seen'])}"
+        if len(people) == 1 and hit == ev["broken"]:
+            impact = f"Most likely {people[0]['email']} hasn't been getting it: all {hit} were {verb} {span}."
+        else:
+            count = f"All {hit}" if hit == ev["broken"] else f"{hit} of these {ev['broken']}"
+            landed = "didn't arrive" if verb == "blocked" else "landed in spam"
+            impact = (f"{count} were {verb} {span}, so some of your mail to {who} {landed}. The reports "
+                      f"don't say which person each one was for.")
+        steps = [
+            "Nothing to change in your DNS, and no reason to loosen DMARC: this isn't your server and it isn't "
+            "a spoofer. Loosening DMARC would let real spoofers through too.",
+            impact + " Your sending numbers can't show this: each one counts as delivered because the first "
+            "hand-over worked"
+            + (f", and the opens and clicks within two minutes of every send are {gw} checking the links, "
+               f"not a person." if scanned else "."),
+            note,
+            "Then set its row to \"Ignore\" in the Senders tab so it stops coming up.",
+        ]
+    else:
+        title = guess["headline"]
+        plain = (f"This is your {primary['domain_name']} mail. On its way to {who}, something changed it and "
+                 f"passed it on from {ip}, which broke your signature. The receiver let "
+                 f"it through anyway, so nothing was lost.")
+        steps = ["Nothing to do, and nothing to change in your settings.",
+                 "Set its row to \"Ignore\" in the Senders tab so it stops coming up."]
+    return {"status": "info", "title": title, "owner": owner, "plain": plain,
+            "steps": steps, "checklist": None, "facts": facts}
+
+
 def source_action_guide(conn, overview: dict):
     """The plain-language 'what is this, and what should I do?' panel for the
     top of the source page -- the thing a non-technical operator actually needs
@@ -236,8 +339,10 @@ def source_action_guide(conn, overview: dict):
             return {"status": "ok", "title": f"\"{label}\" -- your own mail, working correctly", "owner": owner,
                     "plain": f"You've labelled this \"{label}\", and it's passing authentication for {dom_phrase}. Nothing to do.",
                     "steps": ["Nothing needed -- this is a healthy sender."], "checklist": None}
-        if "forwarded" in kinds:
-            owner = f"You've labelled this \"{label}\". " + owner  # fall through to the forwarding explanation
+        if kinds & {"forwarded", "altered_own"}:
+            # A label doesn't make it a sender of ours: a recipient's security
+            # filter labelled "Avanan" can't be asked to sign our mail.
+            owner = f"You've labelled this \"{label}\". " + owner  # fall through to the explanations below
         else:
             return {"status": "warn", "title": f"\"{label}\" is failing authentication -- worth fixing", "owner": owner,
                     "plain": (f"You've marked this as your \"{label}\" sender, and it's failing authentication for "
@@ -255,6 +360,11 @@ def source_action_guide(conn, overview: dict):
                 "steps": ["Nothing to do -- this is a healthy sender.",
                           "If you want it to be recognisable at a glance, give it a label with the 🏷️ box below."],
                 "checklist": None}
+
+    # Checked ahead of "forwarded": when the busiest domain's copies carry our
+    # broken signature, the guide can say who it was for and whether it arrived.
+    if primary.get("kind") == "altered_own" or ("altered_own" in kinds and "forwarded" not in kinds):
+        return _altered_own_guide(conn, ip, primary, guess, owner)
 
     if "forwarded" in kinds:
         return {"status": "info", "title": "This looks like mail forwarding -- nothing to fix", "owner": owner,
@@ -304,6 +414,16 @@ def shared_cause_verdict(overview: dict):
     failing = overview["failing_domain_count"]
     borrowed = [i for i in overview["identities"]
                 if i["is_tracked"] and len(i["domains"]) > 1]
+
+    # Every failing domain here is our own mail changed by the recipient's side:
+    # nothing about this machine is "set up wrong" from where we stand.
+    failing_kinds = {d["kind"] for d in overview["domains"]
+                     if d["pass_rate"] is not None and d["pass_rate"] < HEALTHY_PASS_RATE}
+    if (failing_kinds & {"altered_own", "forwarded"}
+            and failing_kinds <= {"altered_own", "forwarded", "forwarded_ok", "unknown"}):
+        lost = f" {overview['acted']} of them were blocked or sent to spam." if overview["acted"] else ""
+        return "muted", (f"This machine passes on mail it received from you{', for ' + str(failing) + ' of your domains' if failing > 1 else ''}, "
+                         f"after changing it. Nothing in your own setup is wrong.{lost}")
 
     if failing > 1 and borrowed:
         i = borrowed[0]

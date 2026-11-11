@@ -71,6 +71,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "mailgun_identity_failures", {
         "subject": "TEXT",
     })
+    _ensure_columns(conn, "report_records", {
+        "envelope_to": "TEXT",
+    })
     _ensure_columns(conn, "mailgun_campaigns", {
         "open_tracking": "INTEGER NOT NULL DEFAULT 1",
         "click_tracking": "INTEGER NOT NULL DEFAULT 1",

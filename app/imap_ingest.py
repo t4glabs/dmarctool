@@ -190,10 +190,75 @@ def run_imap_ingest(conn, verbose: bool = True):
     return stats
 
 
+def backfill_envelope_to(conn, days: int = 120, sender: str = "microsoft.com", verbose: bool = True):
+    """One-off: fill report_records.envelope_to (the recipient's domain) for
+    reports ingested before that column existed. Same read-only rules as the
+    ingest above (EXAMINE + BODY.PEEK). Only reporters that include the field
+    are worth re-reading -- Microsoft does, Google doesn't -- hence the sender
+    filter. Records are matched to stored rows by position within the report
+    and only when the source IPs line up exactly, so a mismatch updates nothing."""
+    from app.ingest import iter_xml_blobs, parse_feedback_xml
+
+    cfg = _config()
+    if not cfg:
+        return 0
+    M = imaplib.IMAP4_SSL(cfg["host"], cfg["port"], timeout=30)
+    M.login(cfg["user"], cfg["password"])
+    updated = 0
+    try:
+        folder = _resolve_folder(M, cfg["folder"])
+        M.select(f'"{folder}"', readonly=True)  # EXAMINE
+        since = (datetime.date.today() - datetime.timedelta(days=days)).strftime("%d-%b-%Y")
+        typ, res = M.uid("search", None, f'(SINCE {since} FROM "{sender}")')
+        uids = res[0].split() if typ == "OK" and res and res[0] else []
+        for i in range(0, len(uids), 50):
+            typ, msgdata = M.uid("fetch", b",".join(uids[i:i + 50]).decode(), "(BODY.PEEK[])")
+            if typ != "OK":
+                continue
+            for item in msgdata:
+                if not (isinstance(item, tuple) and item[1]):
+                    continue
+                for fn, payload in _attachments(item[1]):
+                    for _, xml_bytes in iter_xml_blobs(fn, payload):
+                        try:
+                            report = parse_feedback_xml(xml_bytes)
+                        except Exception:
+                            continue
+                        if not any(r.get("envelope_to") for r in report["records"]):
+                            continue
+                        row = conn.execute("SELECT id FROM reports WHERE org_name IS ? AND report_id=?",
+                                           (report.get("org_name"), report.get("report_id"))).fetchone()
+                        if not row:
+                            continue
+                        stored = conn.execute("SELECT id, source_ip FROM report_records WHERE report_id=? ORDER BY id",
+                                              (row["id"],)).fetchall()
+                        if [s["source_ip"] for s in stored] != [r["source_ip"] for r in report["records"]]:
+                            continue
+                        for s, r in zip(stored, report["records"]):
+                            to = (r.get("envelope_to") or "").strip().lower() or None
+                            if to:
+                                conn.execute("UPDATE report_records SET envelope_to=? WHERE id=? AND envelope_to IS NULL",
+                                             (to, s["id"]))
+                                updated += 1
+            conn.commit()
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+    if verbose:
+        print(f"[imap] envelope_to filled on {updated} record(s) from {len(uids)} message(s)")
+    return updated
+
+
 def main():
+    import sys
     from app.db import get_connection, init_db
     conn = get_connection()
     init_db(conn)
+    if len(sys.argv) > 1 and sys.argv[1] == "backfill-envelope-to":
+        backfill_envelope_to(conn, days=int(sys.argv[2]) if len(sys.argv) > 2 else 120)
+        return
     run_imap_ingest(conn)
 
 

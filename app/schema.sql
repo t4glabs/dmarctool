@@ -45,7 +45,11 @@ CREATE TABLE IF NOT EXISTS report_records (
     dkim_result   TEXT,
     spf_result    TEXT,
     header_from   TEXT,
-    envelope_from TEXT
+    envelope_from TEXT,
+    -- recipient's domain, when the reporter includes it (Microsoft does,
+    -- Google doesn't): who the mail was going TO, which ties a failing
+    -- source back to a send in our own logs
+    envelope_to   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_records_report ON report_records(report_id);
