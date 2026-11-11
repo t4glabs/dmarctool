@@ -969,6 +969,14 @@ def domain_detail(request: Request, name: str, flash: str = None):
     mailgun_newsletter_campaigns = recent_mailgun_campaigns(conn, domain_id, limit=10, settings=settings)
     mailgun_deferrals = deferral_summary(conn, domain_id)
     engagement = subscriber_engagement_summary(conn, domain_id)
+    # How long "N newsletters" is on THIS domain -- three weeks on one that
+    # sends every couple of days, most of a year on a monthly one.
+    gap = sending_cadence(conn, domain_id)["average_gap_days"]
+    if gap:
+        span = engagement["threshold"] * gap
+        engagement["threshold_span"] = (f"about {round(span / 7)} weeks" if span < 60
+                                        else f"about {round(span / 30)} months")
+        engagement["average_gap_days"] = gap
     subscriber_notify_pending_count = pending_subscriber_notify_count(conn, domain_id)
     subscriber_notify_last = last_subscriber_notification(conn, domain_id)
     bounce_categories = [

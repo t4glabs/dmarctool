@@ -644,8 +644,8 @@ SETTINGS_META = {
     },
     "newsletter_inactive_campaigns": {
         "label": "Newsletters received before someone counts as inactive",
-        "help": "A subscriber who has received at least this many newsletters, but never opened a single one of them, gets flagged as inactive -- worth re-engaging or removing from the list.",
-        "example": "9 means someone needs 9 delivered newsletters with zero opens before being flagged.",
+        "help": "A subscriber who has received at least this many newsletters, but never opened or clicked a single one of them, gets flagged as inactive -- worth re-engaging or removing from the list. It's a count of newsletters, not days: on a domain that sends every few days it's reached in weeks, on a monthly one in most of a year.",
+        "example": "9 means someone needs 9 delivered newsletters with zero opens or clicks before being flagged.",
     },
     "volume_spike_recent_days": {
         "label": "\"Recent\" window for volume-spike detection (days)",

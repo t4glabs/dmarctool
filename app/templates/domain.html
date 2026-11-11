@@ -1420,8 +1420,20 @@
         Same idea as the "9+ campaigns received, zero opens" check the team runs by hand against Listmonk -- built
         here from SES's own delivery/open events instead. {{ engagement.total_subscribers }} subscriber(s) tracked
         in total; below are the ones who've received at least {{ engagement.threshold }} newsletters but never
-        opened a single one. Worth re-engaging or removing from the list.
+        opened or clicked a single one. Worth re-engaging or removing from the list.
       </p>
+      <details style="margin:0 0 0.6rem 0;">
+        <summary class="muted" style="font-size:0.85rem; cursor:pointer;">How this list is worked out</summary>
+        <ul style="margin:0.4rem 0 0 0; padding-left:1.2rem; font-size:0.85rem; line-height:1.55;">
+          <li>Someone is listed once {{ engagement.threshold }} newsletters have reached them with no open and no click on any of them. One open or click, ever, keeps them off the list.</li>
+          <li>"Ever" starts on 9 Aug 2026, when this tool started tracking each subscriber. Older newsletters don't count either way.</li>
+          {% if engagement.threshold_span %}<li>{{ engagement.threshold }} newsletters is a different length of time on each domain. Here, at one about every {{ engagement.average_gap_days }} days, it's {{ engagement.threshold_span }}.</li>{% endif %}
+          <li>Only newsletters that arrived count towards the {{ engagement.threshold }}; bounced ones don't.</li>
+          <li>Some opens aren't people. Apple Mail loads every email's images by itself, and some workplace security filters open and click everything. People behind those never appear here, even if nobody reads the mail.</li>
+          <li>Someone who opened once and then ignored every newsletter since isn't listed: one open is enough to stay off.</li>
+          <li>After you mark the list reviewed, someone comes back only if another newsletter reaches them and they still don't open it. On a domain that sends often, most of the list is back within days.</li>
+        </ul>
+      </details>
       {% if engagement.reviewed_at %}
       <p class="muted" style="margin-top:0; font-size:0.85rem;">You last reviewed this on {{ engagement.reviewed_at[:10] }} -- the list below only shows people still crossing the threshold since then. {{ engagement.inactive_all|length }} in total, all-time.</p>
       {% endif %}
@@ -1480,7 +1492,7 @@
       </table>
       </div>
       {% else %}
-      <p class="muted">No one has crossed {{ engagement.threshold }} received newsletters with zero opens yet.</p>
+      <p class="muted">No one has crossed {{ engagement.threshold }} received newsletters with zero opens or clicks yet.</p>
       {% endif %}
     </div>
     {% endif %}

@@ -1868,11 +1868,22 @@ def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
     if threshold is None:
         settings = ensure_default_settings(conn)
         threshold = int(settings["newsletter_inactive_campaigns"])
+    # An open or a click proves the newsletter arrived, even when SES's
+    # delivery event for it never reached us -- e.g. the three 2026-08-09
+    # pattic.org/aikyamjobs.org campaigns sent before per-recipient tracking
+    # was live: 0 deliveries recorded, 5,162 opens. Counting only delivered
+    # rows dropped those opens and listed 181 people who HAD opened as "never
+    # opened". A click counts as engagement too: a reader with images off
+    # clicks without the open pixel ever loading (73 such people were listed).
+    reached = "(delivered=1 OR opened=1 OR clicked=1)"
     per_email = conn.execute(
-        """SELECT email, COUNT(DISTINCT campaign_id) as received, MAX(opened) as ever_opened,
-                  MIN(first_seen_at) as first_received, MAX(last_seen_at) as last_received
-           FROM ses_campaign_recipients WHERE domain_id=? AND delivered=1
-           GROUP BY email""",
+        f"""SELECT email, COUNT(DISTINCT CASE WHEN {reached} THEN campaign_id END) as received,
+                  MAX(opened=1 OR clicked=1) as ever_opened,
+                  MIN(CASE WHEN {reached} THEN first_seen_at END) as first_received,
+                  MAX(CASE WHEN {reached} THEN last_seen_at END) as last_received
+           FROM ses_campaign_recipients WHERE domain_id=?
+           GROUP BY email
+           HAVING received > 0""",
         (domain_id,),
     ).fetchall()
     watermark = subscriber_review_watermark(conn, domain_id)
@@ -1881,7 +1892,7 @@ def subscriber_engagement_summary(conn, domain_id: int, threshold: int = None):
             {
                 "email": r["email"], "received": r["received"],
                 "first_received": r["first_received"], "last_received": r["last_received"],
-                "reason": f"{r['received']} newsletters received, 0 opened",
+                "reason": f"{r['received']} newsletters received, 0 opened or clicked",
             }
             for r in per_email if r["received"] >= threshold and not r["ever_opened"]
         ),
