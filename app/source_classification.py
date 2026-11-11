@@ -12,7 +12,7 @@ The data is `record_auth_results`: alongside the *aligned* SPF/DKIM verdicts in
 including **which domain** each signature was valid for. That last part is what
 distinguishes the cases.
 
-Five kinds, from that evidence:
+Six kinds, from that evidence:
 
   aligned      -- passing DMARC. Nothing to look at.
   forwarded    -- some of this source's mail carries a valid signature for YOUR
@@ -22,8 +22,12 @@ Five kinds, from that evidence:
                   and not something you can fix from your end.
   altered_own  -- failing, no valid signature of ours, but a BROKEN one made
                   with our real key (a selector that passes on our normal
-                  mail): signed by us, changed afterwards, typically by a
-                  recipient's email-security filter. See altered_own_evidence.
+                  mail), and the provider's own signature broken too: signed
+                  by us, changed afterwards, typically by a recipient's
+                  email-security filter. See altered_own_evidence.
+  own_key_failing -- the provider's signature passed but ours failed: the
+                  message arrived unchanged, so our DKIM key/DNS record is
+                  what's broken. Needs fixing. See own_key_failing_evidence.
   third_party  -- consistently carries a valid signature for a DIFFERENT
                   domain. A real, fixable configuration problem: a shared ESP
                   account verified under one domain but sending with another
@@ -75,6 +79,7 @@ KIND_LABELS = {
     "forwarded_ok": "Forwarded by a recipient",
     "forwarded": "Forwarded mail",
     "altered_own": "Your mail, changed on the way",
+    "own_key_failing": "Your signature is failing",
     "third_party": "Third-party sender",
     "unverified": "Unverified",
     "unknown": "Not enough data",
@@ -101,6 +106,12 @@ KIND_HELP = {
         "filter, a forwarder, a mailing list) changes your message and then hands it on from its own "
         "server. It is your mail, not someone pretending to be you, and there is nothing to fix in your "
         "own settings. Open the source page to see who it was going to and whether they got it."
+    ),
+    "own_key_failing": (
+        "This is your own email provider sending your mail, and the provider's own signature on it checks out, so "
+        "nothing changed the messages on the way. Your domain's signature failed anyway, which means the key it "
+        "was signed with doesn't match what's published in your DNS, usually because the DKIM record was deleted or "
+        "changed. Mail like this can be sent to spam. Open the source page for the exact record to check."
     ),
     "third_party": (
         "This source consistently authenticates as a different domain than the one in the From "
@@ -212,6 +223,8 @@ def classify_sources(conn, domain_id: int, domain_name: str,
     # changed afterwards (aikyamjobs.org, 2026-11-11: 54.227.64.76 =
     # nat.perception-point.io, a recipient's security filter handing our SES
     # mail back to their Microsoft 365 with the signature broken).
+    from app.analysis import _ESP_DEFAULT_AUTH_DOMAINS
+    esp = ",".join(f"'{d}'" for d in sorted(_ESP_DEFAULT_AUTH_DOMAINS))  # fixed constants, not user input
     altered_msgs = {
         r["source_ip"]: r["n"] for r in conn.execute(
             f"""WITH proven AS (
@@ -222,12 +235,40 @@ def classify_sources(conn, domain_id: int, domain_name: str,
                 SELECT rr.source_ip, SUM(rr.count) AS n
                 FROM report_records rr JOIN reports r ON r.id = rr.report_id
                 WHERE {clause} AND rr.dkim_result != 'pass' AND COALESCE(rr.spf_result, '') != 'pass'
+                  -- the provider's own signature (mailgun.org, amazonses.com),
+                  -- added at sending alongside ours, broke too: the message
+                  -- changed after sending. If it still passed, the message
+                  -- arrived intact and it's OUR key that's failing -- see
+                  -- own_key_failing (aikyam.school 69.72.42.2). A signature a
+                  -- forwarder adds afterwards (x.onmicrosoft.com) proves nothing.
+                  AND NOT EXISTS (SELECT 1 FROM record_auth_results ok
+                                  WHERE ok.record_id = rr.id AND ok.mechanism = 'dkim' AND ok.result = 'pass'
+                                    AND lower(ok.domain) IN ({esp}))
                   AND EXISTS (SELECT 1 FROM record_auth_results ar JOIN proven p
                                 ON p.d = lower(ar.domain) AND p.s = lower(ar.selector)
                               WHERE ar.record_id = rr.id AND ar.mechanism = 'dkim' AND ar.result = 'fail'
                                 AND (lower(ar.domain) = lower(?) OR lower(ar.domain) LIKE '%.' || lower(?)))
                 GROUP BY rr.source_ip""",
             [domain_id] + params + [domain_name, domain_name],
+        ).fetchall()
+    }
+
+    # Failing messages where the provider's own signature PASSED but ours
+    # FAILED: they reached the receiver unchanged, from our own provider, so
+    # our key is what's broken -- typically its DNS record deleted or changed
+    # (news.aikyam.school, 8-11 Oct 2026: mailo._domainkey gone, 202 failed).
+    key_failing_msgs = {
+        r["source_ip"]: r["n"] for r in conn.execute(
+            f"""SELECT rr.source_ip, SUM(rr.count) AS n
+                FROM report_records rr JOIN reports r ON r.id = rr.report_id
+                WHERE {clause} AND rr.dkim_result != 'pass' AND COALESCE(rr.spf_result, '') != 'pass'
+                  AND EXISTS (SELECT 1 FROM record_auth_results ok WHERE ok.record_id = rr.id
+                              AND ok.mechanism = 'dkim' AND ok.result = 'pass' AND lower(ok.domain) IN ({esp}))
+                  AND EXISTS (SELECT 1 FROM record_auth_results ar WHERE ar.record_id = rr.id
+                              AND ar.mechanism = 'dkim' AND ar.result IN ('fail', 'permerror')
+                              AND (lower(ar.domain) = lower(?) OR lower(ar.domain) LIKE '%.' || lower(?)))
+                GROUP BY rr.source_ip""",
+            params + [domain_name, domain_name],
         ).fetchall()
     }
 
@@ -254,6 +295,9 @@ def classify_sources(conn, domain_id: int, domain_name: str,
             kind = "unknown"
         elif rate is not None and rate >= HEALTHY_PASS_RATE:
             kind = "aligned"
+        elif key_failing_msgs.get(ip, 0) >= 0.5 * (total - passed) > 0:
+            # Ahead of the "changed on the way" kinds: this one needs fixing.
+            kind = "own_key_failing"
         elif altered_msgs.get(ip, 0) >= 0.8 * (total - passed) > 0:
             # Ahead of "forwarded": a security filter that lets 2 of 142
             # through intact (35.174.145.124, Avanan) is still the story of
@@ -568,7 +612,10 @@ def altered_own_evidence(conn, domain_id: int, domain_name: str, source_ip: str,
                   AND ar.result = 'pass' AND {own_like.format(c='ar.domain')}""", args)
     }
     records = conn.execute(
-        """SELECT rr.id, rr.count, rr.disposition, rr.envelope_from, rr.envelope_to, r.date_begin, r.date_end
+        """SELECT rr.id, rr.count, rr.disposition, rr.envelope_from, rr.envelope_to, r.date_begin, r.date_end,
+                  EXISTS (SELECT 1 FROM record_auth_results ok WHERE ok.record_id = rr.id
+                          AND ok.mechanism = 'dkim' AND ok.result = 'pass'
+                          AND lower(ok.domain) IN ('mailgun.org', 'eu.mailgun.org', 'amazonses.com', 'sendgrid.net')) AS intact
            FROM report_records rr JOIN reports r ON r.id = rr.report_id
            WHERE r.domain_id = :did AND rr.source_ip = :ip
              AND rr.dkim_result != 'pass' AND COALESCE(rr.spf_result, '') != 'pass'""", args).fetchall()
@@ -583,7 +630,7 @@ def altered_own_evidence(conn, domain_id: int, domain_name: str, source_ip: str,
             "SELECT lower(domain) d, lower(selector) s FROM record_auth_results "
             "WHERE record_id = ? AND mechanism = 'dkim' AND result = 'fail'", (r["id"],)).fetchall()
         hit = [(s["d"], s["s"]) for s in sigs if (s["d"], s["s"]) in proven_keys]
-        if not hit:
+        if not hit or r["intact"]:  # provider's signature passed: not altered, our key failed (own_key_failing)
             continue
         broken += r["count"]
         keys.update(hit)
@@ -654,3 +701,40 @@ def blocked_at_recipient(conn, days: int = 90) -> list:
                         "recipients": [r for r, _ in ev["recipients"]],
                         "hit": ev["blocked"] + ev["quarantined"]})
     return out
+
+
+def own_key_failing_evidence(conn, domain_id: int, domain_name: str, source_ip: str):
+    """Facts for an own_key_failing source: which of our keys failed on
+    messages whose provider signature passed, how many and when, and what
+    our own DKIM check currently says about that key's DNS record."""
+    from app.analysis import _ESP_DEFAULT_AUTH_DOMAINS
+    esp = ",".join(f"'{d}'" for d in sorted(_ESP_DEFAULT_AUTH_DOMAINS))
+    rows = conn.execute(
+        f"""SELECT lower(ar.domain) d, ar.selector s, SUM(rr.count) n,
+                   MIN(r.date_begin) first, MAX(r.date_end) last,
+                   SUM(CASE WHEN rr.disposition IN ('quarantine', 'reject') THEN rr.count ELSE 0 END) acted,
+                   (SELECT lower(ok.domain) FROM record_auth_results ok WHERE ok.record_id = rr.id
+                      AND ok.mechanism = 'dkim' AND ok.result = 'pass' AND lower(ok.domain) IN ({esp}) LIMIT 1) provider
+            FROM report_records rr JOIN reports r ON r.id = rr.report_id
+            JOIN record_auth_results ar ON ar.record_id = rr.id
+            WHERE r.domain_id = ? AND rr.source_ip = ? AND rr.dkim_result != 'pass'
+              AND ar.mechanism = 'dkim' AND ar.result IN ('fail', 'permerror')
+              AND (lower(ar.domain) = lower(?) OR lower(ar.domain) LIKE '%.' || lower(?))
+              AND EXISTS (SELECT 1 FROM record_auth_results ok WHERE ok.record_id = rr.id
+                          AND ok.mechanism = 'dkim' AND ok.result = 'pass' AND lower(ok.domain) IN ({esp}))
+            GROUP BY 1, 2 ORDER BY n DESC""",
+        (domain_id, source_ip, domain_name, domain_name),
+    ).fetchall()
+    if not rows:
+        return None
+    top = rows[0]
+    check = conn.execute(
+        "SELECT status FROM dkim_checks WHERE signing_domain=? AND selector=? ORDER BY checked_at DESC LIMIT 1",
+        (top["d"], top["s"]),
+    ).fetchone()
+    return {
+        "signing_domain": top["d"], "selector": top["s"], "record": f"{top['s']}._domainkey.{top['d']}",
+        "failed": sum(r["n"] for r in rows), "acted": sum(r["acted"] for r in rows),
+        "first_seen": min(r["first"] for r in rows), "last_seen": max(r["last"] for r in rows),
+        "provider_domain": top["provider"], "dns_status": check["status"] if check else None,
+    }

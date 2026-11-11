@@ -139,6 +139,7 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
     # ascending, so keeping the last outcome per (recipient, message) gives
     # the true final result.
     outcomes = {}
+    fail_kind = {}  # (key, recipient, msg_id) -> hard|soft|skipped, permanent failures only
     # Per (group_key, recipient, message_id): earliest attempt of any kind
     # (for how much of a burst the send was), the receiving server's
     # hostname (Google's MX hosts identify Gmail + Workspace recipients, which
@@ -205,6 +206,13 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
             if event == "delivered" and ts and triple not in delivered_ts:
                 delivered_ts[triple] = ts
             outcomes[triple] = "delivered" if event == "delivered" else "bounced"
+            if event == "failed":
+                # Which kind of permanent failure: only "hard" is a bounce. A
+                # full inbox (bounce-type soft, reason overquota) or a skip of
+                # an already-suppressed address is not -- same split as
+                # mailgun.fetch_failure_breakdown.
+                fail_kind[triple] = ("skipped" if (item.get("reason") or "").startswith("suppress")
+                                     else "soft" if ds.get("bounce-type") == "soft" else "hard")
 
     # Collapse per-message outcomes to per-recipient: someone who got any copy
     # of the send counts as delivered, otherwise a permanent failure is a bounce.
@@ -217,6 +225,10 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
     bounced_by_key = collections.defaultdict(set)
     for (key, recipient), outcome in per_recipient.items():
         (delivered_by_key if outcome == "delivered" else bounced_by_key)[key].add(recipient)
+    failed_kind_by_key = collections.defaultdict(dict)  # key -> {recipient: hard|soft|skipped}
+    for (key, recipient, _msg_id), kind in fail_kind.items():
+        if recipient in bounced_by_key[key]:
+            failed_kind_by_key[key][recipient] = kind
 
     # Open/click events carry no subject -- attribute them via message-id.
     for event, uniq_field, count_field in (("opened", "openers", "open_events"),
@@ -274,6 +286,8 @@ def fetch_campaigns(mailgun_domain, api_key, window_days, min_recipients,
             "send_day": min(g["days"]) if g["days"] else None,
             "delivered": delivered,
             "bounced": len(bounced_by_key[key]),
+            "soft_bounced": sum(1 for k in failed_kind_by_key[key].values() if k == "soft"),
+            "skipped": sum(1 for k in failed_kind_by_key[key].values() if k == "skipped"),
             "complained": len(g["complained"]),
             "unique_openers": len(g["openers"]),
             "unique_clickers": len(g["clickers"]),
@@ -369,14 +383,22 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
                    (domain_id, mailgun_domain, from_address, from_display_name, subject, message_id, tags,
                     send_day, delivered, bounced, complained, unique_openers, unique_clickers,
                     open_events, click_events, open_tracking, click_tracking,
-                    tracking_open_setting, tracking_click_setting, google_recipients, send_span_seconds)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    tracking_open_setting, tracking_click_setting, google_recipients, send_span_seconds,
+                    soft_bounced, skipped)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(mailgun_domain, from_address, subject, send_day) DO UPDATE SET
                      from_display_name=excluded.from_display_name, message_id=excluded.message_id,
-                     tags=excluded.tags, delivered=excluded.delivered, bounced=excluded.bounced,
-                     complained=excluded.complained, unique_openers=excluded.unique_openers,
-                     unique_clickers=excluded.unique_clickers, open_events=excluded.open_events,
-                     click_events=excluded.click_events, open_tracking=excluded.open_tracking,
+                     tags=excluded.tags,
+                     -- Counts never go down for the same send: a sync that runs just as
+                     -- Mailgun's ~5-day log starts expiring this send's first events
+                     -- would otherwise overwrite full totals with partial ones.
+                     delivered=MAX(excluded.delivered, delivered), bounced=excluded.bounced,
+                     soft_bounced=excluded.soft_bounced, skipped=excluded.skipped,
+                     complained=MAX(excluded.complained, complained),
+                     unique_openers=MAX(excluded.unique_openers, unique_openers),
+                     unique_clickers=MAX(excluded.unique_clickers, unique_clickers),
+                     open_events=MAX(excluded.open_events, open_events),
+                     click_events=MAX(excluded.click_events, click_events), open_tracking=excluded.open_tracking,
                      click_tracking=excluded.click_tracking,
                      tracking_open_setting=excluded.tracking_open_setting,
                      tracking_click_setting=excluded.tracking_click_setting,
@@ -389,7 +411,7 @@ def run_mailgun_campaign_sync(conn, verbose: bool = True) -> None:
                  int(c["open_tracking"]), int(c["click_tracking"]),
                  None if c["tracking_open_setting"] is None else int(c["tracking_open_setting"]),
                  None if c["tracking_click_setting"] is None else int(c["tracking_click_setting"]),
-                 c["google_recipients"], c["send_span_seconds"]),
+                 c["google_recipients"], c["send_span_seconds"], c["soft_bounced"], c["skipped"]),
             )
             total += 1
         record_deferrals(conn, domain_id, mailgun_domain, deferrals)

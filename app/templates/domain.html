@@ -1401,7 +1401,9 @@
               {% if c.clicked != c.unique_clickers %}<br><span class="muted" style="font-size:0.8em">{{ c.clicked }} total clicks</span>{% endif %}
             {% endif %}
           </td>
-          <td>{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.2f"|format(100 * c.bounce_rate) }}%){% endif %}</td>
+          <td title="Addresses that don't work. Full inboxes and already-unsubscribed addresses aren't bounces.">{{ c.bounced }}{% if c.bounce_rate is not none %} ({{ "%.2f"|format(100 * c.bounce_rate) }}%){% endif %}
+            {% if c.full_inbox %}<br><span class="muted" style="font-size:0.8em">+ {{ c.full_inbox }} inbox full</span>{% endif %}
+            {% if c.skipped %}<br><span class="muted" style="font-size:0.8em">+ {{ c.skipped }} skipped</span>{% endif %}</td>
           <td>{{ c.complained }}{% if c.complaint_rate is not none %} ({{ "%.2f"|format(100 * c.complaint_rate) }}%){% endif %}</td>
           <td>
             {{ report_card_cell(c, 'mg-' ~ loop.index ~ '-' ~ c.campaign_id) }}

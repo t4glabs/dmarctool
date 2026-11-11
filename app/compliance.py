@@ -565,6 +565,28 @@ def _run_dkim(conn, recheck_hours, min_bits, verbose, settings):
         (min_volume, recent_cutoff),
     ).fetchall()
 
+    # Plus, at any volume: our keys that recently FAILED on mail our own
+    # provider delivered unchanged (its signature passed) -- the
+    # own_key_failing case, where whether the record is still missing is the
+    # whole answer (folktaler.com's resend key: 1 failure, deleted from DNS).
+    from app.analysis import _ESP_DEFAULT_AUTH_DOMAINS
+    esp = ",".join(f"'{d}'" for d in sorted(_ESP_DEFAULT_AUTH_DOMAINS))
+    targets += conn.execute(
+        f"""SELECT DISTINCT d.id as domain_id, d.name as domain_name,
+                  ar.domain as signing_domain, ar.selector as selector
+           FROM record_auth_results ar
+           JOIN report_records rr ON rr.id = ar.record_id
+           JOIN reports r ON r.id = rr.report_id
+           JOIN domains d ON d.id = r.domain_id
+           WHERE ar.mechanism='dkim' AND ar.result IN ('fail', 'permerror') AND ar.selector IS NOT NULL
+             AND (ar.domain = d.name OR ar.domain LIKE '%.' || d.name) AND r.date_end >= ?
+             AND rr.dkim_result != 'pass'  -- only where it actually made the mail fail; an extra
+                                           -- broken signature beside a working one is noise
+             AND EXISTS (SELECT 1 FROM record_auth_results ok WHERE ok.record_id = rr.id
+                         AND ok.mechanism = 'dkim' AND ok.result = 'pass' AND lower(ok.domain) IN ({esp}))""",
+        (int(datetime.datetime.utcnow().timestamp()) - 90 * 86400,),
+    ).fetchall()
+
     by_target = {
         (row["domain_id"], row["signing_domain"], row["selector"]): row["domain_name"]
         for row in targets

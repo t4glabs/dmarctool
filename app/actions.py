@@ -97,7 +97,7 @@ def main() -> None:
 
     resolve_p = sub.add_parser("resolve", help="Mark an open action item resolved")
     resolve_p.add_argument("item_id", type=int)
-    resolve_p.add_argument("--status", choices=["done", "dismissed"], default="done")
+    resolve_p.add_argument("--status", choices=["done", "dismissed", "withdrawn"], default="done")
 
     list_p = sub.add_parser("list", help="List open action items")
     list_p.add_argument("domain", nargs="?", default=None)

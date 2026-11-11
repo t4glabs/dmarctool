@@ -194,7 +194,7 @@ def fetch_stats(mailgun_domain: str, api_key: str, window_days: int):
 
 
 METRICS_URL = "https://api.mailgun.net/v1/analytics/metrics"
-BREAKDOWN_DAYS = 90  # re-read every run so older daily rows get their split too
+BREAKDOWN_DAYS = 180  # re-read every run so older daily rows get their split too (metrics reach back further than 90 days)
 _FAILURE_METRICS = ("permanent_failed_count", "hard_bounces_count", "soft_bounces_count",
                     "suppressed_bounces_count", "suppressed_unsubscribed_count", "suppressed_complaints_count")
 

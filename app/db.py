@@ -74,6 +74,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "report_records", {
         "envelope_to": "TEXT",
     })
+    _ensure_columns(conn, "mailgun_campaigns", {"soft_bounced": "INTEGER", "skipped": "INTEGER"})
     for table in ("mailgun_daily_stats", "mailgun_stats"):
         _ensure_columns(conn, table, {"soft_bounced": "INTEGER", "skipped": "INTEGER", "bounced": "INTEGER"})
     _ensure_columns(conn, "mailgun_campaigns", {

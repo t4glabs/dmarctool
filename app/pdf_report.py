@@ -557,18 +557,22 @@ def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
     if len(bounce_points) >= 2:
         parts.append(f'''
 #v(0.4cm)
+#block(breakable: false)[
 #eyebrow("Your bounce rate over time")
 #v(0.15cm)
 #line-chart({_typst_series(bounce_points)}, threshold: {chart_data["bounce_warn_threshold"]})
+]
 ''')
 
     pass_points = [(_short_date(d), r) for d, total_, passed_, r in chart_data["pass_rate_series"] if r is not None]
     if len(pass_points) >= 2:
         parts.append(f'''
 #v(0.4cm)
+#block(breakable: false)[
 #eyebrow("Your delivery rate over time")
 #v(0.15cm)
 #line-chart({_typst_series(pass_points)})
+]
 ''')
 
     if context.get("impersonation_good_news"):
@@ -688,16 +692,20 @@ def _newsletter_and_tips(context: dict, chart_data: dict = None) -> str:
         if len(open_points) >= 2:
             parts.append(f'''
 #v(0.4cm)
+#block(breakable: false)[
 #eyebrow("Your newsletter open rate over time")
 #v(0.15cm)
 #line-chart({_typst_series(open_points)})
+]
 ''')
         if len(click_points) >= 2:
             parts.append(f'''
 #v(0.4cm)
+#block(breakable: false)[
 #eyebrow("Your newsletter click rate over time")
 #v(0.15cm)
 #line-chart({_typst_series(click_points)})
+]
 ''')
 
         if context.get("newsletter_quality"):

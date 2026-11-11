@@ -684,6 +684,39 @@ def _altered_own_verdict(domain_name: str, ev: dict) -> dict:
     }
 
 
+_PROVIDER_NAMES = {"mailgun.org": "Mailgun", "eu.mailgun.org": "Mailgun", "amazonses.com": "Amazon SES",
+                   "sendgrid.net": "SendGrid"}
+
+
+def own_key_failing_verdict(ev: dict, ptr: str = None) -> dict:
+    """guess_sender_identity()'s answer for source_classification's
+    own_key_failing: our provider sent it, its signature passed, ours failed --
+    so the fix is our DKIM record, and the DNS status from our own DKIM check
+    says whether it's still broken."""
+    provider = ("Resend" if ev["selector"] == "resend"
+                else _PROVIDER_NAMES.get(ev["provider_domain"] or "", "your email provider"))
+    day = lambda e: datetime.datetime.utcfromtimestamp(e).strftime("%-d %b")
+    first, last = day(ev["first_seen"]), day(ev["last_seen"])
+    when = f"on {first}" if first == last else f"between {first} and {last}"
+    facts = [
+        f"It's {provider}'s server{f' ({ptr})' if ptr else ''} sending your mail, and the provider's own signature "
+        f"({ev['provider_domain']}) passed on the same messages, so nothing changed them on the way.",
+        f"Your signature ({ev['record']}) failed on {ev['failed']} of them {when}"
+        + (f"; receivers sent {ev['acted']} to spam or blocked them." if ev["acted"] else "."),
+    ]
+    if ev["dns_status"] == "missing":
+        facts.append("That DKIM record is missing from your DNS right now, which explains it.")
+        action = f"Add {ev['record']} back to your DNS, copied exactly from your {provider} dashboard."
+    elif ev["dns_status"] == "ok":
+        facts.append("That record is in your DNS now, so this may already be fixed.")
+        action = (f"Nothing more if no new failures appear. If they do, the published {ev['record']} doesn't match "
+                  f"the key {provider} signs with: copy it again from the {provider} dashboard.")
+    else:
+        action = f"Check that {ev['record']} is published in your DNS exactly as your {provider} dashboard shows."
+    return {"verdict": "maybe", "icon": "🔑", "headline": "Your own mail, failing your own signature",
+            "summary": " ".join(facts), "action": action, "facts": facts, "own_key_failing": True}
+
+
 def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str,
                            ptr: str = None, skip_lookup: bool = False) -> dict:
     """Best-effort, plain-language guess at what an unrecognized sending IP
@@ -777,6 +810,16 @@ def guess_sender_identity(conn, domain_id: int, domain_name: str, source_ip: str
                         f"something else."),
             "action": "Consider marking this sender suspicious here as well, and keep an eye on where else this IP shows up.",
         }
+
+    # Our provider's signature passed but ours failed on the same messages:
+    # nothing altered them, our DKIM record is what's broken. Checked ahead of
+    # the "altered"/"self-signed" branches below, which would wrongly say there
+    # is nothing to fix (news.aikyam.school, Oct 2026: key deleted from DNS).
+    from app.source_classification import classify_sources, own_key_failing_evidence
+    if classify_sources(conn, domain_id, domain_name).get(source_ip, {}).get("kind") == "own_key_failing":
+        ev = own_key_failing_evidence(conn, domain_id, domain_name, source_ip)
+        if ev:
+            return own_key_failing_verdict(ev, ptr)
 
     # Failing copies that carry a BROKEN signature made with our real key
     # (and our own bounce address): the mail was ours and something changed it
@@ -1988,8 +2031,15 @@ def recent_mailgun_campaigns(conn, domain_id: int, limit: int = 10, settings: di
 
     out = []
     for r in rows:
-        delivered, bounced = r["delivered"] or 0, r["bounced"] or 0
-        attempted = delivered + bounced
+        delivered, failed = r["delivered"] or 0, r["bounced"] or 0
+        attempted = delivered + failed
+        # Mailgun's "bounced" is every permanent failure; only hard ones are
+        # bounces. Full inboxes and skipped (already suppressed) addresses are
+        # shown separately -- parivartan's 111 "bounces" on 2026-10-16 were 1
+        # real bounce + 106 full inboxes + 4 skips.
+        soft = r["soft_bounced"] if r["soft_bounced"] is not None else None
+        skipped = r["skipped"] or 0
+        bounced = max(failed - (soft or 0) - skipped, 0)
         out.append({
             "campaign_id": r["message_id"] or f"{r['mailgun_domain']}:{r['subject']}",
             "mailgun_domain": r["mailgun_domain"],
@@ -2000,6 +2050,8 @@ def recent_mailgun_campaigns(conn, domain_id: int, limit: int = 10, settings: di
             "opened": r["open_events"] or 0,
             "clicked": r["click_events"] or 0,
             "bounced": bounced,
+            "full_inbox": soft,
+            "skipped": skipped,
             "complained": r["complained"] or 0,
             "unique_openers": r["unique_openers"] or 0,
             "unique_clickers": r["unique_clickers"] or 0,
@@ -2364,7 +2416,7 @@ def snapshot_domain_health(conn, domain_id: int, domain_name: str, settings: dic
     # not an arbitrary scale.
     click_benchmark = float(settings.get("campaign_click_benchmark", 0.033))
     recent_camps = [c for c in recent_campaigns(conn, domain_id, limit=200)
-                     if c["send_day"] and c["send_day"] >= since_day]
+                     if c["send_day"] and c["send_day"] >= since_day and not c.get("delivery_data_missing")]
     eng_delivered = sum(c["delivered"] for c in recent_camps)
     eng_clicked = sum(c["unique_clickers"] for c in recent_camps)
     click_rate = eng_clicked / eng_delivered if eng_delivered >= min_volume else None

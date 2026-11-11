@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS action_items (
     ref_key      TEXT,            -- e.g. source_ip; used with (domain_id, category) to dedup open system_suggested items
     title        TEXT NOT NULL,
     detail       TEXT,
-    status       TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'done' | 'dismissed'
+    status       TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'done' | 'dismissed' | 'withdrawn' (raised on a wrong measurement; never counted as sorted in client reports)
     resolved_at  TEXT
 );
 
@@ -888,6 +888,8 @@ CREATE TABLE IF NOT EXISTS mailgun_campaigns (
     tracking_click_setting INTEGER,
     google_recipients INTEGER,       -- recipients whose receiving server is Google's (Gmail + Workspace), from mx-host
     send_span_seconds INTEGER,       -- first attempt to 95th-percentile first attempt: how much of a burst the send was
+    soft_bounced      INTEGER,       -- of `bounced`: full inbox / temporary refusal Mailgun gave up on (not a real bounce)
+    skipped           INTEGER,       -- of `bounced`: never sent, already suppressed (not a real bounce); NULL = unknown
     updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(mailgun_domain, from_address, subject, send_day)
 );

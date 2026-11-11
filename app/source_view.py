@@ -332,6 +332,19 @@ def source_action_guide(conn, overview: dict):
                           f"If it keeps showing up, that's fine -- it just means someone keeps trying and failing to send as {dom_phrase}."],
                 "checklist": None}
 
+    # Our provider sent it intact and OUR signature failed: the one case on
+    # this page that needs a DNS fix, so it goes ahead of labels and of every
+    # "nothing to fix" explanation below.
+    if guess.get("own_key_failing"):
+        return {"status": "warn", "title": "Your own mail is failing your own signature -- fix the DKIM record",
+                "owner": owner,
+                "plain": ("This is your own email provider sending your mail, unchanged. Your domain's signature "
+                          "on it failed anyway, so receivers can't confirm it's really from you and may send it "
+                          "to spam."),
+                "steps": [guess["action"],
+                          "Once the record matches, new mail passes again; this page turns green as new reports arrive."],
+                "checklist": None, "facts": guess["facts"]}
+
     # The operator has named this IP -> they've decided it's a known sender of
     # theirs, so skip the "is this even yours?" mystery and speak to fixing it.
     if label:

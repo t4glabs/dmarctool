@@ -470,8 +470,10 @@ def _suppression_story(count: int, sample_emails=None) -> str:
     subscriber list, not a third party's) makes "some people" concrete --
     the reader can picture who actually stopped receiving mail, rather than
     an abstract count."""
+    # No "full inbox" here any more: only permanently blocked addresses are
+    # counted (see _list_hygiene), and a full inbox isn't one of those.
     base = (f"{count} email address{'es' if count != 1 else ''} stopped accepting your mail during this time "
-            f"(usually a typo, a full inbox, or an account that's closed)")
+            f"(usually a typo or an account that's closed)")
     if sample_emails:
         shown = sample_emails[:MAX_SAMPLE_EMAILS]
         names = ", ".join(shown)
@@ -1334,13 +1336,15 @@ def _bounce_reason_breakdown(conn, domain_id: int, start_str: str, end_str: str,
     categorization (used elsewhere for the chronic-bounce detector) that had
     no reader-facing surface until now. Both `ses_suppressions` and
     `mailgun_suppressions` are pooled since a domain can have either or both
-    depending on which ESP config set matched (see AWS_SES_ONBOARDING.md)."""
+    depending on which ESP config set matched (see AWS_SES_ONBOARDING.md).
+    Same set of addresses as _list_hygiene's count (SES permanent only), so
+    the chart explains exactly the number the sentence above it gives."""
     from app.bounce_reasons import categorize_bounce
 
     counts = Counter()
     for row in conn.execute(
         """SELECT reason, bounce_type FROM ses_suppressions
-           WHERE domain_id=? AND kind='bounce' AND first_seen_at BETWEEN ? AND ?""",
+           WHERE domain_id=? AND kind='bounce' AND bounce_type='Permanent' AND first_seen_at BETWEEN ? AND ?""",
         (domain_id, start_str, end_str),
     ):
         counts[categorize_bounce(row["reason"], row["bounce_type"])] += 1
@@ -1373,13 +1377,22 @@ def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
     (significance 2.55/3) than the single-address suppression line that WAS
     already shown (1.3/3) -- the bigger, more significant real event was
     invisible while the smaller one was included."""
-    emails = []
-    for table in ("mailgun_suppressions", "ses_suppressions"):
-        emails += [x["email"] for x in conn.execute(
-            f"""SELECT email FROM {table} WHERE domain_id=? AND first_seen_at BETWEEN ? AND ?
-                ORDER BY first_seen_at""",
-            (domain_id, start_str, end_str),
-        ).fetchall()]
+    # Only addresses that really are blocked from now on: Mailgun's bounce and
+    # complaint lists, SES permanent bounces and complaints. SES records every
+    # bounce, including temporary ones (a full inbox: 132 of pattic.org's 149
+    # in late Oct 2026), which SES does NOT block -- telling a client those
+    # were "automatically skipped" and should be removed was wrong on both
+    # counts. Repeat temporary failures reach the client through the chronic
+    # sentence below instead. Unsubscribes aren't "stopped accepting mail".
+    emails = [x["email"] for x in conn.execute(
+        """SELECT email FROM mailgun_suppressions
+           WHERE domain_id=? AND kind IN ('bounce', 'complaint') AND first_seen_at BETWEEN ? AND ?
+           UNION ALL
+           SELECT email FROM ses_suppressions
+           WHERE domain_id=? AND (kind = 'complaint' OR (kind = 'bounce' AND bounce_type = 'Permanent'))
+             AND first_seen_at BETWEEN ? AND ?""",
+        (domain_id, start_str, end_str, domain_id, start_str, end_str),
+    ).fetchall()]
 
     chronic_count = _chronic_bounce_count_in_period(conn, domain_id, start_str, end_str)
 
@@ -1396,9 +1409,10 @@ def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
         parts.append(
             f"We also found {chronic_count} email address{'es' if chronic_count != 1 else ''} that had been "
             f"quietly failing to receive your mail for months without ever fully bouncing (a full inbox that "
-            f"never clears, for example). Worth removing from your own list too, same as the ones above."
+            f"never clears, for example). Worth removing from your own list too, same as the ones above"
         )
-    return " ".join(parts)
+    # The PDF adds the closing full stop; parts join as separate sentences.
+    return ". ".join(parts)
 
 
 def _postmaster_story(conn, domain_id: int):
@@ -1550,6 +1564,10 @@ def _newsletter_rates(items: list):
     and the email report's engagement bars share the exact same math and can
     never disagree. Returns (open, click, bounce, complaint), each None if
     nothing in `items` was delivered."""
+    # A send whose delivery events never reached us has opens but "0
+    # delivered" (recent_campaigns' delivery_data_missing): its opens would be
+    # counted against nobody's deliveries and inflate the rate. Leave it out.
+    items = [c for c in items if not c.get("delivery_data_missing")]
     delivered = sum(c["delivered"] for c in items)
     if not delivered:
         return None, None, None, None
@@ -1557,7 +1575,9 @@ def _newsletter_rates(items: list):
     clicked = sum(c["unique_clickers"] for c in items)
     bounced = sum(c["bounced"] for c in items)
     complained = sum(c["complained"] for c in items)
-    return opened / delivered, clicked / delivered, bounced / delivered, complained / delivered
+    # Bounces over what was attempted (a bounced message was never
+    # delivered), same denominator as every other bounce rate in the tool.
+    return opened / delivered, clicked / delivered, bounced / (delivered + bounced), complained / delivered
 
 
 def _campaign_table(conn, domain_id: int, start_date: str, end_date: str, limit: int = 8):
@@ -1580,7 +1600,8 @@ def _campaign_table(conn, domain_id: int, start_date: str, end_date: str, limit:
     one line per row -- a real subject is often much longer than a table
     column can hold."""
     campaigns = recent_campaigns(conn, domain_id, limit=200)
-    this_period = [c for c in campaigns if c["send_day"] and start_date <= c["send_day"] <= end_date]
+    this_period = [c for c in campaigns if c["send_day"] and start_date <= c["send_day"] <= end_date
+                   and not c.get("delivery_data_missing")]  # "0 delivered" + real opens reads as a bug to a client
     if not this_period:
         return None
     rows = []
@@ -2570,9 +2591,17 @@ def chart_data(conn, domain_id: int, period_start: datetime.datetime, period_end
         "disp_quarantine": sum(p["disp_quarantine"] for p in providers),
         "disp_reject": sum(p["disp_reject"] for p in providers),
         "spam_series": analysis.postmaster_daily_series(conn, domain_id, days=60),
-        "bounce_points": [(r["day"], r["bounce_num"], r["bounce_den"]) for r in mailgun_series],
+        # Daily points only on days with enough mail to mean something. A day
+        # with 1-10 messages (a few spoof attempts, a forward) all failing
+        # plotted as "0% delivered" between real send days, a 100/0/100/0
+        # zigzag on theigniteindia.com's client PDF -- when those failures
+        # were protection working, not mail lost. Same floor as the per-send
+        # newsletter series above.
+        "bounce_points": [(r["day"], r["bounce_num"], r["bounce_den"]) for r in mailgun_series
+                          if r["bounce_den"] >= MIN_VOLUME_FOR_RATES],
         "bounce_warn_threshold": float(settings["mailgun_bounce_rate_warn"]),
-        "pass_rate_series": analysis.daily_pass_series(conn, domain_id, days=60),
+        "pass_rate_series": [(d, total, passed, rate if total >= MIN_VOLUME_FOR_RATES else None)
+                             for d, total, passed, rate in analysis.daily_pass_series(conn, domain_id, days=60)],
         "newsletter_engagement_series": [
             (c["send_day"], c["unique_open_rate"], c["unique_click_rate"]) for c in newsletter_qualifying
         ],
