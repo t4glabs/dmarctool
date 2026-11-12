@@ -17,12 +17,12 @@ receivers may disregard all of them), and DNS lookup failures.
 """
 
 import argparse
-import re
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
+from app import dns_lookup
 from app.analysis import all_domains, current_policy_run, ensure_default_settings, upsert_system_action
 from app.db import get_connection, init_db
+from app.public_suffix import registrable_domain
 
 MAX_WORKERS = 10
 
@@ -35,25 +35,10 @@ MAX_WORKERS = 10
 _POLICY_STRENGTH = {"none": 0, "quarantine": 1, "reject": 2}
 
 
-def dig_txt(domain: str, timeout: float = 5.0):
-    """Raw TXT record strings for _dmarc.<domain>, or None on lookup failure."""
-    try:
-        out = subprocess.run(
-            ["dig", "+short", "+time=3", "+tries=2", "TXT", f"_dmarc.{domain}"],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-    if out.returncode != 0:
-        return None
-    records = []
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = re.findall(r'"((?:[^"\\]|\\.)*)"', line)
-        records.append("".join(parts) if parts else line)
-    return records
+def dig_txt(domain: str, timeout: float = 6.0):
+    """Raw TXT record strings for _dmarc.<domain>, [] if there are none, or
+    None if the lookup failed (SERVFAIL/timeout -- never "no record")."""
+    return dns_lookup.txt(f"_dmarc.{domain}", timeout)
 
 
 def parse_dmarc_tags(txt: str) -> dict:
@@ -75,17 +60,92 @@ def _record(conn, domain_id, status, txt_value, parsed_p, parsed_pct, matches_ex
     )
 
 
+def _dismiss(conn, domain_id, categories, ref_key=None):
+    marks = ",".join("?" * len(categories))
+    sql = (f"UPDATE action_items SET status='dismissed', resolved_at=datetime('now') "
+           f"WHERE domain_id=? AND category IN ({marks}) AND status='open'")
+    args = [domain_id, *categories]
+    if ref_key is not None:
+        sql += " AND ref_key=?"
+        args.append(ref_key)
+    conn.execute(sql, args)
+
+
+def _lookup_failed(conn, domain_id, name):
+    """A failed lookup (SERVFAIL, timeout) is "couldn't check", never "no
+    record": it's logged on the dashboard's DNS history, raises nothing and
+    clears nothing. It used to open a dns_drift item, which subscribers read
+    as "your protective setting doesn't match what we expect"."""
+    note = f"Couldn't check _dmarc.{name} this time (DNS lookup failed or timed out) -- will retry next run"
+    _record(conn, domain_id, "lookup_failed", None, None, None, None, note)
+    return {"status": "lookup_failed", "note": note}
+
+
+def record_problems(tags: dict) -> dict:
+    """{problem_key: explanation} for one DMARC record's tags -- the checks a
+    receiver applies before it ever uses the policy, plus the two gaps that
+    quietly undo an enforced one. Keys double as action-item ref_keys.
+
+    `pct` is deliberately not judged here: RFC 9989 (DMARCbis) removed it --
+    receivers apply all or nothing, `t=y` is the testing flag now -- and
+    pct_watch.py already measures whether Gmail and Microsoft still honour it."""
+    problems = {}
+    p = (tags.get("p") or "").lower()
+    if p not in _POLICY_STRENGTH:
+        problems["invalid_p"] = (
+            f"The record's policy is p={tags.get('p')!r}, which isn't one of none / quarantine / reject"
+            if "p" in tags else "The record has no p= policy tag at all")
+        problems["invalid_p"] += (", so receivers treat it as asking for no protection (p=none, RFC 9989 "
+                                  "section 4.7). Forged mail using this domain is not stopped.")
+    elif p in ("quarantine", "reject") and (tags.get("sp") or "").lower() == "none":
+        problems["sp_none"] = (
+            f"p={p} protects the domain itself, but sp=none tells receivers to let forged mail from any "
+            f"subdomain (anything.<domain>) through. Remove sp=none, or set it to quarantine or reject.")
+    if not tags.get("rua"):
+        problems["no_rua"] = ("The record has no rua= reporting address, so no aggregate reports are sent "
+                              "for it and Vigil can't see who sends mail as this domain.")
+    return problems
+
+
+def _apply_record_problems(conn, domain_id, domain_name, problems):
+    categories = {"invalid_p": "dmarc_record_invalid", "sp_none": "dmarc_subdomains_open", "no_rua": "dmarc_no_rua"}
+    titles = {
+        "invalid_p": f"{domain_name}: DMARC record has an invalid policy, so it protects nothing",
+        "sp_none": f"{domain_name}: DMARC record leaves subdomains unprotected (sp=none)",
+        "no_rua": f"{domain_name}: DMARC record has no reporting address (rua=)",
+    }
+    for key, category in categories.items():
+        if key in problems:
+            upsert_system_action(conn, domain_id, category, None, titles[key], problems[key])
+        else:
+            _dismiss(conn, domain_id, [category])
+
+
 def check_domain(conn, domain_id: int, domain_name: str, records=None) -> dict:
     if records is None:
         records = dig_txt(domain_name)
 
     if records is None:
-        note = "DNS lookup failed (network/dig error)"
-        _record(conn, domain_id, "lookup_failed", None, None, None, 0, note)
-        upsert_system_action(conn, domain_id, "dns_drift", None, f"{domain_name}: DNS lookup failed", note)
-        return {"status": "lookup_failed", "note": note}
+        return _lookup_failed(conn, domain_id, domain_name)
 
     dmarc_records = [r for r in records if r.lower().startswith("v=dmarc1")]
+    inherited_from = None
+
+    if not dmarc_records:
+        # A subdomain with no record of its own is covered by its organizational
+        # domain's record (RFC 9989 section 4.10): sp= if set, else p=. Calling
+        # that "no DMARC record" contradicted any public check of the same DNS
+        # (mails.catsofkochi.com, 12 Nov 2026: raised as missing while
+        # catsofkochi.com's p=quarantine covered it).
+        org = registrable_domain(domain_name)
+        if org != domain_name:
+            parent = dig_txt(org)
+            if parent is None:
+                return _lookup_failed(conn, domain_id, domain_name)
+            parent_records = [r for r in parent if r.lower().startswith("v=dmarc1")]
+            if len(parent_records) == 1:
+                inherited_from = org
+                dmarc_records = parent_records
 
     if not dmarc_records:
         note = f"No DMARC TXT record found at _dmarc.{domain_name}"
@@ -103,7 +163,21 @@ def check_domain(conn, domain_id: int, domain_name: str, records=None) -> dict:
 
     txt_value = dmarc_records[0]
     tags = parse_dmarc_tags(txt_value)
-    parsed_p = tags.get("p")
+    if inherited_from:
+        # What a receiver applies to this subdomain: the parent's sp=, else p=.
+        # Reporting-address and syntax problems belong to the parent's own
+        # check, so they aren't raised a second time here.
+        tags = {**tags, "p": tags.get("sp") or tags.get("p")}
+        problems = {k: v for k, v in record_problems(tags).items() if k == "invalid_p"}
+    else:
+        problems = record_problems(tags)
+    _apply_record_problems(conn, domain_id, domain_name, problems)
+    if "invalid_p" in problems:
+        note = problems["invalid_p"]
+        _record(conn, domain_id, "invalid", txt_value, tags.get("p"), None, 0, note)
+        return {"status": "invalid", "note": note}
+
+    parsed_p = tags.get("p").lower()
     parsed_pct = int(tags["pct"]) if tags.get("pct", "").isdigit() else 100  # RFC 7489 default
 
     manual_run = conn.execute(
@@ -142,8 +216,10 @@ def check_domain(conn, domain_id: int, domain_name: str, records=None) -> dict:
                 note += " -- if you changed DNS recently this may just be report lag, not a real problem"
     else:
         note = "no prior report or manual-log data to compare against yet"
+    if inherited_from:
+        note = f"no record of its own; covered by {inherited_from}'s record (p={parsed_p} applies here). {note}"
 
-    _record(conn, domain_id, "ok", txt_value, parsed_p, parsed_pct,
+    _record(conn, domain_id, "inherited" if inherited_from else "ok", txt_value, parsed_p, parsed_pct,
             (1 if matches else 0) if matches is not None else None, note)
 
     if matches is False and weakened:
@@ -169,8 +245,9 @@ def check_domain(conn, domain_id: int, domain_name: str, records=None) -> dict:
             (domain_id,),
         )
 
-    return {"status": "ok", "txt_value": txt_value, "parsed_p": parsed_p, "parsed_pct": parsed_pct,
-            "matches": matches, "weakened": weakened, "expected_source": expected_source, "note": note}
+    return {"status": "inherited" if inherited_from else "ok", "txt_value": txt_value, "parsed_p": parsed_p,
+            "parsed_pct": parsed_pct, "matches": matches, "weakened": weakened,
+            "expected_source": expected_source, "note": note, "problems": problems}
 
 
 def run_dns_checks(conn, verbose: bool = True) -> None:
@@ -189,7 +266,7 @@ def run_dns_checks(conn, verbose: bool = True) -> None:
         conn.commit()
         if verbose:
             print(f"=== {domain['name']} ===")
-            if result["status"] == "ok":
+            if result["status"] in ("ok", "inherited"):
                 flag = "OK" if result["matches"] else ("MISMATCH" if result["matches"] is False else "no baseline yet")
                 print(f"  live: p={result['parsed_p']} pct={result['parsed_pct']}  [{flag}]")
                 if result["matches"] is not True:

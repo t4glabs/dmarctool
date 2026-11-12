@@ -299,8 +299,8 @@ def _dkim_row(conn, domain_id, name, dkim_checks, open_items):
                     "No mail signed with this domain's own DKIM key in the last 90 days.")
     small = [c for c in keys if c["key_bits"] and c["key_bits"] < 2048]
     if small:
-        return _row("DKIM", now, "optional", f"Upgrade {small[0]['selector']} to a 2048-bit key when convenient",
-                    f"{small[0]['key_bits']}-bit meets Gmail's minimum today, but 2048-bit is the recommended size. "
+        return _row("DKIM", now, "optional", f"Replace {small[0]['selector']} with a 2048-bit key when convenient",
+                    f"{small[0]['key_bits']}-bit is short: still accepted, but 2048-bit is the recommended size. "
                     f"Your email provider's DKIM settings can generate a new key.")
     return _row("DKIM", now, "keep", "",
                 "Signing keys are 2048-bit and no DKIM problems were found in your reports.")
@@ -327,6 +327,12 @@ def _mta_sts_row(mta_sts):
                     "transit. Newer and optional; most small domains don't have it yet.")
     if mta_sts["mta_sts_status"] == "broken":
         return _row("MTA-STS", "broken", "change", "Fix or remove the MTA-STS record", mta_sts["mta_sts_note"] or "")
+    if mta_sts["mta_sts_status"] == "lookup_failed":
+        return _row("MTA-STS", "couldn't check", "unknown", "", mta_sts["mta_sts_note"] or "")
+    if mta_sts["mta_sts_status"] == "withdrawn":
+        return _row("MTA-STS", "mode: none", "optional", "Remove the record once senders' cached policies expire",
+                    "mode: none withdraws the policy. Once max_age has passed since the switch, the "
+                    "_mta-sts record and policy file can be deleted.")
     if mta_sts["mta_sts_mode"] == "enforce":
         return _row("MTA-STS", "enforce", "keep", "", "Incoming mail must be delivered encrypted.")
     return _row("MTA-STS", mta_sts["mta_sts_mode"] or "set up", "wait", "Move to mode: enforce after a few clean weeks",

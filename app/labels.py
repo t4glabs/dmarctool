@@ -48,6 +48,16 @@ CATEGORY_LABELS = {
     "mta_sts_broken": "MTA-STS misconfigured",
     "untracked_sending_subdomain": "Untracked sending subdomain found",
     "domain_expiring_soon": "Domain registration expiring soon",
+    "domain_expiry_urgent": "Domain registration expires within 14 days (or has expired)",
+    "domain_status_alert": "Domain on hold / lapsed at the registry",
+    "transfer_lock_off": "Registrar transfer lock is off",
+    "cert_expiring_soon": "Website certificate running out",
+    "domain_blocklisted": "Domain itself on a domain blocklist",
+    "dmarc_record_invalid": "DMARC record has an invalid policy",
+    "dmarc_subdomains_open": "DMARC sp=none leaves subdomains open",
+    "dmarc_no_rua": "DMARC record has no rua= address",
+    "spf_invalid": "SPF record is broken (permerror)",
+    "spf_pass_all": "SPF record ends in +all",
 }
 
 # Most-severe-first ordering for the Overview grid's "Needs attention" badges
@@ -57,6 +67,13 @@ CATEGORY_LABELS = {
 # top_categories() below. Any category not listed here (e.g. a new one added
 # without updating this) still shows, just after everything ranked.
 CATEGORY_PRIORITY_ORDER = [
+    "domain_status_alert",
+    "domain_expiry_urgent",
+    "dmarc_record_invalid",
+    "spf_pass_all",
+    "spf_invalid",
+    "domain_blocklisted",
+    "cert_expiring_soon",
     "mx_split",
     "domain_expiring_soon",
     "pct_not_honoured",
@@ -98,6 +115,9 @@ CATEGORY_PRIORITY_ORDER = [
     "untracked_sending_subdomain",
     "data_stale",
     "no_report_history",
+    "dmarc_subdomains_open",
+    "dmarc_no_rua",
+    "transfer_lock_off",
 ]
 _CATEGORY_RANK = {cat: i for i, cat in enumerate(CATEGORY_PRIORITY_ORDER)}
 
@@ -158,6 +178,20 @@ CATEGORY_HELP = {
 # Concrete "what to actually do about it" guidance per action-item category --
 # separate from CATEGORY_HELP (which explains *what the problem is*) so alerts
 # don't just tell you something's wrong without telling you how to fix it.
+CATEGORY_HELP.update({
+    "domain_expiry_urgent": "The registration expires within 14 days, or already has. Past expiry, registrars keep the domain in a grace period (usually 30-45 days) during which the website and mail are typically switched off; after that it is released for anyone to register.",
+    "domain_status_alert": "The registry's own status for the domain says clientHold/serverHold (taken out of DNS: website and mail offline) or redemptionPeriod/pendingDelete (lapsed, heading for deletion). Urgent whatever the expiry date says.",
+    "transfer_lock_off": "The domain's registry status has no clientTransferProhibited (transfer lock). The lock stops anyone moving the domain to another registrar without it first being unlocked in the owner's account -- free, and on by default at most registrars.",
+    "cert_expiring_soon": "The website's TLS certificate (domain or www.) has 21 days or less left, or has expired. These certificates normally renew themselves ~30 days before expiry, so this means auto-renewal has been failing for over a week.",
+    "domain_blocklisted": "The registered domain itself is on Spamhaus DBL, SURBL or URIBL (black/red) -- domain blocklists spam filters check sender domains and every link in a message against. Separate from the sending-IP blocklists. Each zone passed its own self-test before this was trusted.",
+    "dmarc_record_invalid": "The DMARC record's p= is missing or isn't none/quarantine/reject, so receivers treat the record as p=none (RFC 9989): nothing is enforced.",
+    "dmarc_subdomains_open": "p= is quarantine/reject but sp=none, so forged mail from any subdomain is let through even though the domain itself is protected.",
+    "dmarc_no_rua": "The DMARC record has no rua= reporting address, so no aggregate reports are sent anywhere and Vigil can't see who sends as this domain. Operator-only: it changes nothing about the domain's protection.",
+    "spf_invalid": "A permerror somewhere in the SPF tree (RFC 7208): more than one v=spf1 record, an unknown or malformed term, or an include/redirect to a name with no SPF record. Receivers then treat SPF as broken for every message.",
+    "spf_pass_all": "The SPF record ends in +all (or a bare all), approving every IP address in the world -- SPF then passes for anyone.",
+})
+
+
 CATEGORY_REMEDIATION = {
     "ramp_recommendation": "Update your domain's DMARC TXT record (_dmarc.<domain>) with the new p=/pct= values yourself, then log the change under Log a manual action in the Manual Log tab so DMARCTool can track it against live DNS.",
     "new_sender": "Check the Known senders table in the Senders tab for this IP's reverse DNS (PTR) and volume. If it's a service you actually use, label it with the \"What is this?\" dropdown there so it stops getting flagged. If you don't recognize it, someone may be spoofing your domain -- consider tightening your DMARC policy (raise pct, or move toward p=reject).",
@@ -212,6 +246,20 @@ CATEGORY_REMEDIATION = {
 # postmaster_compliance items all share one category, but the fix depends on
 # *which* Postmaster requirement failed -- that's embedded in the action
 # item's ref_key ("<postmaster_domain>:<REQUIREMENT>"), not the category itself.
+CATEGORY_REMEDIATION.update({
+    "domain_expiry_urgent": "Renew at the registrar named in the detail today. If it has already expired, renew it now -- inside the grace period renewal is normal price; after it, a redemption fee applies and then the name is released. Turn on auto-renew with a current card while you're there.",
+    "domain_status_alert": "Log in at the registrar (or ask the client to). clientHold is usually unpaid renewal, an unverified contact email (ICANN verification) or an abuse report -- the registrar's dashboard says which. serverHold is the registry itself; the registrar has to raise it. redemptionPeriod: restore it now (fee applies). pendingDelete: can no longer be restored; watch for it to drop and re-register.",
+    "transfer_lock_off": "At the registrar, turn on Domain lock / Transfer lock / Registrar lock for this domain (free). It shows as clientTransferProhibited in the registry status on the next daily check.",
+    "cert_expiring_soon": "Find who serves the website (Cloudflare, Netlify, Vercel, the web host) and renew or re-issue the certificate there; check why auto-renewal stopped (a changed DNS record, a failed HTTP challenge, a lapsed hosting plan). This item clears on the next daily check once the new certificate is live.",
+    "domain_blocklisted": "Look the domain up on each list's own page (Spamhaus: check.spamhaus.org; SURBL: surbl.org/surbl-analysis; URIBL: admin.uribl.com) to see why, fix the cause first (compromised page, link in a newsletter, sending to a bad list), then request removal there.",
+    "dmarc_record_invalid": "Fix the p= tag in _dmarc.<domain> to none, quarantine or reject (keep the current intended policy).",
+    "dmarc_subdomains_open": "Remove sp=none from _dmarc.<domain> (subdomains then follow p=), or set sp=quarantine / sp=reject.",
+    "dmarc_no_rua": "Add rua=mailto:dmarc-reports@aikyamfellows.org to _dmarc.<domain> so reports reach Vigil.",
+    "spf_invalid": "Fix what the detail names: merge duplicate v=spf1 records into one, correct the malformed term, or remove the include of the name that has no SPF record.",
+    "spf_pass_all": "Change the ending to ~all (the right ending for a domain that sends mail; see the Settings roadmap). Never leave +all.",
+})
+
+
 POSTMASTER_REQUIREMENT_REMEDIATION = {
     "SPF_AND_DKIM": "Check the Authentication tab -- make sure SPF and DKIM are both published and passing for your actual sending infrastructure, not just your primary domain.",
     "DMARC_ALIGNMENT": "Your DKIM or SPF signing domain doesn't align closely enough with your header From: domain. Check the Authentication tab's SPF/DKIM entries -- the signing/envelope domain should be your domain or a subdomain of it.",
@@ -354,7 +402,9 @@ DNS_STATUS_LABELS = {
     "ok": "Checked",
     "missing": "No DMARC record found",
     "multiple": "Conflicting records found",
-    "lookup_failed": "Could not check (network issue)",
+    "inherited": "Covered by the main domain's record",
+    "invalid": "Record has an invalid policy",
+    "lookup_failed": "Could not check (DNS lookup failed)",
     "unknown": "Not checked yet",
 }
 
@@ -362,7 +412,9 @@ DNS_STATUS_HELP = {
     "ok": "We successfully read your domain's DMARC DNS record.",
     "missing": "Your domain has no DMARC record at all right now -- it is not protected against spoofing (unless a parent domain covers it).",
     "multiple": "More than one DMARC record exists for this domain. Mail providers won't know which one to trust and may ignore both -- worth cleaning up in DNS.",
-    "lookup_failed": "The DNS check couldn't complete, likely a temporary network issue. Try again later.",
+    "inherited": "This subdomain has no DMARC record of its own, so receivers apply the main domain's record to it (its sp= setting if it has one, otherwise its p=). That is a normal, protected setup.",
+    "invalid": "The record's p= policy isn't none, quarantine or reject, so receivers treat the whole record as asking for no protection.",
+    "lookup_failed": "The DNS lookup didn't get an answer (a timeout, or the domain's DNS servers returned an error). That says nothing about whether the record exists; it is checked again on the next run.",
     "unknown": "We haven't run a DNS check for this domain yet.",
 }
 

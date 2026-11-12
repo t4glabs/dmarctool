@@ -44,7 +44,7 @@ from app.analysis import (
 from app.access_log import prune_old_access_log, record_access, recent_access_log
 from app.bounce_reasons import categorize_bounce
 from app.actions import log_action, resolve_action, set_scheduled_sends_paused
-from app.blocklist import run_blocklist_checks
+from app.blocklist import run_blocklist_checks, run_domain_blocklist_checks
 from app.charts import (
     disposition_donut_chart, email_verdict_donut, health_score_sparkline, metric_trend_chart, pass_rate_sparkline,
     provider_stacked_bar_chart, spam_rate_sparkline, vibe_distribution_donut, volume_bar_chart,
@@ -53,7 +53,9 @@ from app.compliance import flatten_spf_tree, run_compliance_checks
 from app.config import get_secret
 from app.db import get_connection, get_or_create_domain, init_db
 from app.dns_check import check_domain, discover_untracked_subdomains, run_dns_checks
-from app.domain_expiry import days_until, run_domain_expiry_checks
+from app.cert_check import run_cert_checks
+from app.public_suffix import registrable_domain
+from app.domain_expiry import days_until, expiry_phrase, run_domain_expiry_checks
 from app.system_status import (
     email_status, humanize_hours, record_sweep_finish, record_sweep_start, sweep_status,
 )
@@ -63,7 +65,7 @@ from app.domain_report import (
     save_group_settings, save_report_settings, send_group_report_now, send_report_now, set_domain_group,
 )
 from app.listmonk import run_listmonk_content_sync, run_listmonk_blocklist_sync
-from app.lookalike import findings_for_domain, run_lookalike_checks
+from app.lookalike import VERDICT_LABELS as LOOKALIKE_VERDICT_LABELS, findings_for_domain, run_lookalike_checks
 from app.mailgun import run_mailgun_checks, send_message, _suppression_watermark as _mailgun_suppression_watermark
 from app.mailgun_campaigns import run_mailgun_campaign_sync
 from app.mailgun_deferrals import deferral_summary, deferral_verdict
@@ -137,6 +139,8 @@ templates.env.globals.update({
     "classification_label": classification_label,
     "classification_help": classification_help,
     "dns_status_label": dns_status_label,
+    "expiry_phrase": expiry_phrase,
+    "lookalike_verdict_label": lambda v: LOOKALIKE_VERDICT_LABELS.get(v, v),
     "dns_status_help": dns_status_help,
     "postmaster_requirement_label": postmaster_requirement_label,
     "category_remediation": category_remediation,
@@ -207,12 +211,12 @@ def run_all_checks(conn, trigger: str = "manual") -> bool:
         for step in (
             run_imap_ingest,  # pull new DMARC reports from the mailbox FIRST, so this sweep analyses them
             run_analysis, run_dns_checks, run_pct_watch,  # pct watch reads this cycle's fresh DNS + reports
-            discover_untracked_subdomains, run_blocklist_checks,
+            discover_untracked_subdomains, run_blocklist_checks, run_domain_blocklist_checks,
             run_compliance_checks, run_mx_checks, run_mailgun_checks, run_mailgun_campaign_sync, run_postmaster_checks,
             run_ses_event_ingest, run_ses_account_checks, run_listmonk_content_sync, run_listmonk_blocklist_sync,
             run_chronic_bounce_checks,  # after mailgun/ses checks above, so it sees this cycle's fresh suppressions
             run_safe_browsing_checks, run_mta_sts_checks, run_report_auth_checks,
-            run_lookalike_checks, run_domain_expiry_checks, enrich_impersonation_whois,
+            run_lookalike_checks, run_domain_expiry_checks, run_cert_checks, enrich_impersonation_whois,
             warm_recipient_blocks,  # last: reads every report this sweep ingested
         ):
             try:
@@ -630,6 +634,18 @@ def domain_detail(request: Request, name: str, flash: str = None):
         days_until(domain_expiry["expires_at"]) if domain_expiry and domain_expiry["expires_at"] else None
     )
     expiry_notify_last = last_expiry_notification(conn, domain_id)
+    # Website and domain-blocklist checks run once per registered domain, so a
+    # tracked subdomain shows its registered domain's results.
+    site_row = conn.execute("SELECT id FROM domains WHERE name=?", (registrable_domain(name),)).fetchone()
+    site_id = site_row["id"] if site_row else domain_id
+    cert_checks = conn.execute(
+        """SELECT * FROM cert_checks WHERE id IN (
+             SELECT MAX(id) FROM cert_checks WHERE domain_id=? GROUP BY host) ORDER BY host""",
+        (site_id,),
+    ).fetchall()
+    domain_blocklist = conn.execute(
+        "SELECT * FROM domain_blocklist_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1", (site_id,)
+    ).fetchone()
 
     report_run = current_policy_run(conn, domain_id)
     manual_run = conn.execute(
@@ -1143,6 +1159,8 @@ def domain_detail(request: Request, name: str, flash: str = None):
         "mta_sts": mta_sts,
         "domain_expiry": domain_expiry,
         "domain_expiry_days_left": domain_expiry_days_left,
+        "cert_checks": cert_checks,
+        "domain_blocklist": domain_blocklist,
         "domain_expiry_warn_days": int(settings["domain_expiry_warn_days"]),
         "expiry_notify_last": expiry_notify_last,
         "verdicts": verdicts,
@@ -1913,7 +1931,7 @@ def notify_domain_expiry(name: str):
             status_code=303,
         )
     record_expiry_notification_sent(conn, domain_id, settings_row["recipient_email"], expires_at, status, err)
-    flash = f"Notification failed: {err}" if err else f"Notified {settings_row['recipient_email']} (expires {expires_at}, {days_left} days)."
+    flash = f"Notification failed: {err}" if err else f"Notified {settings_row['recipient_email']} ({expires_at}, {expiry_phrase(days_left)})."
     return RedirectResponse(f"/domain/{name}?flash={flash}#auth", status_code=303)
 
 

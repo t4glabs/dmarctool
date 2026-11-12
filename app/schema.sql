@@ -661,7 +661,9 @@ CREATE TABLE IF NOT EXISTS domain_expiry_checks (
     status       TEXT NOT NULL,  -- 'ok'|'error'
     expires_at   TEXT,           -- ISO date (YYYY-MM-DD), NULL if the lookup failed
     registrar    TEXT,
-    note         TEXT
+    note         TEXT,
+    statuses     TEXT,           -- comma-separated EPP status codes (clientTransferProhibited, clientHold...)
+    registered_at TEXT           -- YYYY-MM-DD creation date, from RDAP/WHOIS
 );
 CREATE INDEX IF NOT EXISTS idx_domain_expiry_checks_domain ON domain_expiry_checks(domain_id, checked_at);
 
@@ -1059,9 +1061,40 @@ CREATE TABLE IF NOT EXISTS lookalike_domains (
     ignored         INTEGER NOT NULL DEFAULT 0,
     first_seen_at   TEXT NOT NULL DEFAULT (datetime('now')),
     last_checked_at TEXT NOT NULL DEFAULT (datetime('now')),
+    ns_hosts        TEXT,
+    registered_at   TEXT,
+    redirects_to_own INTEGER,
+    shares_ns       INTEGER,
+    verdict         TEXT,
     UNIQUE (domain_id, candidate)
 );
 CREATE INDEX IF NOT EXISTS idx_lookalike_domain ON lookalike_domains(domain_id, registered, has_mx, ignored);
+
+-- Website certificate expiry (app/cert_check.py): one row per host per check.
+CREATE TABLE IF NOT EXISTS cert_checks (
+    id          INTEGER PRIMARY KEY,
+    domain_id   INTEGER NOT NULL REFERENCES domains(id),
+    checked_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    host        TEXT NOT NULL,
+    status      TEXT NOT NULL,  -- ok|expiring|expired|invalid|no_https|lookup_failed
+    not_after   TEXT,           -- YYYY-MM-DD
+    issuer      TEXT,
+    note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cert_checks_domain ON cert_checks(domain_id, checked_at);
+
+-- The domain itself on domain blocklists (Spamhaus DBL, SURBL, URIBL) --
+-- blocklist_checks only covers sending IPs.
+CREATE TABLE IF NOT EXISTS domain_blocklist_checks (
+    id          INTEGER PRIMARY KEY,
+    domain_id   INTEGER NOT NULL REFERENCES domains(id),
+    checked_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    domain      TEXT NOT NULL,
+    status      TEXT NOT NULL,  -- listed|minor|clean|lookup_failed
+    listed_on   TEXT,
+    note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_domain_blocklist_checks ON domain_blocklist_checks(domain_id, checked_at);
 
 -- One row per full check sweep (web.py::run_all_checks), scheduled or manual.
 -- finished_at stays NULL while a sweep runs -- and forever if one hangs, which

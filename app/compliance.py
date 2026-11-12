@@ -22,10 +22,10 @@ import json
 import base64
 import ipaddress
 import re
-import subprocess
 import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+from app import dns_lookup
 from app.analysis import (
     all_domains, ensure_default_settings, eligible_known_senders, low_volume_failing_senders,
     sender_ip_context, upsert_system_action,
@@ -37,32 +37,16 @@ SPF_LOOKUP_MECHANISMS = ("a", "mx", "ptr", "exists")
 _TXT_QUOTE_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
-def _dig(args, timeout=5.0):
-    try:
-        out = subprocess.run(
-            ["dig", "+time=3", "+tries=2"] + list(args) + ["+short"],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-    if out.returncode != 0:
-        return None
-    return out.stdout
+def _dig(args, timeout=6.0):
+    """`dig +short`-style output, or None if the lookup failed -- including a
+    SERVFAIL, which +short alone would have printed as an empty answer."""
+    lines = dns_lookup.lookup(args, timeout)
+    return None if lines is None else "\n".join(lines)
 
 
-def _dig_txt(name, timeout=5.0):
+def _dig_txt(name, timeout=6.0):
     """TXT records for `name`, each with multi-string chunks already joined."""
-    out = _dig(["TXT", name], timeout)
-    if out is None:
-        return None
-    records = []
-    for line in out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = _TXT_QUOTE_RE.findall(line)
-        records.append("".join(parts) if parts else line)
-    return records
+    return dns_lookup.txt(name, timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +68,16 @@ def check_ptr(ip: str, timeout: float = 5.0):
         return "ptr_missing", None, f"no PTR record for {ip} -- Gmail requires reverse DNS to resolve to a hostname"
 
     record_type = "AAAA" if addr.version == 6 else "A"
+    forward_failed = False
     for hostname in hostnames:
         fwd_out = _dig([record_type, hostname], timeout)
-        if fwd_out and ip in [line.strip() for line in fwd_out.splitlines()]:
+        if fwd_out is None:
+            forward_failed = True
+            continue
+        if ip in [line.strip() for line in fwd_out.splitlines()]:
             return "confirmed", hostname, f"PTR -> {hostname} -> resolves back to {ip}"
+    if forward_failed:
+        return "lookup_failed", hostnames[0], f"PTR -> {hostnames[0]}, but looking that hostname up failed this time"
     return "mismatch", hostnames[0], f"PTR -> {hostnames[0]}, but that hostname doesn't resolve back to {ip}"
 
 
@@ -95,15 +85,67 @@ def check_ptr(ip: str, timeout: float = 5.0):
 # SPF DNS-lookup budget (RFC 7208: max 10 lookups)
 # ---------------------------------------------------------------------------
 
-def _spf_record_for(domain, timeout=5.0):
-    """The domain's v=spf1 TXT record, "" if none, or None on lookup failure."""
+def _spf_records_for(domain, timeout=6.0):
+    """Every v=spf1 TXT record at `domain` ([] if none), or None on lookup failure."""
     txts = _dig_txt(domain, timeout)
     if txts is None:
         return None
-    for txt in txts:
-        if txt.lower().startswith("v=spf1"):
-            return txt
-    return ""
+    return [t for t in txts if t.lower() == "v=spf1" or t.lower().startswith("v=spf1 ")]
+
+
+def _spf_record_for(domain, timeout=6.0):
+    """The domain's v=spf1 TXT record, "" if none, or None on lookup failure."""
+    records = _spf_records_for(domain, timeout)
+    if records is None:
+        return None
+    return records[0] if records else ""
+
+
+_SPF_MECHANISMS = {"all", "include", "a", "mx", "ptr", "ip4", "ip6", "exists"}
+_SPF_NEEDS_TARGET = {"include", "exists", "ip4", "ip6"}
+_SPF_MODIFIER_RE = re.compile(r"^[a-z][a-z0-9_.-]*=", re.IGNORECASE)
+
+
+def spf_term_problems(record: str):
+    """(problems, all_qualifier) for one SPF record's own terms.
+
+    problems are the RFC 7208 permerrors a receiver hits before it ever
+    checks an address -- an unknown mechanism, a malformed ip4/ip6, a
+    mechanism missing its target, a duplicated redirect=/exp= -- each of
+    which makes the WHOLE record count as broken (section 4.6). Unknown
+    modifiers (name=value) are allowed and ignored (section 6).
+    all_qualifier is "+", "-", "~", "?" or None when there's no `all`."""
+    problems, all_qualifier, seen_modifiers = [], None, set()
+    for term in record.split()[1:]:
+        if _SPF_MODIFIER_RE.match(term):
+            name = term.split("=", 1)[0].lower()
+            if name in ("redirect", "exp"):
+                if name in seen_modifiers:
+                    problems.append(f"{name}= appears more than once")
+                seen_modifiers.add(name)
+                if not term.split("=", 1)[1]:
+                    problems.append(f"{name}= has no domain after it")
+            continue
+        qualifier = term[0] if term[0] in "+-~?" else "+"
+        body = term[1:] if term[0] in "+-~?" else term
+        mech, _, target = body.partition(":")
+        mech = mech.split("/", 1)[0].lower()
+        if mech not in _SPF_MECHANISMS:
+            problems.append(f'"{term}" isn\'t a valid SPF term')
+            continue
+        if mech in _SPF_NEEDS_TARGET and not target:
+            problems.append(f'"{term}" is missing the address or domain after "{mech}:"')
+            continue
+        if mech in ("ip4", "ip6"):
+            try:
+                net = ipaddress.ip_network(target, strict=False)
+                if net.version != (4 if mech == "ip4" else 6):
+                    raise ValueError
+            except ValueError:
+                problems.append(f'"{term}" isn\'t a valid {"IPv4" if mech == "ip4" else "IPv6"} address')
+        if mech == "all":
+            all_qualifier = qualifier
+    return problems, all_qualifier
 
 
 def _spf_tree(domain, timeout, depth, seen):
@@ -121,22 +163,35 @@ def _spf_tree(domain, timeout, depth, seen):
     about what counts.
     """
     node = {"domain": domain, "record": None, "status": "ok", "own": 0,
-            "total": 0, "children": [], "note": None}
+            "total": 0, "children": [], "note": None, "problems": [], "all": None}
 
     if depth > 10 or domain in seen:
         return node
     seen.add(domain)
 
-    record = _spf_record_for(domain, timeout)
-    if record is None:
+    records = _spf_records_for(domain, timeout)
+    if records is None:
         node["status"] = "lookup_failed"
         node["note"] = f"could not fetch SPF record for {domain}"
         return node
-    if record == "":
+    if not records:
         if not depth:
             node["status"] = "missing"
+        else:
+            # RFC 7208 section 5.2: an include (or redirect) pointing at a
+            # name with no SPF record is a permerror, which breaks the record
+            # that includes it -- not a harmless no-op.
+            node["problems"].append(f"{domain} has no SPF record, so including it breaks SPF (RFC 7208 section 5.2)")
         return node
+    if len(records) > 1:
+        node["problems"].append(f"{domain} publishes {len(records)} SPF records; receivers then treat SPF as "
+                                f"broken and use none of them (RFC 7208 section 4.5)")
+    record = records[0]
     node["record"] = record
+    problems, node["all"] = spf_term_problems(record)
+    node["problems"] += [f"{domain}: {p}" for p in problems]
+    # redirect= is only used when the record has no `all` (RFC 7208 section 6.1).
+    follow_redirect = node["all"] is None
 
     for token in record.split()[1:]:
         if token.startswith(("+", "-", "~", "?")):
@@ -144,11 +199,14 @@ def _spf_tree(domain, timeout, depth, seen):
 
         if "=" in token:
             key, _, target = token.partition("=")
-            if key.lower() == "redirect" and target:
+            if key.lower() == "redirect" and target and follow_redirect:
                 node["own"] += 1
                 child = _spf_tree(target, timeout, depth + 1, seen)
                 child["via"] = "redirect"
                 node["children"].append(child)
+                node["problems"] += child.get("problems", [])
+                if child.get("all") is not None:
+                    node["all"] = child["all"]  # the redirect target's `all` is the effective one
                 if child["status"] == "lookup_failed":
                     node["status"] = "lookup_failed"
                     node["note"] = child["note"]
@@ -164,6 +222,7 @@ def _spf_tree(domain, timeout, depth, seen):
             child = _spf_tree(target, timeout, depth + 1, seen)
             child["via"] = "include"
             node["children"].append(child)
+            node["problems"] += child.get("problems", [])
             if child["status"] == "lookup_failed":
                 node["status"] = "lookup_failed"
                 node["note"] = child["note"]
@@ -185,10 +244,18 @@ def _spf_tree(domain, timeout, depth, seen):
 def _tree_to_result(domain, tree):
     """Same (count, status, note) shape count_spf_lookups returns, from an
     already-computed tree -- so run_compliance_checks keeps its existing
-    logic while traversing DNS only once."""
+    logic while traversing DNS only once. Adds two statuses: "invalid" (a
+    permerror anywhere in the tree, so receivers treat SPF as broken) and
+    "pass_all" (+all: every server in the world is approved)."""
     count, status, note = tree["total"], tree["status"], tree["note"]
     if status in ("lookup_failed", "missing"):
         return count, status, note or (f"no SPF (v=spf1) record found at {domain}" if status == "missing" else None)
+    problems = list(dict.fromkeys(tree.get("problems") or []))
+    if problems:
+        return count, "invalid", "SPF is broken: " + "; ".join(problems)
+    if tree.get("all") == "+":
+        return count, "pass_all", (f"{domain}'s SPF ends in +all, which approves every server in the world to "
+                                   f"send as this domain -- the record protects nothing")
     return count, "ok", None
 
 
@@ -208,11 +275,7 @@ def count_spf_lookups(domain: str, timeout: float = 5.0):
     """Returns (lookup_count, status, note). status: 'ok'|'missing'|'lookup_failed'.
     Kept as-is for existing callers; now derived from the tree so there is one
     traversal and one set of DNS queries, not two that could disagree."""
-    tree = spf_lookup_tree(domain, timeout)
-    count, status, note = tree["total"], tree["status"], tree["note"]
-    if status in ("lookup_failed", "missing"):
-        return count, status, note or (f"no SPF (v=spf1) record found at {domain}" if status == "missing" else None)
-    return count, "ok", None
+    return _tree_to_result(domain, spf_lookup_tree(domain, timeout))
 
 
 def flatten_spf_tree(node, depth=0, out=None):
@@ -318,7 +381,8 @@ def check_dkim_key(selector: str, signing_domain: str, min_bits: int, timeout: f
     if bits < min_bits:
         return "weak", bits, f"{bits}-bit RSA key at {name} -- below Gmail's {min_bits}-bit minimum"
     if bits < 2048:
-        return "ok", bits, f"{bits}-bit RSA key at {name} -- meets the minimum, but Google recommends 2048-bit"
+        return "ok", bits, (f"{bits}-bit RSA key at {name} -- short: still accepted, but replace it with a "
+                            f"2048-bit key when convenient")
     return "ok", bits, f"{bits}-bit RSA key at {name}"
 
 
@@ -412,7 +476,7 @@ def _run_ptr(conn, settings, recheck_hours, verbose):
                     f"{domain_name}: sending IP {source_ip} has a PTR/reverse-DNS problem",
                     ctx["detail"],
                 )
-        else:
+        elif status != "lookup_failed":
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                    WHERE category='ptr_issue' AND ref_key=? AND status='open'""",
@@ -468,7 +532,7 @@ def _run_spf(conn, settings, recheck_hours, warn_threshold, verbose):
         valid_by_domain.setdefault(domain_id, set()).add(spf_domain)
     for it in conn.execute(
         "SELECT DISTINCT domain_id, ref_key, category FROM action_items "
-        "WHERE category IN ('spf_lookup_limit', 'spf_missing') AND status='open'"
+        "WHERE category IN ('spf_lookup_limit', 'spf_missing', 'spf_invalid', 'spf_pass_all') AND status='open'"
     ).fetchall():
         if it["ref_key"] not in valid_by_domain.get(it["domain_id"], set()):
             conn.execute(
@@ -496,7 +560,14 @@ def _run_spf(conn, settings, recheck_hours, warn_threshold, verbose):
             if count > 10:
                 status, note = "over_limit", f"{count} DNS lookups (SPF allows max 10) -- SPF is likely failing silently"
             elif count >= warn_threshold:
-                status, note = "warn", f"{count} DNS lookups (limit 10) -- getting close to the limit"
+                # Still valid -- a heads-up, not a fault: one more service
+                # added to the record is what would break it. Naming the
+                # costliest include says what to look at first.
+                biggest = max(trees[spf_domain].get("children") or [], key=lambda c: c["total"], default=None)
+                costliest = (f"; {biggest['via']}:{biggest['domain']} uses the most ({biggest['total']})"
+                             if biggest and biggest["total"] else "")
+                status, note = "warn", (f"{count} DNS lookups of 10 -- still valid, but adding one more sending "
+                                        f"service could break it{costliest}")
             else:
                 note = f"{count} DNS lookups (limit 10)"
 
@@ -534,13 +605,28 @@ def _run_spf(conn, settings, recheck_hours, warn_threshold, verbose):
             )
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
-                   WHERE category='spf_missing' AND ref_key=? AND status='open'""",
+                   WHERE category IN ('spf_missing', 'spf_invalid', 'spf_pass_all') AND ref_key=? AND status='open'""",
                 (spf_domain,),
             )
-        else:
+        elif status in ("invalid", "pass_all"):
+            category = "spf_invalid" if status == "invalid" else "spf_pass_all"
+            title = (f"{domain_name}: SPF record at {spf_domain} is broken, so receivers ignore it"
+                     if status == "invalid" else
+                     f"{domain_name}: SPF record at {spf_domain} approves every server (+all)")
+            upsert_system_action(conn, domain_id, category, spf_domain, title, note)
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
-                   WHERE category IN ('spf_lookup_limit', 'spf_missing') AND ref_key=? AND status='open'""",
+                   WHERE category IN ('spf_missing', 'spf_lookup_limit', 'spf_invalid', 'spf_pass_all')
+                     AND category != ? AND ref_key=? AND status='open'""",
+                (category, spf_domain),
+            )
+        elif status != "lookup_failed":
+            # A failed lookup is "couldn't check": it must not clear an item
+            # that may well still be true (it used to dismiss them).
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE category IN ('spf_lookup_limit', 'spf_missing', 'spf_invalid', 'spf_pass_all')
+                     AND ref_key=? AND status='open'""",
                 (spf_domain,),
             )
 
@@ -631,7 +717,7 @@ def _run_dkim(conn, recheck_hours, min_bits, verbose, settings):
                 conn, domain_id, "dkim_weak_key", ref_key,
                 f"{domain_name}: DKIM record for selector {selector} is missing", note,
             )
-        else:
+        elif status != "lookup_failed":
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                    WHERE category='dkim_weak_key' AND ref_key=? AND status='open'""",

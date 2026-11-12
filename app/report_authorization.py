@@ -40,9 +40,9 @@ closes it for all of them.
 
 import argparse
 import re
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
+from app import dns_lookup
 from app.analysis import all_domains, ensure_default_settings, upsert_system_action
 from app.db import get_connection, init_db
 
@@ -53,30 +53,12 @@ MAX_WORKERS = 10
 _MAILTO_RE = re.compile(r"^\s*mailto:([^@!\s]+)@([^!\s,]+)", re.IGNORECASE)
 
 
-def _txt(name: str, timeout: float = 5.0):
+def _txt(name: str, timeout: float = 6.0):
     """TXT record strings for `name`, or None if the lookup itself failed.
     An empty list means "looked it up, nothing there" -- a real answer, and
-    distinct from a network failure, which must never be reported as missing
-    consent."""
-    try:
-        out = subprocess.run(
-            ["dig", "+short", "TXT", name],
-            capture_output=True, text=True, timeout=timeout, check=False,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if out.returncode != 0:
-        return None
-    values = []
-    for line in out.stdout.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # dig prints TXT values quoted, and splits strings over 255 chars into
-        # several adjacent quoted chunks that are meant to be concatenated.
-        parts = re.findall(r'"((?:[^"\\]|\\.)*)"', line)
-        values.append("".join(parts) if parts else line)
-    return values
+    distinct from a network failure or SERVFAIL, which must never be reported
+    as missing consent."""
+    return dns_lookup.txt(name, timeout)
 
 
 def destination_domains(rua_value: str, own_domain: str) -> list:

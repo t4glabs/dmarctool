@@ -11,37 +11,19 @@ for others (friends/clients) -- not the daily/weekly DMARC flow the main
 dashboard is for.
 """
 
-import re
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
+from app import dns_lookup
 from app.config import get_secret
 from app.mailgun import fetch_stats as mailgun_fetch_stats, list_mailgun_domains
 from app.postmaster import _refresh_access_token, fetch_compliance, fetch_stats as postmaster_fetch_stats, list_verified_domains
 
-_TXT_QUOTE_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
-
-
-def _has_dmarc(domain: str, timeout: float = 5.0):
+def _has_dmarc(domain: str, timeout: float = 6.0):
     """True/False, or None if the lookup itself failed (not the same as "no record")."""
-    try:
-        out = subprocess.run(
-            ["dig", "+time=3", "+tries=2", "TXT", f"_dmarc.{domain}", "+short"],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    records = dns_lookup.txt(f"_dmarc.{domain}", timeout)
+    if records is None:
         return None
-    if out.returncode != 0:
-        return None
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = _TXT_QUOTE_RE.findall(line)
-        txt = "".join(parts) if parts else line
-        if txt.lower().startswith("v=dmarc1"):
-            return True
-    return False
+    return any(r.lower().startswith("v=dmarc1") for r in records)
 
 
 def build_watchlist(conn):

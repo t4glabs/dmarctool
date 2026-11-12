@@ -153,22 +153,29 @@ def spf_dkim_verdict(spf_checks, dkim_checks):
     if not spf_checks and not dkim_checks:
         return "muted", "Not checked yet -- run checks from the overview page."
 
-    issues = []
+    issues, headsups = [], []
     for c in spf_checks:
-        if c["status"] in ("over_limit", "missing"):
+        if c["status"] in ("over_limit", "missing", "invalid", "pass_all"):
             issues.append(f"SPF for {c['spf_domain']}: {c['note']}")
         elif c["status"] == "warn":
-            issues.append(f"SPF for {c['spf_domain']} is close to the 10-lookup limit ({c['lookup_count']})")
+            # 8-10 lookups is still valid SPF: a heads-up, not a fault.
+            headsups.append(f"SPF for {c['spf_domain']}: {c['note']}")
     for c in dkim_checks:
         if c["status"] in ("weak", "missing"):
             issues.append(f"DKIM {c['selector']}._domainkey.{c['signing_domain']}: {c['note']}")
+        elif c["status"] == "ok" and c["key_bits"] and c["key_bits"] < 2048:
+            headsups.append(f"DKIM {c['selector']}._domainkey.{c['signing_domain']} uses a short "
+                            f"{c['key_bits']}-bit key: replace it with a 2048-bit key when convenient")
 
-    if not issues:
+    if not issues and not headsups:
         total = len(spf_checks) + len(dkim_checks)
         return "ok", f"✅ All {total} SPF/DKIM check(s) look healthy."
-    shown = "; ".join(issues[:2])
-    more = f" (+{len(issues) - 2} more)" if len(issues) > 2 else ""
-    return "bad", f"⚠️ {shown}{more}."
+    listed = issues or headsups
+    shown = "; ".join(listed[:2])
+    more = f" (+{len(listed) - 2} more)" if len(listed) > 2 else ""
+    if issues:
+        return "bad", f"⚠️ {shown}{more}."
+    return "warn", f"Heads-up: {shown}{more}."
 
 
 def report_auth_verdict(report_auth):

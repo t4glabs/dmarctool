@@ -36,7 +36,6 @@ and doesn't hit the network again.
 import re
 import smtplib
 import socket
-import subprocess
 import time
 
 _SYNTAX_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._%+\-]*[A-Za-z0-9])?@[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$")
@@ -83,17 +82,12 @@ def mx_lookup(domain: str, timeout: float = 5.0):
     or None if the lookup itself failed (network issue, not a real answer --
     same "None means try again" distinction every dig-based check in this
     project already makes)."""
-    try:
-        out = subprocess.run(
-            ["dig", "+short", "+time=3", "+tries=2", "MX", domain],
-            capture_output=True, text=True, timeout=timeout, check=False,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if out.returncode != 0:
+    from app import dns_lookup
+    lines = dns_lookup.lookup(["MX", domain], max(timeout, 6.0))
+    if lines is None:
         return None
     records = []
-    for line in out.stdout.strip().splitlines():
+    for line in lines:
         parts = line.strip().rstrip(".").split()
         if len(parts) == 2:
             try:

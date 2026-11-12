@@ -129,6 +129,28 @@ _PROBLEM_STORY = {
     # taken care of it" resolved list -- see _RESOLVED_EXCLUDED_CATEGORIES.
     "lookalike_domain": ("we spotted a web address deliberately registered to look like yours -- the kind that can "
                           "be used to trick your supporters -- and we're keeping an eye on what it does"),
+    # Added 2026-11-12 with the checks matched to aikyam's public check site
+    # (jev/DECISIONS_LOG.md, same date): the public report and this one must
+    # never disagree about the same DNS. Each tested at or above the shipped
+    # spf_missing/dns_missing baseline (~50% clear_as_is) with better honesty.
+    "dmarc_record_invalid": ("the setting that tells mail services to turn away fake emails using your name had a "
+                             "mistake in it, so mail services couldn't use it and weren't turning those fakes away"),
+    "dmarc_subdomains_open": ("your main web address is protected against fake emails, but one setting left "
+                              "variations of it (like news.yourname.org) unprotected, so a fake email from one of "
+                              "those would still get through"),
+    "spf_invalid": ("one of your email settings had a mistake in it, so mail services couldn't use it to check that "
+                    "your emails really come from you"),
+    "spf_pass_all": ("your email settings were telling mail services that any computer in the world is allowed to "
+                     "send email as you"),
+    "domain_expiry_urgent": "your website's domain name is about to run out, or already has",
+    "domain_status_alert": ("the company that runs your domain name put it on hold or marked it as lapsed, which "
+                            "takes your website and email offline"),
+    "transfer_lock_off": ("the lock that stops your domain name being moved to another company without your say-so "
+                          "was switched off"),
+    "cert_expiring_soon": ("the certificate behind the padlock on your website stopped renewing itself and is close "
+                           "to running out, or already has"),
+    "domain_blocklisted": ("your web address ended up on a public list of addresses that spam filters distrust, so "
+                           "emails with your address in them could land in spam"),
 }
 
 # These are operator-facing/internal signals about Aikyam's own workflow or
@@ -161,6 +183,10 @@ _OPERATOR_ONLY_CATEGORIES = {
     # suppressions (added 2026-09-23 after a live Jev audit found a real
     # 220-address cleanup was invisible in every report).
     "rua_unauthorized", "ses_event_backlog", "postmaster_domain_missing", "chronic_transient_bounce",
+    # dmarc_no_rua: the record names nowhere to send reports, which only
+    # matters to Aikyam's own monitoring (no data reaches Vigil); the org's
+    # protection is unchanged by it.
+    "dmarc_no_rua",
 }
 
 # Categories that are real and worth telling a beneficiary about, but never
@@ -190,6 +216,12 @@ _URGENT_STILL_OPEN_CATEGORIES = {
     # Chapter 11 confirmed real, sustained (144/156-day) cases exist. Both
     # added for consistency with the reasoning already applied above.
     "spf_missing", "borrowed_sending_identity",
+    # 2026-11-12: protection that isn't working at all, a domain or website
+    # about to go dark, or the address itself distrusted by spam filters.
+    # transfer_lock_off and dmarc_subdomains_open are deliberately not here:
+    # real, but not something a reader needs to call about.
+    "dmarc_record_invalid", "spf_invalid", "spf_pass_all", "domain_expiry_urgent", "domain_status_alert",
+    "cert_expiring_soon", "domain_blocklisted",
 }
 
 # Gmail/Postmaster's own calibration points, reused from the same thresholds
@@ -247,6 +279,15 @@ _TIP_LIBRARY = {
     "mta_sts_broken": "aikyam fixes this at the technical level directly, so no changes are needed from you.",
     "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link -- most newsletter tools have a single setting for this.",
     "display_name_inconsistent": "Keep your newsletter's \"from\" name consistent and clearly recognisable as your organization across every email you send.",
+    "dmarc_record_invalid": "aikyam corrects this in your website's settings, so there's nothing for you to change.",
+    "dmarc_subdomains_open": "aikyam will change this one setting for you, so the other versions of your address get the same protection as the main one.",
+    "spf_invalid": "aikyam fixes this in your website's settings, with nothing needed on your end.",
+    "spf_pass_all": "aikyam changes the end of this list so that only the services you really use are approved.",
+    "domain_expiry_urgent": "Please renew it today with whoever you registered it through. Most let you do it online in a few minutes.",
+    "domain_status_alert": "Contact whoever you registered your domain through today and ask why it's on hold. If you're not sure who that is, aikyam can find out for you.",
+    "transfer_lock_off": "Log in wherever you registered your domain and switch on the transfer lock (sometimes called domain lock or registrar lock). It takes a minute and costs nothing.",
+    "cert_expiring_soon": "Let whoever looks after your website know. Renewing it is usually one button in their hosting dashboard.",
+    "domain_blocklisted": "aikyam will find out why it was listed and ask for it to be removed. If your website was changed or hacked recently, please let us know.",
 }
 _CONSISTENCY_TIP = ("Try sending your newsletter on the same day of the week or month each time. A predictable "
                      "rhythm helps mailbox providers trust your mail more, and helps your readers know when to "
@@ -695,13 +736,19 @@ def _domain_expiry_detail(conn, domain_id: int):
     item -- same "make it concrete, not just a generic phrase" discipline as
     _reputation_rate_detail. Returns None if the latest check somehow has no
     expires_at (shouldn't happen if the item is open, but never guess)."""
+    # Latest SUCCESSFUL check: a failed lookup no longer clears the item, so
+    # the newest row can be an error while the warning is still true.
     row = conn.execute(
-        "SELECT expires_at FROM domain_expiry_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 1",
+        "SELECT expires_at FROM domain_expiry_checks WHERE domain_id=? AND status='ok' ORDER BY checked_at DESC LIMIT 1",
         (domain_id,),
     ).fetchone()
     if not row or not row["expires_at"]:
         return None
     days_left = days_until(row["expires_at"])
+    if days_left < 0:
+        return f"It expired on {row['expires_at']}, {-days_left} day{'s' if days_left != -1 else ''} ago"
+    if days_left == 0:
+        return f"It expires today, {row['expires_at']}"
     return f"It's due to expire on {row['expires_at']}, which is {days_left} day{'s' if days_left != 1 else ''} away"
 
 
@@ -977,7 +1024,7 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
         detail = None
         if category in (_MAILGUN_RATE_IMPACT_CATEGORIES | _SES_RATE_IMPACT_CATEGORIES) and ref_key:
             detail = _reputation_rate_detail(conn, category, ref_key, start_str, end_str)
-        elif category == "domain_expiring_soon":
+        elif category in ("domain_expiring_soon", "domain_expiry_urgent"):
             detail = _domain_expiry_detail(conn, domain_id)
         elif category == "borrowed_sending_identity":
             detail = _borrowed_identity_detail(conn, domain_id)
@@ -1072,6 +1119,15 @@ _STILL_OPEN_SHORT_LABEL = {
     "display_name_inconsistent": "Inconsistent \"from\" name",
     "lookalike_domain": "Look-alike address registered",
     "chronic_transient_bounce": "Addresses stuck bouncing",
+    "dmarc_record_invalid": "Protection setting unreadable",
+    "dmarc_subdomains_open": "Address variations unprotected",
+    "spf_invalid": "Email setting has a mistake",
+    "spf_pass_all": "Anyone allowed to send as you",
+    "domain_expiry_urgent": "Domain renewal due now",
+    "domain_status_alert": "Domain on hold or lapsed",
+    "transfer_lock_off": "Domain lock switched off",
+    "cert_expiring_soon": "Website padlock running out",
+    "domain_blocklisted": "Web address on a spam list",
 }
 
 
@@ -2066,6 +2122,15 @@ _WHY_IT_MATTERS = {
     "subject_spam_risk": "Wording alone can be enough to land a newsletter in spam rather than the inbox.",
     "sending_cadence_irregular": "A steady rhythm is part of how mailbox providers decide to trust your mail.",
     "domain_expiring_soon": "If a domain lapses, your website and every email address on it stop working the same day.",
+    "dmarc_record_invalid": "Until it's fixed, a fake email using your name has a much easier time reaching your supporters.",
+    "dmarc_subdomains_open": "A scammer only needs one unprotected version of your name to email your supporters convincingly.",
+    "spf_invalid": "This list is part of how mail services tell your real emails from fakes, so while it's unreadable your genuine mail is easier to doubt.",
+    "spf_pass_all": "As it stands, it vouches for anyone who sends email in your name, including someone pretending to be you.",
+    "domain_expiry_urgent": "The day it lapses, your website and every email address on it stop working, and after a short grace period anyone can buy the name.",
+    "domain_status_alert": "While it stays this way, emails sent to you bounce, and a lapsed name can be bought by someone else.",
+    "transfer_lock_off": "It's free, and one of the simplest ways to make sure nobody can take your web address away from you.",
+    "cert_expiring_soon": "Once it runs out, visitors see a full-page browser warning instead of your site, and most of them leave.",
+    "domain_blocklisted": "While it's on that list, even your genuine newsletters can go to spam just for linking to your own website.",
     "spf_lookup_limit": "This is part of what proves an email really came from you, so it's worth keeping it working cleanly.",
     "dkim_weak_key": "This is the signature a funder's mail system uses to confirm your message is genuinely yours.",
     # Reworded 2026-09-24 (Chapter 18) to add real information instead of

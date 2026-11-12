@@ -14,18 +14,16 @@ format and none of the currently tracked senders use IPv6.
 import argparse
 import datetime
 import ipaddress
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analysis import ensure_default_settings, eligible_known_senders, sender_ip_context, upsert_system_action
+from app import dnsbl
+from app.analysis import all_domains, ensure_default_settings, eligible_known_senders, sender_ip_context, upsert_system_action
 from app.db import get_connection, init_db
+from app.public_suffix import registrable_domain
 
 MAX_WORKERS = 10
 
-DNSBL_ZONES = {
-    "zen.spamhaus.org": "Spamhaus ZEN",
-    "b.barracudacentral.org": "Barracuda BRBL",
-}
+DNSBL_ZONES = dnsbl.IP_ZONES
 
 
 def _reversed_ip(ip: str):
@@ -39,36 +37,30 @@ def _reversed_ip(ip: str):
 
 
 def check_ip(ip: str, timeout: float = 5.0):
-    """Query each configured DNSBL for `ip`. Returns (status, listed_on, note)."""
+    """Query each configured DNSBL for `ip`. Returns (status, listed_on, note).
+
+    status: listed | minor (only an end-user-range PBL entry -- not a
+    reputation listing, so no alert) | clean | lookup_failed. Answers are read
+    by app/dnsbl.py: a refusal code or a zone failing its own self-test is
+    "couldn't check", never "listed" or "clean"."""
     reversed_ip = _reversed_ip(ip)
     if reversed_ip is None:
         return "lookup_failed", None, "not an IPv4 address -- skipped (IPv6 DNSBL lookups not supported yet)"
 
-    listed, failed = [], []
-    for zone, label in DNSBL_ZONES.items():
-        try:
-            out = subprocess.run(
-                ["dig", "+short", "+time=3", "+tries=2", "A", f"{reversed_ip}.{zone}"],
-                capture_output=True, text=True, timeout=timeout,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            failed.append(label)
-            continue
-        if out.returncode != 0:
-            failed.append(label)
-            continue
-        if out.stdout.strip():
-            listed.append(label)
-
+    res = dnsbl.check(reversed_ip, DNSBL_ZONES)
+    listed, failed = res["listed"], res["failed"]
     if listed:
         return "listed", listed, f"listed on: {', '.join(listed)}"
     if failed:
-        # A zone that failed to respond wasn't actually checked -- treating this
-        # as "clean" would risk silently clearing a real listing on the zone that
-        # timed out. Inconclusive either way, so don't claim clean or listed.
-        note = ("all blocklist lookups failed (network/dig error)" if len(failed) == len(DNSBL_ZONES)
-                else f"lookup incomplete -- {', '.join(failed)} failed to respond, no listing found on the rest")
+        # A zone that failed to respond (or failed its self-test) wasn't
+        # actually checked -- treating this as "clean" would risk silently
+        # clearing a real listing on that zone. Inconclusive either way.
+        why = "; ".join(f"{label}: {reason}" for label, reason in failed)
+        note = (f"couldn't check any blocklist ({why})" if len(failed) == len(DNSBL_ZONES)
+                else f"lookup incomplete ({why}); no listing found on the rest")
         return "lookup_failed", None, note
+    if res["minor"]:
+        return "minor", None, "; ".join(f"{label}: {detail}" for label, detail in res["minor"])
     return "clean", None, "not listed"
 
 
@@ -149,7 +141,7 @@ def run_blocklist_checks(conn, verbose: bool = True) -> None:
                     f"{domain_name}: sending IP {source_ip} is on a blocklist",
                     ctx["detail"],
                 )
-        elif status == "clean":
+        elif status in ("clean", "minor"):
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                    WHERE category='blocklist' AND ref_key=? AND status='open'""",
@@ -164,12 +156,86 @@ def run_blocklist_checks(conn, verbose: bool = True) -> None:
             print(f"({skipped} IP(s) skipped -- checked within the last {recheck_hours}h)")
 
 
+def _website_domains(conn):
+    """{domain_id: registered domain} -- one entry per registered domain, on
+    the domain itself when tracked, else on the tracked subdomain standing
+    for it. Domain blocklists list registered domains, not subdomains."""
+    domains = all_domains(conn)
+    tracked = {d["name"] for d in domains}
+    out = {}
+    for d in domains:
+        reg = registrable_domain(d["name"])
+        if (d["name"] == reg or reg not in tracked) and reg not in out.values():
+            out[d["id"]] = reg
+    return out
+
+
+def check_domain(domain: str):
+    """(status, listed_on, note) for the domain itself on the domain
+    blocklists -- the lists spam filters check every link and sender domain
+    in a message against, which is how a listed domain gets mail to spam even
+    when every sending IP is clean."""
+    res = dnsbl.check(domain, dnsbl.DOMAIN_ZONES)
+    if res["listed"]:
+        return "listed", res["listed"], f"listed on: {', '.join(res['listed'])}"
+    if res["failed"]:
+        why = "; ".join(f"{label}: {reason}" for label, reason in res["failed"])
+        return "lookup_failed", None, (f"couldn't check any domain blocklist ({why})"
+                                       if len(res["failed"]) == len(dnsbl.DOMAIN_ZONES)
+                                       else f"lookup incomplete ({why}); not listed on the rest")
+    if res["minor"]:
+        return "minor", None, "; ".join(f"{label}: {detail}" for label, detail in res["minor"])
+    return "clean", None, "not listed"
+
+
+def run_domain_blocklist_checks(conn, verbose: bool = True) -> None:
+    settings = ensure_default_settings(conn)
+    recheck_hours = int(settings["blocklist_recheck_hours"])
+    targets = _website_domains(conn)
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(hours=recheck_hours)).strftime("%Y-%m-%d %H:%M:%S")
+    fresh = {r["domain_id"] for r in conn.execute(
+        "SELECT domain_id FROM domain_blocklist_checks GROUP BY domain_id HAVING MAX(checked_at) >= ?", (cutoff,))}
+    to_check = {did: name for did, name in targets.items() if did not in fresh}
+    if not to_check:
+        if verbose:
+            print("[domain blocklist] all domains checked recently, skipping")
+        return
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(to_check))) as ex:
+        results = dict(zip(to_check, ex.map(check_domain, to_check.values())))
+    for domain_id, (status, listed_on, note) in results.items():
+        name = to_check[domain_id]
+        conn.execute(
+            "INSERT INTO domain_blocklist_checks (domain_id, domain, status, listed_on, note) VALUES (?,?,?,?,?)",
+            (domain_id, name, status, ",".join(listed_on) if listed_on else None, note),
+        )
+        if verbose:
+            print(f"[domain blocklist] {name}: {status} -- {note}")
+        if status == "listed":
+            upsert_system_action(
+                conn, domain_id, "domain_blocklisted", name,
+                f"{name}: the domain itself is on a domain blocklist ({', '.join(listed_on)})",
+                (f"{name} is listed on {', '.join(listed_on)}. Spam filters check every link and sender "
+                 f"domain in a message against these lists, so mail mentioning {name} can go to spam even "
+                 f"when every sending server is clean. Each list has a lookup and removal page; find out why "
+                 f"it was listed (a hacked page on the website, a link in a newsletter) before asking for "
+                 f"removal."),
+            )
+        elif status != "lookup_failed":
+            conn.execute(
+                """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
+                   WHERE domain_id=? AND category='domain_blocklisted' AND status='open'""",
+                (domain_id,),
+            )
+    conn.commit()
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Check known sending IPs against public DNS blocklists")
+    parser = argparse.ArgumentParser(description="Check known sending IPs (and each domain itself) against public DNS blocklists")
     parser.parse_args()
     conn = get_connection()
     init_db(conn)
     run_blocklist_checks(conn)
+    run_domain_blocklist_checks(conn)
 
 
 if __name__ == "__main__":

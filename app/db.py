@@ -38,6 +38,17 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_PATH.read_text())
+    _ensure_columns(conn, "lookalike_domains", {
+        "ns_hosts": "TEXT",
+        "registered_at": "TEXT",        # YYYY-MM-DD from RDAP/WHOIS, NULL if unknown
+        "redirects_to_own": "INTEGER",  # its website redirects to the organisation's own site
+        "shares_ns": "INTEGER",         # same nameservers as the organisation's domain
+        "verdict": "TEXT",              # recent | established | own | no_mail | unknown (see lookalike.py)
+    })
+    _ensure_columns(conn, "domain_expiry_checks", {
+        "statuses": "TEXT",       # comma-separated EPP status codes (clientTransferProhibited, clientHold...)
+        "registered_at": "TEXT",  # YYYY-MM-DD, from RDAP/WHOIS
+    })
     _ensure_columns(conn, "ses_campaign_recipients", {
         "bounced": "INTEGER NOT NULL DEFAULT 0",
         "bounce_reason": "TEXT",

@@ -130,7 +130,8 @@
     <span>
       {% if src.blocklist %}
         {% if src.blocklist.status == 'listed' %}<span class="badge bad" title="{{ src.blocklist.note }}">Listed</span>
-        {% elif src.blocklist.status == 'lookup_failed' %}<span class="badge muted">Couldn't check</span>
+        {% elif src.blocklist.status == 'lookup_failed' %}<span class="badge muted" title="{{ src.blocklist.note }}">Couldn't check</span>
+        {% elif src.blocklist.status == 'minor' %}<span class="badge muted" title="{{ src.blocklist.note }}">Not listed for spam</span> <span class="muted">{{ src.blocklist.note }}</span>
         {% else %}<span class="badge ok" title="{{ src.blocklist.note }}">Clean</span>{% endif %}
       {% else %}<span class="muted">Not checked yet</span>{% endif %}
     </span>

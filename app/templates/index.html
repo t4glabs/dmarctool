@@ -177,7 +177,7 @@
         {% if overview.recipient_blocks %}<div class="cc-secrow"><span class="csr-lbl" title="Your own mail, changed on the way by a recipient's email-security filter or forwarding, then blocked or spam-foldered under your DMARC policy. Nothing to change on your side; the recipient's IT can fix it. Click for who it was going to.">Your mail blocked at the recipient's end</span><span>{% for b in overview.recipient_blocks %}<a href="/source/{{ b.ip }}" class="cc-badge-muted" title="{{ b.hit }} blocked in 90 days, going to {{ b.recipients|join(', ') }}">{{ b.domain }} &rarr; {{ b.recipients[0] }}{% if b.recipients|length > 1 %} +{{ b.recipients|length - 1 }}{% endif %}{% if b.gateway %} ({{ b.gateway.split(' (')[0] }}){% endif %}</a>{% endfor %}</span></div>{% endif %}
         {% if overview.no_dmarc %}<div class="cc-secrow"><span class="csr-lbl" title="No DMARC record at all">No DMARC record</span><span>{% for name in overview.no_dmarc %}<a href="/domain/{{ name }}" class="cc-badge-bad">{{ name }}</a>{% endfor %}</span></div>{% endif %}
         {% if overview.weakened %}<div class="cc-secrow"><span class="csr-lbl" title="Live DNS enforces less than the last known-good baseline">Protection weakened</span><span>{% for name in overview.weakened %}<a href="/domain/{{ name }}" class="cc-badge-bad">{{ name }}</a>{% endfor %}</span></div>{% endif %}
-        {% if overview.expiring_soon %}<div class="cc-secrow"><span class="csr-lbl" title="Registration close to expiring">Registration expiring</span><span>{% for d in overview.expiring_soon %}<a href="/domain/{{ d.name }}" class="cc-badge-bad">{{ d.name }} ({{ d.days_left }}d)</a>{% endfor %}</span></div>{% endif %}
+        {% if overview.expiring_soon %}<div class="cc-secrow"><span class="csr-lbl" title="Registration close to expiring">Registration expiring</span><span>{% for d in overview.expiring_soon %}<a href="/domain/{{ d.name }}" class="cc-badge-bad">{{ d.name }} ({% if d.days_left < 0 %}expired{% else %}{{ d.days_left }}d{% endif %})</a>{% endfor %}</span></div>{% endif %}
         {% if overview.suspicious_by_ip %}<div class="cc-secrow"><span class="csr-lbl" title="IPs flagged suspicious while reviewing a domain">Flagged sender IPs</span><span>{% for ip, names in overview.suspicious_by_ip.items() %}<span class="cc-badge-warn" title="{{ names|join(', ') }}">{{ ip }}</span>{% endfor %}</span></div>{% endif %}
         {% if overview.mta_sts_broken %}<div class="cc-secrow"><span class="csr-lbl" title="MTA-STS advertised but the policy file is broken">MTA-STS misconfigured</span><span>{% for name in overview.mta_sts_broken %}<a href="/domain/{{ name }}" class="cc-badge-warn">{{ name }}</a>{% endfor %}</span></div>{% endif %}
         {% if overview.stale %}<div class="cc-secrow"><span class="csr-lbl" title="No fresh DMARC reports in a while">No fresh reports</span><span>{% for name in overview.stale %}<a href="/domain/{{ name }}" class="cc-badge-muted">{{ name }}</a>{% endfor %}</span></div>{% endif %}
@@ -256,7 +256,7 @@
   <div class="cc-grid" id="domain-grid">
     {% for d in domains %}
     {% set has_issues = d.open_counts and d.open_counts.values()|sum > 0 %}
-    {% set dns_bad = d.dns_status in ('missing','multiple') or (d.dns_status=='ok' and not d.dns_match) %}
+    {% set dns_bad = d.dns_status in ('missing','multiple','invalid') or (d.dns_status in ('ok','inherited') and not d.dns_match) %}
     <div class="cc-card{{ ' pinned' if d.pinned else '' }}" data-domain="{{ d.name }}"
          data-pinned="{{ '1' if d.pinned else '0' }}"
          data-health="{{ d.health_score if d.health_score is not none else '' }}">
@@ -277,7 +277,7 @@
       {% if d.card_sparkline_svg %}<div class="sparkline" title="Health score, last 30 days">{{ d.card_sparkline_svg | safe }}</div>{% endif %}
 
       <div class="cc-meta">
-        <div class="cm-row"><span>Live DNS</span><span>{% if d.dns_status=='ok' %}<b>p={{ d.dns_p }} · {{ d.dns_pct }}%</b>{% elif d.dns_status=='missing' %}<b style="color:#c0392b;">no record</b>{% elif d.dns_status=='multiple' %}<b style="color:#c0392b;">conflicting</b>{% else %}not checked{% endif %}</span></div>
+        <div class="cm-row"><span>Live DNS</span><span>{% if d.dns_status in ('ok','inherited') %}<b>p={{ d.dns_p }} · {{ d.dns_pct }}%</b>{% if d.dns_status=='inherited' %} (main domain's){% endif %}{% elif d.dns_status=='invalid' %}<b style="color:#c0392b;">invalid policy</b>{% elif d.dns_status=='missing' %}<b style="color:#c0392b;">no record</b>{% elif d.dns_status=='multiple' %}<b style="color:#c0392b;">conflicting</b>{% else %}not checked{% endif %}</span></div>
         <div class="cm-row"><span>Pass rate ({{ d.window_days }}d)</span><span>{% if d.window_rate is not none %}<b{% if d.window_low_volume %} style="opacity:.6" title="Only {{ d.window_total }} messages this period -- too little volume for this percentage to mean much on its own"{% endif %}>{{ "%.1f"|format(d.window_rate*100) }}%</b> <span style="opacity:.7">({{ d.window_total }})</span>{% else %}—{% endif %}</span></div>
         <div class="cm-row"><span>Last report</span><span>{{ d.last_ingested or "never" }}</span></div>
       </div>

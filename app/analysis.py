@@ -1507,7 +1507,7 @@ def check_no_report_history(conn, domain_id: int, domain_name: str) -> list:
     just hasn't sent anything yet." Live DNS only (MX/SPF/DMARC) -- no
     report data needed, so this works even for a domain that will never
     generate one."""
-    import subprocess
+    from app import dns_lookup
     from app.dns_check import dig_txt, parse_dmarc_tags
     from app.email_verifier import mx_lookup
 
@@ -1515,19 +1515,15 @@ def check_no_report_history(conn, domain_id: int, domain_name: str) -> list:
     if mx is None:
         return []  # DNS lookup itself failed -- try again next run, not a real answer
 
-    spf_txt = None
-    try:
-        out = subprocess.run(
-            ["dig", "+short", "+time=3", "+tries=2", "TXT", domain_name],
-            capture_output=True, text=True, timeout=5.0, check=False,
-        )
-        if out.returncode == 0:
-            spf_txt = next((line.strip() for line in out.stdout.splitlines() if "v=spf1" in line), None)
-    except (subprocess.TimeoutExpired, OSError):
-        pass
+    apex_txt = dns_lookup.txt(domain_name)
+    if apex_txt is None:
+        return []  # same as the MX failure above: couldn't check, not "no SPF"
+    spf_txt = next((t for t in apex_txt if t.lower().startswith("v=spf1")), None)
 
     dmarc_records = dig_txt(domain_name)
-    dmarc_txt = next((r for r in (dmarc_records or []) if r.strip().lower().startswith("v=dmarc1")), None)
+    if dmarc_records is None:
+        return []
+    dmarc_txt = next((r for r in dmarc_records if r.strip().lower().startswith("v=dmarc1")), None)
     dmarc_tags = parse_dmarc_tags(dmarc_txt) if dmarc_txt else {}
 
     if not mx:

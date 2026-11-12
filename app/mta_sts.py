@@ -21,45 +21,47 @@ try and fail rather than just falling back to opportunistic TLS.
 import argparse
 import datetime
 import re
-import subprocess
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+from app import dns_lookup
 from app.analysis import all_domains, ensure_default_settings, upsert_system_action
 from app.db import get_connection, init_db
+from app.email_verifier import mx_lookup
 
 MAX_WORKERS = 10
 
 
-def _dig_txt(name: str, timeout: float = 5.0):
-    try:
-        out = subprocess.run(
-            ["dig", "+short", "+time=3", "+tries=2", "TXT", name],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+def _dig_txt(name: str, timeout: float = 6.0):
+    return dns_lookup.txt(name, timeout)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """RFC 8461 section 3.3: "HTTP 3xx redirects MUST NOT be followed".
+    Sending servers don't follow them, so a policy only reachable through a
+    redirect is a policy nobody applies -- urllib's default of following it
+    let Vigil call such a domain "ok"."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
-    if out.returncode != 0:
-        return None
-    records = []
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = re.findall(r'"((?:[^"\\]|\\.)*)"', line)
-        records.append("".join(parts) if parts else line)
-    return records
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
 
 
 def _fetch_policy(domain: str, timeout: float = 6.0):
-    """Best-effort GET of the MTA-STS policy file. Returns (text, error)."""
+    """GET of the MTA-STS policy file, the way a sending server does it (no
+    redirects). Returns (text, error)."""
     url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
     req = urllib.request.Request(url, headers={"User-Agent": "DMARCTool/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _opener.open(req, timeout=timeout) as resp:
             return resp.read().decode(errors="replace"), None
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            return None, (f"HTTP {e.code} redirect to {e.headers.get('Location', '?')} -- sending servers "
+                          f"must not follow redirects (RFC 8461 section 3.3), so they never see the policy")
         return None, f"HTTP {e.code}"
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
         return None, f"network error: {e}"
@@ -80,35 +82,78 @@ def _parse_policy(text: str) -> dict:
     return tags
 
 
-def check_mta_sts(domain: str, txt_records=None) -> dict:
-    """{"status": "not_set_up"|"broken"|"ok", "mode", "mx", "max_age", "note"}."""
+def mx_matches(host: str, patterns) -> bool:
+    """RFC 8461 section 4.1: a pattern matches the MX host exactly, or with a
+    leading "*." standing for exactly one leftmost label."""
+    host = host.lower().rstrip(".")
+    for pattern in patterns:
+        pattern = pattern.lower().rstrip(".")
+        if pattern.startswith("*."):
+            if "." in host and host.split(".", 1)[1] == pattern[2:]:
+                return True
+        elif host == pattern:
+            return True
+    return False
+
+
+def check_mta_sts(domain: str, txt_records=None, mx_hosts=None) -> dict:
+    """{"status": "not_set_up"|"broken"|"withdrawn"|"ok"|"lookup_failed", "mode", "mx", "max_age", "note"}.
+
+    mx_hosts: the domain's live MX hostnames (None = not known); in enforce
+    mode each must match an mx: line, or senders refuse to deliver to it."""
     if txt_records is None:
         txt_records = _dig_txt(f"_mta-sts.{domain}")
-    sts_records = [r for r in (txt_records or []) if r.lower().startswith("v=stsv1")]
+    if txt_records is None:
+        return {"status": "lookup_failed", "note": "Couldn't look up the MTA-STS DNS record this time."}
+    sts_records = [r for r in txt_records if r.lower().startswith("v=stsv1")]
 
     if not sts_records:
         return {"status": "not_set_up",
                 "note": "No MTA-STS DNS record -- optional, most domains don't have this set up yet."}
 
     policy_text, err = _fetch_policy(domain)
+    url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
     if err:
         return {"status": "broken",
-                "note": (f"DNS record exists (v=STSv1) but the policy file at "
-                         f"https://mta-sts.{domain}/.well-known/mta-sts.txt couldn't be fetched ({err}) -- "
+                "note": (f"DNS record exists (v=STSv1) but the policy file at {url} couldn't be fetched ({err}) -- "
                          f"any receiver that checks MTA-STS will find a dangling policy.")}
 
     tags = _parse_policy(policy_text)
+    if tags.get("version") != "STSv1":
+        return {"status": "broken",
+                "note": f"Policy file at {url} doesn't start with version: STSv1 (found {tags.get('version')!r}), "
+                        f"so senders discard it."}
     mode = tags.get("mode")
     if mode not in ("enforce", "testing", "none"):
         return {"status": "broken",
-                "note": (f"Policy file at https://mta-sts.{domain}/.well-known/mta-sts.txt doesn't declare a "
-                         f"valid mode -- found {mode!r}.")}
+                "note": f"Policy file at {url} doesn't declare a valid mode -- found {mode!r}."}
+    if not (tags.get("max_age") or "").isdigit():
+        return {"status": "broken",
+                "note": f"Policy file at {url} has no valid max_age (found {tags.get('max_age')!r}), so senders "
+                        f"discard it."}
+    if mode == "none":
+        # Not a test: mode none is how a domain withdraws its policy (RFC 8461
+        # section 8.3), telling senders to forget what they cached.
+        return {"status": "withdrawn", "mode": mode, "mx": tags["mx"], "max_age": tags.get("max_age"),
+                "note": "mode: none -- the policy is being withdrawn, so nothing is enforced."}
     if not tags.get("mx"):
         return {"status": "broken",
                 "note": "Policy file has no mx: entries -- receivers won't know which servers to expect TLS from."}
 
-    return {"status": "ok", "mode": mode, "mx": tags["mx"], "max_age": tags.get("max_age"),
-            "note": f"mode={mode}, {len(tags['mx'])} mx pattern(s), max_age={tags.get('max_age', '?')}s"}
+    note = f"mode={mode}, {len(tags['mx'])} mx pattern(s), max_age={tags.get('max_age')}s"
+    if mx_hosts:
+        unlisted = [h for h in mx_hosts if not mx_matches(h, tags["mx"])]
+        if unlisted and mode == "enforce":
+            return {"status": "broken", "mode": mode, "mx": tags["mx"], "max_age": tags.get("max_age"),
+                    "note": (f"mode is enforce but mail server(s) {', '.join(unlisted)} aren't covered by the "
+                             f"policy's mx: lines ({', '.join(tags['mx'])}), so senders that apply MTA-STS will "
+                             f"refuse to deliver to them.")}
+        if unlisted:
+            note += f"; {', '.join(unlisted)} not covered by an mx: line (fix before switching to enforce)"
+    elif mx_hosts is None:
+        note += "; couldn't check the policy against the live MX records this time"
+
+    return {"status": "ok", "mode": mode, "mx": tags["mx"], "max_age": tags.get("max_age"), "note": note}
 
 
 def check_tls_rpt(domain: str, txt_records=None) -> dict:
@@ -163,7 +208,9 @@ def run_mta_sts_checks(conn, verbose: bool = True) -> None:
     def _check_one(d):
         mta_sts_txt = _dig_txt(f"_mta-sts.{d['name']}")
         tls_rpt_txt = _dig_txt(f"_smtp._tls.{d['name']}")
-        return (d, check_mta_sts(d["name"], txt_records=mta_sts_txt),
+        mx = mx_lookup(d["name"]) if mta_sts_txt else []
+        mx_hosts = None if mx is None else [host for _, host in mx]
+        return (d, check_mta_sts(d["name"], txt_records=mta_sts_txt, mx_hosts=mx_hosts),
                 check_tls_rpt(d["name"], txt_records=tls_rpt_txt))
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(to_check))) as ex:
@@ -177,7 +224,7 @@ def run_mta_sts_checks(conn, verbose: bool = True) -> None:
                 f"{d['name']}: MTA-STS record exists but is broken",
                 mta_sts["note"],
             )
-        else:
+        elif mta_sts["status"] != "lookup_failed":
             conn.execute(
                 """UPDATE action_items SET status='dismissed', resolved_at=datetime('now')
                    WHERE domain_id=? AND category='mta_sts_broken' AND status='open'""",

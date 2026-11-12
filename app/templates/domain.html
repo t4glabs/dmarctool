@@ -135,11 +135,11 @@
 <h1>{{ domain.name }}</h1>
 
 <div class="health-strip">
-  {% if dns_status == 'ok' and dns_match %}
+  {% if dns_status in ('ok', 'inherited') and dns_match %}
   <div class="pill ok"><div class="pill-top">✅</div><div class="pill-value">p={{ dns_p }} pct={{ dns_pct }}</div><div class="pill-label">DMARC / DNS</div></div>
-  {% elif dns_status == 'ok' %}
+  {% elif dns_status in ('ok', 'inherited') %}
   <div class="pill warn"><div class="pill-top">⚠️</div><div class="pill-value">mismatch</div><div class="pill-label">DMARC / DNS</div></div>
-  {% elif dns_status in ('missing', 'multiple') %}
+  {% elif dns_status in ('missing', 'multiple', 'invalid') %}
   <div class="pill bad"><div class="pill-top">🔴</div><div class="pill-value">{{ dns_status_label(dns_status) }}</div><div class="pill-label">DMARC / DNS</div></div>
   {% else %}
   <div class="pill"><div class="pill-top">❔</div><div class="pill-value">{{ dns_status_label(dns_status or 'unknown') }}</div><div class="pill-label">DMARC / DNS</div></div>
@@ -367,15 +367,15 @@
     <div class="section">
       <h2 title="DMARC protects your own domain from being forged. It cannot do anything about a different domain that merely looks like yours -- that one passes its own authentication checks perfectly.">🪪 Domains that look like this one</h2>
       <p class="muted" style="margin-top:0">
-        Registered domains whose names closely resemble {{ domain.name }}. The ones with a mail server can be
-        used to email your supporters while appearing to be you. Most look-alikes are innocent -- unrelated
-        organizations often own a similar name -- so mark the ones you recognise as known and they'll stop
-        being counted.
+        Registered domains whose names closely resemble {{ domain.name }}. Only the ones that can receive mail,
+        were registered in the last two years after {{ domain.name }}, don't redirect to your site and don't
+        share your nameservers are counted as a concern -- the same rules as aikyam's public check. Older ones
+        are listed as established. Mark any you recognise as known and they'll stop being counted.
       </p>
       {% if lookalikes %}
       <div class="table-wrap">
       <table>
-        <tr><th>Domain</th><th>How it differs</th><th>Can send mail?</th><th>Mail host</th><th>First seen</th><th></th></tr>
+        <tr><th>Domain</th><th>How it differs</th><th>Can send mail?</th><th>Assessment</th><th>Mail host</th><th>First seen</th><th></th></tr>
         {% for l in lookalikes %}
         <tr>
           <td><code>{{ l.candidate }}</code></td>
@@ -383,6 +383,11 @@
           <td>
             {% if l.has_mx %}<span class="badge warn" title="This domain has working mail servers, so it can send and receive email">yes</span>
             {% else %}<span class="badge muted" title="Registered, but with no mail server -- it cannot email anyone as things stand">no mail server</span>{% endif %}
+          </td>
+          <td>
+            {% if l.has_mx and l.verdict in ('recent', 'unknown', none) %}<span class="badge warn">{{ lookalike_verdict_label(l.verdict or 'unknown') }}</span>
+            {% elif l.verdict %}<span class="badge muted">{{ lookalike_verdict_label(l.verdict) }}</span>{% else %}<span class="muted">--</span>{% endif %}
+            {% if l.registered_at %}<div class="muted" style="font-size:0.78rem">registered {{ l.registered_at }}</div>{% endif %}
           </td>
           <td class="muted" style="font-size:0.78rem">{{ l.mx_hosts or "--" }}</td>
           <td class="muted">{{ l.first_seen_at[:10] }}</td>
@@ -441,8 +446,10 @@
       <div class="row">
         <span class="label">Live DNS (_dmarc.{{ domain.name }})</span>
         <span>
-          {% if dns_status == 'ok' %}
-            <span class="badge {{ 'ok' if dns_match else 'warn' }}" title="{{ explain_policy(dns_p, dns_pct) }}">p={{ dns_p }} pct={{ dns_pct }}</span>
+          {% if dns_status in ('ok', 'inherited') %}
+            <span class="badge {{ 'ok' if dns_match else 'warn' }}" title="{{ explain_policy(dns_p, dns_pct) }}">p={{ dns_p }} pct={{ dns_pct }}</span>{% if dns_status == 'inherited' %} <span class="muted">{{ dns_status_label('inherited') }}</span>{% endif %}
+          {% elif dns_status == 'invalid' %}
+            <span class="badge bad">{{ dns_status_label(dns_status) }}</span>
           {% elif dns_status == 'missing' %}
             <span class="badge bad">{{ dns_status_label(dns_status) }}</span>{{ fix_note(category_remediation('dns_missing')) }}
           {% elif dns_status == 'multiple' %}
@@ -456,7 +463,7 @@
       </div>
       {% if dns_status != 'ok' %}<p class="muted" style="margin:0.3rem 0">{{ dns_status_help(dns_status) }}</p>{% endif %}
       {% if dns_txt %}<div class="row"><span class="label">raw TXT</span><code>{{ dns_txt }}</code></div>{% endif %}
-      {% if dns_note and not dns_match %}<div class="row"><span class="label"></span><span class="muted">{{ dns_note }}</span></div>{% endif %}
+      {% if dns_note and (not dns_match or dns_status == 'inherited') %}<div class="row"><span class="label"></span><span class="muted">{{ dns_note }}</span></div>{% endif %}
       <div class="row">
         <span class="label">Reports say (majority vote)</span>
         <span>
@@ -491,6 +498,10 @@
             <span class="badge muted" title="{{ mta_sts.mta_sts_note if mta_sts else 'Not checked yet' }}">Not set up</span>
           {% elif mta_sts.mta_sts_status == 'broken' %}
             <span class="badge bad" title="{{ mta_sts.mta_sts_note }}">Broken</span>{{ fix_note(category_remediation('mta_sts_broken')) }}
+          {% elif mta_sts.mta_sts_status == 'withdrawn' %}
+            <span class="badge muted" title="{{ mta_sts.mta_sts_note }}">Being withdrawn (mode: none)</span>
+          {% elif mta_sts.mta_sts_status == 'lookup_failed' %}
+            <span class="badge muted" title="{{ mta_sts.mta_sts_note }}">Couldn't check</span>
           {% elif mta_sts.mta_sts_mode == 'enforce' %}
             <span class="badge ok" title="{{ mta_sts.mta_sts_note }}">Enforced</span>
           {% else %}
@@ -518,7 +529,7 @@
           {% elif domain_expiry.status != 'ok' %}
             <span class="badge muted" title="{{ domain_expiry.note }}">Couldn't check</span>
           {% elif domain_expiry_days_left <= domain_expiry_warn_days %}
-            <span class="badge bad" title="{{ domain_expiry.note }}">{{ domain_expiry.expires_at }} -- {{ domain_expiry_days_left }} day{{ 's' if domain_expiry_days_left != 1 else '' }} left</span>{{ fix_note(category_remediation('domain_expiring_soon')) }}
+            <span class="badge bad" title="{{ domain_expiry.note }}">{{ domain_expiry.expires_at }} -- {{ expiry_phrase(domain_expiry_days_left) }}</span>{{ fix_note(category_remediation('domain_expiry_urgent' if domain_expiry_days_left <= 14 else 'domain_expiring_soon')) }}
             <form class="inline" action="/domain/{{ domain.name }}/notify_domain_expiry" method="post" style="display:inline-block;margin-left:0.5rem;" onsubmit="return confirm('Send a domain-expiry email to {{ report_settings.recipient_email if report_settings else "the configured recipient" }} now?');">
               <button type="submit" class="small">📧 Notify client</button>
             </form>
@@ -531,6 +542,35 @@
           {% else %}
             <span class="badge ok" title="{{ domain_expiry.note }}">{{ domain_expiry.expires_at }} ({{ domain_expiry_days_left }} days){% if domain_expiry.registrar %}, via {{ domain_expiry.registrar }}{% endif %}</span>
           {% endif %}
+          {% if domain_expiry and domain_expiry.statuses %}
+            {% set st = domain_expiry.statuses.split(',') %}
+            {% for hold in ('clientHold', 'serverHold', 'redemptionPeriod', 'pendingDelete') if hold in st %}<span class="badge bad">{{ hold }}</span>{{ fix_note(category_remediation('domain_status_alert')) }}{% endfor %}
+            {% if 'clientTransferProhibited' in st or 'serverTransferProhibited' in st %}<span class="badge ok" title="Registry status: {{ domain_expiry.statuses }}">Transfer lock on</span>
+            {% else %}<span class="badge warn" title="Registry status: {{ domain_expiry.statuses }}">Transfer lock off</span>{{ fix_note(category_remediation('transfer_lock_off')) }}{% endif %}
+          {% endif %}
+        </span>
+      </div>
+      <div class="row">
+        <span class="label" title="When the website's TLS certificate (the padlock) runs out, for the domain and www. Most renew themselves about 30 days before; this warns at 21 days left, when renewal has been failing for over a week.">Website certificate</span>
+        <span>
+          {% if not cert_checks %}<span class="badge muted">Not checked yet</span>{% endif %}
+          {% for c in cert_checks %}
+            {% if c.status == 'ok' %}<span class="badge ok" title="{{ c.note }}{% if c.issuer %} ({{ c.issuer }}){% endif %}">{{ c.host }}: until {{ c.not_after }}</span>
+            {% elif c.status in ('expiring', 'expired') %}<span class="badge bad" title="{{ c.note }}">{{ c.host }}: {{ c.note }}</span>{{ fix_note(category_remediation('cert_expiring_soon')) }}
+            {% elif c.status == 'invalid' %}<span class="badge warn" title="{{ c.note }}">{{ c.host }}: certificate not accepted</span>
+            {% elif c.status == 'no_https' %}<span class="badge muted" title="{{ c.note }}">{{ c.host }}: no HTTPS site</span>
+            {% else %}<span class="badge muted" title="{{ c.note }}">{{ c.host }}: couldn't check</span>{% endif %}
+          {% endfor %}
+        </span>
+      </div>
+      <div class="row">
+        <span class="label" title="The domain itself on Spamhaus DBL, SURBL and URIBL -- the lists spam filters check links and sender domains against. Separate from the sending-IP blocklists.">Domain blocklists</span>
+        <span>
+          {% if not domain_blocklist %}<span class="badge muted">Not checked yet</span>
+          {% elif domain_blocklist.status == 'listed' %}<span class="badge bad" title="{{ domain_blocklist.note }}">Listed: {{ domain_blocklist.listed_on }}</span>{{ fix_note(category_remediation('domain_blocklisted')) }}
+          {% elif domain_blocklist.status == 'minor' %}<span class="badge muted" title="{{ domain_blocklist.note }}">{{ domain_blocklist.note }}</span>
+          {% elif domain_blocklist.status == 'clean' %}<span class="badge ok" title="Checked {{ domain_blocklist.checked_at }}">Not listed ({{ domain_blocklist.domain }})</span>
+          {% else %}<span class="badge muted" title="{{ domain_blocklist.note }}">Couldn't check</span>{% endif %}
         </span>
       </div>
     </div>
@@ -558,6 +598,8 @@
             {% elif c.status == 'warn' %}<span class="badge warn" title="{{ c.note }}">Near limit</span>
             {% elif c.status == 'over_limit' %}<span class="badge bad" title="{{ c.note }}">Over limit</span>{{ fix_note(category_remediation('spf_lookup_limit')) }}
             {% elif c.status == 'missing' %}<span class="badge bad" title="{{ c.note }}">No SPF record</span>{{ fix_note(category_remediation('spf_missing')) }}
+            {% elif c.status == 'invalid' %}<span class="badge bad" title="{{ c.note }}">Broken</span>{{ fix_note(category_remediation('spf_invalid')) }}
+            {% elif c.status == 'pass_all' %}<span class="badge bad" title="{{ c.note }}">Approves everyone (+all)</span>{{ fix_note(category_remediation('spf_pass_all')) }}
             {% else %}<span class="badge muted" title="{{ c.note }}">Couldn't check</span>{% endif %}
           </td>
         </tr>
@@ -599,7 +641,8 @@
           <td>{{ c.signing_domain }}</td>
           <td>{{ (c.key_bits|string + " bits") if c.key_bits is not none else "-" }}</td>
           <td>
-            {% if c.status == 'ok' %}<span class="badge ok" title="{{ c.note }}">OK</span>
+            {% if c.status == 'ok' and c.key_bits and c.key_bits < 2048 %}<span class="badge warn" title="{{ c.note }}">Short: replace with 2048-bit when convenient</span>
+            {% elif c.status == 'ok' %}<span class="badge ok" title="{{ c.note }}">OK</span>
             {% elif c.status == 'weak' %}<span class="badge bad" title="{{ c.note }}">Too weak</span>{{ fix_note(category_remediation('dkim_weak_key')) }}
             {% elif c.status == 'missing' %}<span class="badge bad" title="{{ c.note }}">Missing</span>{{ fix_note(category_remediation('dkim_missing')) }}
             {% else %}<span class="badge muted" title="{{ c.note }}">Couldn't check</span>{% endif %}
@@ -813,6 +856,8 @@
                 <span class="badge bad" title="{{ s.blocklist_status.note }}">Listed</span>{{ fix_note(category_remediation('blocklist')) }}
               {% elif s.blocklist_status.status == 'lookup_failed' %}
                 <span class="badge muted" title="{{ s.blocklist_status.note }}">Unknown</span>
+              {% elif s.blocklist_status.status == 'minor' %}
+                <span class="badge muted" title="{{ s.blocklist_status.note }}">End-user range</span>
               {% else %}
                 <span class="badge ok" title="{{ s.blocklist_status.note }}">Clean</span>
               {% endif %}

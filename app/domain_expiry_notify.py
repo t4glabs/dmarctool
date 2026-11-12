@@ -38,19 +38,26 @@ def build_notification(conn, domain_id: int, domain_name: str, recipient_label: 
         f"minutes and a small payment.\n\n"
     ) if check["registrar"] else ""
 
+    if days_left < 0:
+        when = (f"expired on {check['expires_at']}, {-days_left} day{'s' if days_left != -1 else ''} ago. "
+                f"Your website and email addresses on it may already have stopped working, and after the "
+                f"registrar's grace period someone else could register the name")
+    else:
+        when = (f"expires on {check['expires_at']}, "
+                f"{'today' if days_left == 0 else f'which is {days_left} day' + ('s' if days_left != 1 else '') + ' away'}. "
+                f"If it lapses, your website and every email address on it stop working that same day -- and "
+                f"someone else could register the name out from under you")
     body = (
         f"Hi {greeting},\n\n"
-        f"A quick but important one: {domain_name}'s domain registration expires on "
-        f"{check['expires_at']}, which is {days_left} days away. If it lapses, your website and every "
-        f"email address on it stop working that same day -- and someone else could register the name "
-        f"out from under you.\n\n"
+        f"A quick but important one: {domain_name}'s domain registration {when}.\n\n"
         f"{registrar_line}"
         f"Please take care of it when you get a chance. Reply once it is done and we will mark this as "
         f"handled on our end.\n\n"
         f"With care,\n"
         f"{signoff_name or 'The aikyam Team'}"
     )
-    subject = f"{domain_name}'s domain registration is expiring soon"
+    subject = (f"{domain_name}'s domain registration has expired" if days_left < 0
+               else f"{domain_name}'s domain registration is expiring soon")
     return subject, body, days_left, check["expires_at"]
 
 

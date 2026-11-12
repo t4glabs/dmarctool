@@ -2741,3 +2741,29 @@ Also: a 2-message Google source on thudippu.in (mail-sor-f69.google.com) shown o
   a live 550 for the domain's own sending address; otherwise "Not enough data", no suggestion. "No inbox
   exists for X ... we checked live that Mailgun rejects <addr>" -> 96% accurately calibrated, 100%
   actionable (75% too technical; Mailgun route steps are inherently operator-level).
+
+## 2026-11-12 -- Nine new report categories from the public-site comparison (subscriber copy)
+
+Trigger: Vigil compared against aikyam's public check site (DNS, homepage, TLS, RDAP, blocklists, Safe
+Browsing); new checks added so the two never disagree about the same DNS. Nine new reader-facing
+categories (dmarc_record_invalid, dmarc_subdomains_open, spf_invalid, spf_pass_all, domain_expiry_urgent,
+domain_status_alert, transfer_lock_off, cert_expiring_soon, domain_blocklisted) plus one operator-only
+(dmarc_no_rua). Criteria: audience_fit / honesty_calibration / natural_voice / actionability, with each
+category's real underlying situation in `state`.
+
+- Round 1: four shipped as drafted -- domain_expiry_urgent (90% clear, 91% calibrated, 93% concrete),
+  domain_status_alert (68/86/93), transfer_lock_off (81/95/99), cert_expiring_soon (60/93/80).
+- dmarc_record_invalid: "let those fakes through ... nothing would stop them" 26% overstates -> "weren't
+  turning those fakes away" / "has a much easier time reaching your supporters": 81-82% calibrated.
+- dmarc_subdomains_open tip "can close this with a one-line change" 47% vague -> "will change this one
+  setting for you, so the other versions of your address get the same protection": 97% concrete.
+- spf_pass_all: "ended with a setting that approves every computer" 70% needs-plain -> "were telling mail
+  services that any computer in the world is allowed to send email as you": 54%, 98% calibrated. A plainer
+  tip ("only the services you really use are allowed") went 63% vague; kept the round-1 tip (73% concrete).
+- spf_invalid / dmarc_record_invalid plateaued at ~48-50% clear_as_is. Baseline check of the SHIPPED
+  siblings with the same method: spf_missing 50%, dns_missing 50%, spf_lookup_limit 41% -- so shipped at
+  the existing bar with better calibration. "typing mistake" variants rejected: the real cause can be a
+  duplicate record or a missing include target, so "typing" would overstate what we know.
+- domain_blocklisted: "public list that spam filters check every link and sender against" 51% needs-plain
+  -> "a public list of addresses that spam filters distrust": 66% clear, 97% calibrated.
+- No em-dashes or "--" in any new subscriber copy (checked programmatically).
