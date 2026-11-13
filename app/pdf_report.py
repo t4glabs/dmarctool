@@ -17,6 +17,8 @@ import os
 import subprocess
 import tempfile
 
+from app.domain_report import day_label, period_label
+
 
 def _typst_str(value) -> str:
     """Escapes a Python value for safe embedding as a Typst string literal.
@@ -113,7 +115,9 @@ _PREAMBLE = '''
 
 #let segment-gauge(label, frac) = {
   let clamped = calc.min(calc.max(frac, 0.0), 1.0)
-  [
+  // Label and bar stay together: the sample report had "Clicked" at the
+  // foot of page 3 and its bar at the top of page 4.
+  block(breakable: false)[
     #text(font: body-font, size: 9.5pt, fill: muted, label)
     #v(0.15cm)
     #box(width: 100%, height: 10pt, fill: tile-bg, radius: 5pt, clip: true, stroke: none,
@@ -121,6 +125,17 @@ _PREAMBLE = '''
     )
     #v(0.5cm)
   ]
+}
+
+// 107566 -> "107,566" (the same grouping the newsletter table uses).
+#let thousands(n) = {
+  let s = str(n)
+  let out = ""
+  for (i, ch) in s.clusters().enumerate() {
+    if i > 0 and calc.rem(s.len() - i, 3) == 0 { out += "," }
+    out += ch
+  }
+  out
 }
 
 // Ranked category bars -- data: array of (label, count) pairs, already
@@ -144,7 +159,7 @@ _PREAMBLE = '''
         box(width: 100%, height: 11pt, fill: tile-bg, radius: 5pt, clip: true, stroke: none,
           rect(width: frac * 100%, height: 100%, fill: accent, radius: 5pt, stroke: none)
         ),
-        text(font: body-font, size: 9.5pt, weight: "bold", fill: accent, str(count))
+        text(font: body-font, size: 9.5pt, weight: "bold", fill: accent, thousands(count))
       )
       #v(0.35cm)
     ]
@@ -179,7 +194,11 @@ _PREAMBLE = '''
     if d.at(1) > max-val { max-val = d.at(1) }
   }
   if threshold != none and threshold > max-val { max-val = threshold }
-  let ymax = calc.max(max-val * 1.2, 0.001)
+  // Every caller plots a share of a whole, so the scale stops at 100%: the
+  // 20% headroom used to put a "120%" gridline over a 98-100% delivery line.
+  // At exactly 100% the gridlines go in quarters so they read 0/25/50/75/100.
+  let ymax = calc.min(calc.max(max-val * 1.2, 0.001), calc.max(max-val, 1.0))
+  let steps = if ymax == 1.0 { 4 } else { 3 }
   let last = data.at(n - 1)
   let fmt(v) = {
     let shown = v * scale
@@ -198,8 +217,8 @@ _PREAMBLE = '''
 
   box(width: 100%, height: height + 14pt, fill: tile-bg, radius: 4pt, clip: false, inset: 0pt,
     {
-      for i in range(0, 4) {
-        let frac = i / 3
+      for i in range(0, steps + 1) {
+        let frac = i / steps
         let gy = (1 - frac) * plot-h + 8pt
         place(top + left, dx: axis-w, dy: gy, line(length: 100% - axis-w, stroke: (paint: border-color, thickness: 0.5pt)))
         place(top + left, dx: 0pt, dy: gy, box(width: axis-w - 4pt, place(right + horizon, text(font: body-font, size: 7.5pt, fill: muted, fmt(frac * ymax)))))
@@ -245,14 +264,13 @@ def _page_setup(domain_name: str) -> str:
   footer: [
     #set text(size: 8.5pt, fill: muted, font: body-font)
     #set align(center)
-    #context [#{_typst_str(domain_name)} --- #counter(page).display() / #counter(page).final().first()]
+    #context [#{_typst_str(domain_name)} #sym.dot.c #counter(page).display() / #counter(page).final().first()]
   ]
 )
 '''
 
 
-def _shared_masthead(name: str, recipient_label: str, period_start: str, period_end: str,
-                      is_group: bool = False) -> str:
+def _shared_masthead(name: str, recipient_label: str, period: str, is_group: bool = False) -> str:
     """Wordmark, period, and greeting -- rendered exactly ONCE per document,
     whether it's a single domain's report or a group's combined one (jev
     workflow Ch.47: split out of the old _masthead_and_kpi so a multi-domain
@@ -263,14 +281,14 @@ def _shared_masthead(name: str, recipient_label: str, period_start: str, period_
     instead of naming one domain."""
     intro = (
         "Here is how each of your domains has been doing lately, in plain terms. No technical jargon, "
-        "just what happened and what we did about it -- one section per domain below."
+        "just what happened and what we did about it, with one section per domain below."
         if is_group else
         f"Here's how #text(weight: \"bold\")[#{_typst_str(name)}]'s emails have been doing lately, in "
         f"plain terms. No technical jargon, just what happened and what we did about it."
     )
     return f'''
 = aikyam
-#eyebrow({_typst_str(f"{period_start} to {period_end}")})
+#eyebrow({_typst_str(period)})
 
 #v(0.3cm)
 #text(font: heading-font, size: 17pt, weight: "bold")[Hi #{_typst_str(recipient_label)},]
@@ -296,8 +314,8 @@ def _domain_kpi_header(context: dict, show_name_heading: bool = False) -> str:
         parts.append(f'\n== #{_typst_str(context["domain_name"])}\n')
 
     tiles = []
-    if context.get("delivery_rate_pct") is not None:
-        tiles.append(f'stat-tile("Delivered safely", "{context["delivery_rate_pct"]}", unit: "%")')
+    if context.get("delivery_rate_display") is not None:
+        tiles.append(f'stat-tile("Delivered safely", "{context["delivery_rate_display"]}", unit: "%")')
     if context.get("health_score_value") is not None:
         tiles.append(f'stat-tile("Health score", "{context["health_score_value"]}", unit: "/100")')
     if context.get("health_timeline_delta") is not None:
@@ -338,10 +356,8 @@ def _short_date(day) -> str:
     mailgun_daily_series's convention) -- charts.py's pass_rate_sparkline
     hits the same inconsistency and handles it the same way, by just
     calling strftime directly on whichever it already has."""
-    if isinstance(day, (datetime.date, datetime.datetime)):
-        return day.strftime("%b %-d")
     try:
-        return datetime.date.fromisoformat(day).strftime("%b %-d")
+        return day_label(day)
     except ValueError:
         return str(day)
 
@@ -377,15 +393,23 @@ def _bullet_list(item_bodies: list) -> str:
     return f"#list(spacing: 0.55cm, marker: [#text(fill: accent)[•]],\n  {joined}\n)"
 
 
+def _sentence(s: str) -> str:
+    """Exactly one full stop at the end. The why texts are stored both with and
+    without one, which printed "...to email your supporters We've now sorted"
+    and "...imitating you. -- this one has been open" (2026-11-13)."""
+    s = s.rstrip()
+    return s if s.endswith((".", "!", "?", '."', '?"', ".\u201d")) else s + "."
+
+
 def _resolved_item(item: dict) -> str:
     story = _capitalize_first(item["story"]) + "."
     parts = [f'#{_typst_str(story)} ', '#text(weight: "bold")[We’ve taken care of it.]']
     if item.get("why"):
-        parts.append(f' #text(fill: muted)[#{_typst_str(item["why"])}]')
+        parts.append(f' #text(fill: muted)[#{_typst_str(_sentence(item["why"]))}]')
     if item.get("impact"):
         parts.append(f' The payoff: #{_typst_str(item["impact"])}.')
     if item.get("history"):
-        parts.append(f' #text(fill: muted)[#{_typst_str(item["history"])}]')
+        parts.append(f' #text(fill: muted)[#{_typst_str(_sentence(item["history"]))}]')
     return "".join(parts)
 
 
@@ -405,7 +429,7 @@ def _still_open_table_typst(items: list) -> str:
     )
     body_rows = []
     for item in items:
-        since = item.get("first_seen") or "--"
+        since = item.get("first_seen") or "–"
         body_rows.append(
             f'[#text(size: 9pt)[#{_typst_str(item["short_label"])}]], '
             f'[#text(size: 9pt, fill: muted)[#{_typst_str(since)}]]'
@@ -442,10 +466,13 @@ def _still_open_item(item: dict) -> str:
         parts.append(f' #{_typst_str(item["detail"])}.')
     why, history = item.get("why"), item.get("history")
     if why and history:
-        merged = f"{why} -- this one has been open {history}."
+        # Was "{why} -- this one has been open {history}."; a full stop and
+        # "It has been open" tested 72% reads_like_a_person vs 65% for a
+        # comma join (Jev, 2026-11-13).
+        merged = f"{_sentence(why)} It has been open {history}."
         parts.append(f' #text(fill: muted)[#{_typst_str(merged)}]')
     elif why:
-        parts.append(f' #text(fill: muted)[#{_typst_str(why + ".")}]')
+        parts.append(f' #text(fill: muted)[#{_typst_str(_sentence(why))}]')
     elif history:
         parts.append(f' #text(fill: muted)[#{_typst_str(_capitalize_first(history) + ".")}]')
     return "".join(parts)
@@ -521,6 +548,35 @@ We're already working through all of this, and we'll let you know as each one cl
     return "\n".join(parts)
 
 
+def _delivery_chart_caption(period_display, last_day, last_rate, period_start):
+    """Says why the chart's last point and the "Delivered safely" tile can
+    differ: same measure, one day vs the whole period. The sample report
+    showed a 100% tile above a chart ending at 98.1% (2026-11-13). Jev: 91%
+    clear_as_is, 90% reads_like_a_person; no caption tested 64% / 54%.
+    None when the two already read the same.
+
+    The chart only plots days with enough mail to measure, so it can end
+    before the period starts (aikyam.school: last plotted day 9 Oct, period
+    from 31 Oct) -- then that day isn't part of the tile's number at all."""
+    if period_display is None:
+        return None
+    last = f"{round(last_rate * 100, 1):g}"
+    if last == period_display:
+        return None
+    lead = "Each point here is a single day's mail."
+    if last_day < datetime.date.fromisoformat(period_start):
+        # Jev: 81% clear_as_is, 81% accurately_calibrated (70% / 76% for a
+        # "no day since the last update had enough mail" wording).
+        return (f"{lead} This period's days were too quiet to plot one by one, so the chart stops at "
+                f"{day_label(last_day)}, before it began. The {period_display}% at the top covers this period's "
+                f"mail all together.")
+    if float(last) < float(period_display):
+        return (f"{lead} The {period_display}% at the top of the report covers the whole period, which is why one "
+                f"day at {last}% doesn't pull it down much.")
+    return (f"{lead} The {period_display}% at the top of the report covers the whole period, so it won't match any "
+            f"one day exactly.")
+
+
 def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
     """deliverability + protection + spam_trend + list_hygiene, plus the 3
     real trend charts (delivered-safely gauge, spam-rate/bounce-rate/
@@ -531,11 +587,12 @@ def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
     zone, matching the email's own section order."""
     parts = ['#section-title("Getting through, and staying protected")']
 
-    total = chart_data["disp_none"] + chart_data["disp_quarantine"] + chart_data["disp_reject"]
     parts.append(f'\n#eyebrow("How your emails are arriving")\n#v(0.15cm)\n#{_typst_str(context["deliverability"])}\n')
-    if total > 0:
-        frac = chart_data["disp_none"] / total
-        parts.append(f'\n#v(0.3cm)\n#segment-gauge("Delivered safely", {frac})\n')
+    # The same number as the "Delivered safely" tile and sentence (was the
+    # share with no receiver action, a slightly different measure under the
+    # same name).
+    if context.get("delivery_rate") is not None:
+        parts.append(f'\n#v(0.3cm)\n#segment-gauge("Delivered safely", {context["delivery_rate"]})\n')
 
     parts.append(f'\n#eyebrow("Protection from fake emails")\n#v(0.15cm)\n')
     if context.get("protection_tightened"):
@@ -564,14 +621,18 @@ def _protection_and_deliverability(context: dict, chart_data: dict) -> str:
 ]
 ''')
 
-    pass_points = [(_short_date(d), r) for d, total_, passed_, r in chart_data["pass_rate_series"] if r is not None]
+    pass_days = [(d, r) for d, total_, passed_, r in chart_data["pass_rate_series"] if r is not None]
+    pass_points = [(_short_date(d), r) for d, r in pass_days]
     if len(pass_points) >= 2:
+        caption = _delivery_chart_caption(context.get("delivery_rate_display"), pass_days[-1][0], pass_days[-1][1],
+                                          context["period_start"])
+        caption_part = f'\n#v(0.2cm)\n#text(size: 9pt, fill: muted)[#{_typst_str(caption)}]' if caption else ""
         parts.append(f'''
 #v(0.4cm)
 #block(breakable: false)[
-#eyebrow("Your delivery rate over time")
+#eyebrow("Delivered safely, day by day")
 #v(0.15cm)
-#line-chart({_typst_series(pass_points)})
+#line-chart({_typst_series(pass_points)}){caption_part}
 ]
 ''')
 
@@ -616,8 +677,8 @@ def _campaign_table_typst(rows: list) -> str:
         # commas) with no markup-special characters, safe to interpolate
         # directly like every other pre-formatted number elsewhere in this
         # file (e.g. stat-tile's value arguments).
-        open_cell = f'{r["open_pct"]}%' if r["open_pct"] is not None else "--"
-        click_cell = f'{r["click_pct"]}%' if r["click_pct"] is not None else "--"
+        open_cell = f'{r["open_pct"]}%' if r["open_pct"] is not None else "–"
+        click_cell = f'{r["click_pct"]}%' if r["click_pct"] is not None else "–"
         body_rows.append(
             f'[#text(size: 9pt)[#{_typst_str(r["subject"])}]], '
             f'[#text(size: 9pt, fill: muted)[#{_typst_str(_short_date(r["send_day"]))}]], '
@@ -766,7 +827,7 @@ def render_domain_report_pdf(conn, domain_id: int, domain_name: str, recipient_l
     context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)
     cdata = _get_chart_data(conn, domain_id, period_start, period_end)
     body = "\n".join([
-        _shared_masthead(domain_name, recipient_label, context["period_start"], context["period_end"]),
+        _shared_masthead(domain_name, recipient_label, context["period_label"]),
         _domain_kpi_header(context),
         _standing_narrative(context),
         _action_ledger(context),
@@ -803,8 +864,8 @@ def render_group_report_pdf(conn, domain_ids: list, group_name: str, recipient_l
         domain_ids,
     ).fetchall()
 
-    body_parts = [_shared_masthead(group_name, recipient_label, period_start.date().isoformat(),
-                                    period_end.date().isoformat(), is_group=True)]
+    body_parts = [_shared_masthead(group_name, recipient_label, period_label(period_start, period_end),
+                                    is_group=True)]
     for i, row in enumerate(rows):
         domain_id, domain_name = row["id"], row["name"]
         context = _build_context(conn, domain_id, domain_name, recipient_label, period_start, period_end)

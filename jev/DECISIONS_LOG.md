@@ -2767,3 +2767,44 @@ category's real underlying situation in `state`.
 - domain_blocklisted: "public list that spam filters check every link and sender against" 51% needs-plain
   -> "a public list of addresses that spam filters distrust": 66% clear, 97% calibrated.
 - No em-dashes or "--" in any new subscriber copy (checked programmatically).
+
+## 2026-11-13 -- Cleaning the monthly report before its sample goes public (subscriber copy)
+
+Trigger: the redacted pattic.org report (13 Oct to 12 Nov) is now the public site's "See a real monthly
+report". Ten fixes requested, made in the report generation so every subscriber benefits. Criteria:
+audience_fit / honesty_calibration / natural_voice (+ contradiction_check for page 1), real numbers in
+`state`, and every dash rewrite tested against its own original as the baseline.
+
+- Bounce-chart labels (report-only relabel; bounce_reasons' keys unchanged): "Skipped, because an earlier
+  email to it had already failed" 58% clear / 80% calibrated (vs "Not sent: this address had already
+  failed before" 44%); "Not sent: a check said the address probably doesn't exist" 60/73; "Turned away for
+  some other reason" 56/84. Spam complaints added as "Marked one of your emails as spam" (88/95) so the
+  bars add up to the sentence's count (19 vs 20 on pattic).
+- Health month line: "at the end of each month: Sep 74, Oct 87, and 80 now. That's up from September, and
+  a little down from October." 62% clear / 75% calibrated / 70% person. One baseline: the tile is now
+  "Since 13 Oct" from the same score as "from 69 to 80". "Steady improvement" only when no month fell.
+- Delivery chart caption: "Each point here is a single day's mail. The 99.7% at the top of the report
+  covers the whole period, which is why one day at 98.1% doesn't pull it down much." 91% clear / 90%
+  person; no caption (title only) 64% / 54%. When the chart ends before the period (aikyam.school: no day
+  since 31 Oct had enough mail), "This period's days were too quiet to plot one by one, so the chart stops
+  at 9 Oct, before it began." 81% clear / 81% calibrated.
+- Spam paragraph when charted days crossed 0.10%: the average-first wordings with a days clause all read
+  as overstating (35-45% calibrated; original 50%). Leading with the days ("Most days, Google saw nobody
+  marking your mail as spam. On 3 days it went above...") then the average: 68-69% calibrated, 86-91%
+  person. aikyamjobs.org's generated version 77% calibrated.
+- Opening headline with optional jobs: "Nothing urgent this time, just two optional jobs further down:
+  ..." 63% clear / 69% calibrated / 68% person (vs 47% and 29% person for two other shapes).
+- Still-open why+history: "{why}. It has been open since August." 72% person vs ", and this one has been
+  open..." 65%.
+- Dash rewrites vs originals (voice): pdf intro first-time 16% -> 85%, repeat 14% -> 44%; group teaser
+  46% -> 62% (body variant 22% -> 43%); borrowed identity 55% -> 69%; dns_policy_weakened 66% -> 75%;
+  content risk 59% -> 72%; impersonation (none blocked) 70% -> 88%. Held within noise: lookalike,
+  unsubscribe tip, newsletter tips, blocklist tip, clean-newsletter verdict, all-blocked impersonation.
+  A first rewrite of the SPF tip lost calibration (87% -> 70%); its second ("...settings. aikyam handles it
+  for you, so there's no action needed on your end.") is 90%. All-clear phrases: #2 64% -> 68% person,
+  #3 now "Your domain looked healthy throughout, with no action needed from you this time." (55% -> 67%
+  calibrated).
+- Page 1 as a whole, before vs after: contradiction 0.70 -> 0.41, calibrated 24% -> 41%.
+- Real bug found on the way (not copy): Postmaster rows are attributed to the first tracked suffix, so
+  ats.aikyamjobs.org's all-0% days were averaged into aikyamjobs.org's spam rate (reported ~0.28% "normal
+  range"; its own rate is ~0.53%, above Google's 0.30%). The report now selects Postmaster data by name.

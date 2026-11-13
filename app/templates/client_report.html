@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ domain_name }} -- email health update</title>
+<title>{{ domain_name }}: email health update</title>
 <link rel="stylesheet" href="/static/style.css?v={{ static_version('style.css') }}">
 <style>
   /* This page's own shell -- deliberately not base.html's Ghost-admin-style
@@ -59,11 +59,11 @@
   <div class="client-shell">
 
     <div class="client-card">
-      <p class="period">{{ period_start }} to {{ period_end }}</p>
+      <p class="period">{{ period_label }}</p>
       <h1>Hi {{ recipient_label }},</h1>
       <p class="lede">
-        Here's how <strong>{{ domain_name }}</strong>'s emails have been doing lately, in plain terms --
-        no technical jargon, just what happened and what we did about it.
+        Here's how <strong>{{ domain_name }}</strong>'s emails have been doing lately, in plain terms.
+        No technical jargon, just what happened and what we did about it.
       </p>
     </div>
 
@@ -161,8 +161,8 @@
       <p style="margin:0 0 1rem 0">
         This might look like a lot to take in, but it really matters. These are the things that decide
         whether people actually see your emails, and whether someone could try to impersonate your
-        organization using your name. Reach out any time if anything's unclear -- we're always happy to
-        walk through it with you.
+        organization using your name. Reply any time if anything's unclear. We're
+        always happy to walk through it with you.
       </p>
       <p style="margin:0">With care,<br><strong>{{ signoff_name }}</strong></p>
     </div>

@@ -83,8 +83,12 @@ _MAILGUN_INTERNAL_PATTERNS = [
 # reports something specific in plain text, and needed for formats (Yahoo/AOL's
 # "NNN.NN", Gmail's plain English) that don't carry a proper RFC 3463 code.
 _PHRASE_CATEGORIES = [
+    # "recipient not found" (GoDaddy/secureserver), "is not a valid user",
+    # "no mailbox by that name": real permanent bounces that fell through to
+    # "Other permanent failure" (pattic.org, Nov 2026).
     (("no such user", "no mailbox here", "mailbox not found", "does not exist", "user unknown", "unknown user",
-      "recipientnotfound", "not found by smtp address lookup", "doesn't have a"),
+      "recipientnotfound", "not found by smtp address lookup", "doesn't have a", "recipient not found",
+      "is not a valid user", "no mailbox by that name"),
      "No such user / invalid address"),
     (("account closed",),
      "Mailbox disabled/unavailable"),

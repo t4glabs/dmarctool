@@ -158,8 +158,8 @@ def _complaints_pillar(c):
     if status != "ok":
         fix = ("Complaints usually mean people don't remember signing up, or the content drifted from what they "
                "signed up for. Two things that reliably help: make the unsubscribe link obvious in the body "
-               "(people who can't find it hit \"spam\" instead), and remind subscribers who you are near the top "
-               "-- e.g. \"You're getting this because you signed up for our updates on our website.\"")
+               "(people who can't find it hit \"spam\" instead), and remind subscribers who you are near the top, "
+               "for example \"You're getting this because you signed up for our updates on our website.\"")
     return {
         "key": "complaints", "label": "Spam complaints", "weight": weight,
         "earned": weight * fraction, "status": status,
@@ -195,7 +195,7 @@ def _hygiene_pillar(c):
         # same fix text is reused anywhere other than the dashboard (e.g. a
         # PDF). Replaced with a presentation-agnostic pointer; re-tested,
         # score held (84% vs. 89% reads_like_a_person, both strong).
-        fix = ("Remove the addresses that permanently bounced from your Listmonk list -- they'll keep bouncing "
+        fix = ("Remove the addresses that permanently bounced from your Listmonk list. They'll keep bouncing "
                "and dragging this number up every send." + cause +
                " Ask us any time for the exact list.")
     return {
@@ -313,17 +313,17 @@ def _engagement_pillar(c, click_benchmark, open_benchmark):
         parts = []
         if click_status != "ok":
             parts.append(
-                "A couple of your links are competing for the same click -- try picking just one clear link per "
+                "A couple of your links are competing for the same click. Try picking just one clear link per "
                 "item, with text that says what happens next (\"View the job\" works better than \"Read more\")."
             )
         if open_status != "ok":
             parts.append(
-                "The subject line is probably the bigger lever here, more than the content itself -- put the "
+                "The subject line is probably the bigger lever here, more than the content itself. Put the "
                 "specific, concrete thing right at the front so it survives getting cut off on mobile. \"Three "
                 "openings closing Friday\" beats \"Our Newsletter, August 2026\"."
             )
         parts.append(
-            "A chunk of your list never opens anything -- mailing them again and again quietly drags down how "
+            "A chunk of your list never opens anything, and mailing them again and again quietly drags down how "
             "the rest of your list gets treated. Ask us any time for the exact list if you would like to "
             "re-engage or trim it."
         )
@@ -370,8 +370,8 @@ def _technical_pillar(c):
                   "headers), an RFC 5322 Message-ID, a subject that isn't a misleading \"Re:\", and a display "
                   "name that identifies you plainly. These are pass/fail, not judgement calls." + unavailable_note)
         fix = ("Specifically: " + "; ".join(problems) +
-               ". These are almost always a one-time fix in Listmonk (Settings -> Mailserver) rather than "
-               "something to redo per campaign -- fix it once and every future send inherits it.")
+               ". These are almost always a one-time fix in Listmonk (Settings, then Mailserver) rather than "
+               "something to redo per campaign. Fix it once and every future send inherits it.")
     return {
         "key": "technical", "label": "Required headers & sender name", "weight": weight,
         "earned": weight * fraction, "status": status,
@@ -420,7 +420,7 @@ def _structure_pillar(c, structure):
                   "the real destination.")
         # Rewritten 2026-10-01 (jev workflow Ch.43): audience_fit 15%->61%
         # clear_as_is, natural_voice 40%->71%.
-        fix = ("Try adding more real text around the images -- some people have images turned off by default, "
+        fix = ("Try adding more real text around the images. Some people have images turned off by default, "
                "so an email that's mostly pictures can look empty to them. Also swap any shortened links (like "
                "bit.ly) for the real web address; it reads as more trustworthy and your own domain name builds "
                "recognition too.")
@@ -460,7 +460,7 @@ def _wording_pillar(c):
         detail = ("Only a minor signal -- word lists no longer decide placement on their own. Worth a second look "
                   "mainly because bait-y phrasing tends to correlate with the complaints that DO matter.")
         fix = ("Reword the flagged phrases to describe what's actually in the newsletter. \"Act now\" or \"Limited "
-               "time offer\" can become the real thing being announced -- e.g. \"Applications close Friday\". "
+               "time offer\" can become the real thing being announced, for example \"Applications close Friday\". "
                "Plain and specific outperforms urgent and vague anyway.")
     return {
         "key": "wording", "label": "Spam-bait wording", "weight": weight,

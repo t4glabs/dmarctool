@@ -39,13 +39,13 @@ def check_display_name(display_name: str, from_address: str = None) -> list:
         # a single all-caps word is a perfectly normal short brand name/acronym
         # (e.g. "PATTIC", "IBM") -- only a multi-word all-caps *phrase* reads
         # as shouting/subject content.
-        issues.append("ALL CAPS phrase -- looks like shouting/subject content rather than a sender name")
+        issues.append("ALL CAPS phrase: looks like shouting/subject content rather than a sender name")
     if _EMOJI_RE.search(display_name):
-        issues.append("Contains emoji -- can read as an attempt to imitate a verification badge")
+        issues.append("Contains emoji: can read as an attempt to imitate a verification badge")
     if _REPLY_COUNT_RE.search(display_name):
-        issues.append("Ends in a \"(N)\" pattern -- can look like a threaded-reply count")
+        issues.append("Ends in a \"(N)\" pattern: can look like a threaded-reply count")
     if "gmail.com" in lower and from_address and not from_address.lower().endswith("@gmail.com"):
-        issues.append("Display name references gmail.com but the sending address doesn't -- looks like impersonation")
+        issues.append("Display name references gmail.com but the sending address doesn't, which looks like impersonation")
 
     return issues
 

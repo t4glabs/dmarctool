@@ -65,7 +65,7 @@ _PROBLEM_STORY = {
                    "drifted out of sync with what we're tracking"),
     # Rewritten 2026-09-30 (jev workflow Ch.38): 64%->75% reads_like_a_person.
     "dns_policy_weakened": ("your protection against fake emails using your name actually got weaker recently. "
-                             "This is not our tracking falling behind -- someone or something changed a real "
+                             "This is not our tracking falling behind: someone or something changed a real "
                              "setting on your website's domain"),
     "blocklist": "one of the computers sending your emails ended up on a public \"don't trust this sender\" list, which can send your mail straight to spam",
     "ptr_issue": "one of your sending computers wasn't labeled correctly on the internet, which makes some email services distrust it",
@@ -85,8 +85,8 @@ _PROBLEM_STORY = {
                                "our safety checks. That's often just a misconfigured sender working itself out, "
                                "but it's the same pattern an unauthorized use of your name would leave behind"),
     "borrowed_sending_identity": ("some of your emails were accidentally being sent through a different website's "
-                                   "account -- ordinarily a shared-vendor mix-up, though it takes the same shape "
-                                   "as someone else borrowing your organization's identity"),
+                                   "account. That's ordinarily a mix-up at a service you share with others, though "
+                                   "it looks the same as someone borrowing your organization's identity"),
     "spf_missing": "your website was missing a security setting that helps stop people from faking your emails",
     "dns_missing": "your website didn't have the basic protection that stops people from faking your emails",
     "dkim_missing": "your website was missing a kind of digital signature that proves your emails really came from you",
@@ -127,8 +127,8 @@ _PROBLEM_STORY = {
     # section: it's a heads-up we monitor, not something Aikyam can "fix" (you
     # can't un-register someone else's domain), so it's kept out of the "we've
     # taken care of it" resolved list -- see _RESOLVED_EXCLUDED_CATEGORIES.
-    "lookalike_domain": ("we spotted a web address deliberately registered to look like yours -- the kind that can "
-                          "be used to trick your supporters -- and we're keeping an eye on what it does"),
+    "lookalike_domain": ("we spotted a web address deliberately registered to look like yours, the kind that can "
+                          "be used to trick your supporters, and we're keeping an eye on what it does"),
     # Added 2026-11-12 with the checks matched to aikyam's public check site
     # (jev/DECISIONS_LOG.md, same date): the public report and this one must
     # never disagree about the same DNS. Each tested at or above the shipped
@@ -251,7 +251,7 @@ _TIP_LIBRARY = {
     # ask them. Aikyam already handles delisting directly (see the operator
     # remediation text for this category), so the reader-facing tip should say
     # that plainly, not assign them a vague research task.
-    "blocklist": "This isn't something you need to sort out yourself -- aikyam is already working on getting this cleared. If it happens again and again, let aikyam know so we can look into why.",
+    "blocklist": "This isn't something you need to sort out yourself. aikyam is already working on getting this cleared. If it happens again and again, let aikyam know so we can look into why.",
     "safe_browsing_flagged": "Check your website for anything that looks out of place, since this sometimes happens after a plugin or theme gets compromised.",
     "display_name_issue": "Keep your newsletter's \"from\" name consistent and clearly recognizable as your organization across every email you send.",
     "content_spam_risk": "Before your next newsletter, read the subject line and body out loud. If it sounds like a sales pitch or leans on urgency (\"Act now\", \"limited time\"), soften it.",
@@ -269,7 +269,7 @@ _TIP_LIBRARY = {
     # (64% boilerplate) even in isolation. Rewrote each with genuinely
     # different sentence structure -- Jev-tested individually, not swapped
     # mechanically -- 2026-09-30 (jev workflow Ch.38).
-    "spf_missing": "This lives entirely in your website's technical settings -- aikyam handles it for you, no action needed on your end.",
+    "spf_missing": "This lives entirely in your website's technical settings. aikyam handles it for you, so there's no action needed on your end.",
     "dns_missing": "aikyam takes care of this directly in your website's settings, so there is nothing for you to configure yourself.",
     "dkim_missing": "This is a behind-the-scenes signing setting. aikyam sets it up, so you do not have to touch anything.",
     "domain_expiring_soon": "Renew your domain name with whoever you registered it through, as soon as you can. If it lapses, your website and all your email stop working right away, and someone else could register it.",
@@ -277,7 +277,7 @@ _TIP_LIBRARY = {
     "dkim_weak_key": "Upgrading this is a one-time technical step, and aikyam handles it quietly in the background.",
     "dkim_alignment_gap": "This is a one-time setting aikyam can turn on with whichever service actually sends your mail, like Google Workspace or Mailgun.",
     "mta_sts_broken": "aikyam fixes this at the technical level directly, so no changes are needed from you.",
-    "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link -- most newsletter tools have a single setting for this.",
+    "campaign_compliance_issue": "When you send your next newsletter, make sure it includes a working one-click unsubscribe link. Most newsletter tools have a single setting for this.",
     "display_name_inconsistent": "Keep your newsletter's \"from\" name consistent and clearly recognisable as your organization across every email you send.",
     "dmarc_record_invalid": "aikyam corrects this in your website's settings, so there's nothing for you to change.",
     "dmarc_subdomains_open": "aikyam will change this one setting for you, so the other versions of your address get the same protection as the main one.",
@@ -327,6 +327,34 @@ _TIMES_WORD = {2: "twice", 3: "three times", 4: "four times", 5: "five times"}
 
 def _times_phrase(n: int) -> str:
     return _TIMES_WORD.get(n, f"{n} times")
+
+
+def _as_date(value) -> datetime.date:
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    return datetime.date.fromisoformat(str(value)[:10])
+
+
+def day_label(value, with_year: bool = False) -> str:
+    """'18 Oct' (or '18 Oct 2026') from a date, datetime or ISO string -- the
+    one date style every reader-facing line uses. Never an ISO date in prose."""
+    d = _as_date(value)
+    return d.strftime("%-d %b %Y" if with_year else "%-d %b")
+
+
+def period_label(start, end) -> str:
+    """'13 Oct to 12 Nov 2026', or '20 Dec 2026 to 19 Jan 2027' across a year end."""
+    s, e = _as_date(start), _as_date(end)
+    return f"{day_label(s, with_year=s.year != e.year)} to {day_label(e, with_year=True)}"
+
+
+def _part_of_month(value) -> str:
+    """'late September' -- for naming a day without making the reader parse a date."""
+    d = _as_date(value)
+    part = "early" if d.day <= 10 else "mid" if d.day <= 20 else "late"
+    return f"{part}-{d.strftime('%B')}" if part == "mid" else f"{part} {d.strftime('%B')}"
 
 
 def _care_ledger(conn, domain_id: int, open_items: int = None):
@@ -518,7 +546,7 @@ def _suppression_story(count: int, sample_emails=None) -> str:
     an abstract count."""
     # No "full inbox" here any more: only permanently blocked addresses are
     # counted (see _list_hygiene), and a full inbox isn't one of those.
-    base = (f"{count} email address{'es' if count != 1 else ''} stopped accepting your mail during this time "
+    base = (f"{count:,} email address{'es' if count != 1 else ''} stopped accepting your mail during this time "
             f"(usually a typo or an account that's closed)")
     if sample_emails:
         shown = sample_emails[:MAX_SAMPLE_EMAILS]
@@ -727,7 +755,7 @@ def _reputation_rate_detail(conn, category: str, ref_key: str, start_str: str, e
         return None
     days = max(1, (datetime.datetime.strptime(end_day, "%Y-%m-%d") - datetime.datetime.strptime(start_day, "%Y-%m-%d")).days)
     rate = bad * 100 / total
-    return (f"That's about {bad} out of the {total} emails you sent over the last {days} days, "
+    return (f"That's about {bad:,} out of the {total:,} emails you sent over the last {days} days, "
             f"roughly {rate:.1f}%")
 
 
@@ -746,10 +774,10 @@ def _domain_expiry_detail(conn, domain_id: int):
         return None
     days_left = days_until(row["expires_at"])
     if days_left < 0:
-        return f"It expired on {row['expires_at']}, {-days_left} day{'s' if days_left != -1 else ''} ago"
+        return f"It expired on {day_label(row['expires_at'], with_year=True)}, {-days_left} day{'s' if days_left != -1 else ''} ago"
     if days_left == 0:
-        return f"It expires today, {row['expires_at']}"
-    return f"It's due to expire on {row['expires_at']}, which is {days_left} day{'s' if days_left != 1 else ''} away"
+        return f"It expires today, {day_label(row['expires_at'], with_year=True)}"
+    return f"It's due to expire on {day_label(row['expires_at'], with_year=True)}, which is {days_left} day{'s' if days_left != 1 else ''} away"
 
 
 # Google's own threat-type names -> plain English. Round 3 of the
@@ -865,8 +893,8 @@ def _content_risk_detail(conn, domain_id: int, subject_only: bool):
             # reads_like_generated_boilerplate. Real, measured improvement,
             # not a full fix -- two further restructures tested worse or flat,
             # left as the best found rather than forced further.
-            return (f"It {phrase}, which spam filters tend to notice -- not a knock on the newsletter "
-                     f"itself, just worth softening next time.")
+            return (f"It {phrase}, which spam filters tend to notice. That's not a knock on the newsletter "
+                     f"itself, just something to soften next time.")
     return None
 
 
@@ -977,9 +1005,9 @@ def _borrowed_identity_detail(conn, domain_id: int):
         return None
     if len(parts) == 1:
         acct, msgs, days = parts[0]
-        return (f"Right now that's {acct}, which has carried {msgs} of your email{'s' if msgs != 1 else ''} "
+        return (f"Right now that's {acct}, which has carried {msgs:,} of your email{'s' if msgs != 1 else ''} "
                 f"over {_day_phrase(days)}")
-    clauses = [f"{acct}, which has carried {msgs} of your emails over {_day_phrase(days)}"
+    clauses = [f"{acct}, which has carried {msgs:,} of your emails over {_day_phrase(days)}"
                for acct, msgs, days in parts]
     return f"Right now, {len(parts)} other accounts are involved: " + ", and ".join(
         [", ".join(clauses[:-1]), clauses[-1]] if len(clauses) > 2 else clauses
@@ -1068,7 +1096,7 @@ def _still_open_items(conn, domain_id: int, start_str: str, end_str: str, blockl
 
 def _first_seen_date(conn, domain_id: int, category: str):
     """Earliest date this category was ever raised for this domain, as a
-    short 'Mon D' string, or None -- PDF-only content (jev workflow Ch.39):
+    short 'D Mon' string, or None -- PDF-only content (jev workflow Ch.39):
     powers the compact still-open reference table's "SINCE" column. Same
     underlying data as _incident_recurrence's own duration prose, queried
     directly rather than parsed back out of that sentence."""
@@ -1078,7 +1106,7 @@ def _first_seen_date(conn, domain_id: int, category: str):
     ).fetchone()
     if not row or not row["d"]:
         return None
-    return datetime.datetime.strptime(row["d"][:10], "%Y-%m-%d").strftime("%b %-d")
+    return day_label(row["d"])
 
 
 # Short, plain-language labels for the still-open reference table -- NOT
@@ -1237,11 +1265,26 @@ def _spam_rate_trend(conn, domain_id: int, now: datetime.datetime):
     a third surface: a good-news STATUS line. The `else` branch below adds a
     one-line "steady" acknowledgment instead of silence once real history
     exists; moved the tested sentence to 44% borderline (down from 67%
-    boilerplate)."""
+    boilerplate).
+
+    Days over the line (2026-11-13, the public sample report): the chart
+    under this sentence draws every day, so when any charted day went over
+    Google's 0.10% the text says so first. pattic.org's read "averaging about
+    0.05%... well under the 0.10%" above a chart with a 0.45% day and two at
+    0.13%. Leading with the days and then the average took Jev's
+    accurately_calibrated from 50% to 68% (the average-first wordings, with
+    the days added as a clause, stayed at 35-45%)."""
+    from app.analysis import postmaster_daily_series, postmaster_domains_for
+
+    pm_domains = postmaster_domains_for(conn, domain_id)
+    if not pm_domains:
+        return None
+
     def _avg(start_date, end_date):
         row = conn.execute(
-            "SELECT AVG(spam_rate) as avg FROM postmaster_daily_stats WHERE domain_id=? AND day BETWEEN ? AND ?",
-            (domain_id, start_date.isoformat(), end_date.isoformat()),
+            f"""SELECT AVG(spam_rate) as avg FROM postmaster_daily_stats
+                WHERE postmaster_domain IN ({",".join("?" * len(pm_domains))}) AND day BETWEEN ? AND ?""",
+            (*pm_domains, start_date.isoformat(), end_date.isoformat()),
         ).fetchone()
         return row["avg"]
 
@@ -1250,6 +1293,46 @@ def _spam_rate_trend(conn, domain_id: int, now: datetime.datetime):
         return None
     prior = _avg((now - datetime.timedelta(days=180)).date(), (now - datetime.timedelta(days=90)).date())
     recent_pct = recent * 100
+    trend = None
+    if prior is not None:
+        prior_pct = prior * 100
+        trend = ("better" if recent_pct < prior_pct - 0.01 else
+                 "higher" if recent_pct > prior_pct + 0.01 else "same")
+
+    # The same days the chart draws (chart_data's spam_series).
+    charted = [(d, r) for d, r in postmaster_daily_series(conn, domain_id, days=60, end=now.date()) if r is not None]
+    over = [(d, r) for d, r in charted if r > GOOD_SPAM_RATE]
+    if over:
+        peak_day, peak = max(over, key=lambda t: t[1])
+        under = len(charted) - len(over)
+        parts = []
+        if under > len(charted) / 2:
+            nobody = sum(1 for _, r in charted if r == 0) > len(charted) / 2
+            parts.append("Most days, Google saw nobody marking your mail as spam." if nobody else
+                         "Most days, Google saw very few people marking your mail as spam.")
+        line = f"the {GOOD_SPAM_RATE * 100:.2f}% Google recommends staying under"
+        peak_shown = f"{peak * 100:.2f}%" if peak < 0.01 else f"{peak * 100:.1f}%"
+        if len(over) == 1:
+            parts.append(f"On one day, in {_part_of_month(peak_day)}, it went above {line}, reaching about "
+                         f"{peak_shown}")
+        else:
+            parts.append(f"On {len(over)} days it went above {line}, the highest in {_part_of_month(peak_day)} "
+                         f"at about {peak_shown}")
+        if peak >= BAD_SPAM_RATE:
+            parts[-1] += f", above the {BAD_SPAM_RATE * 100:.2f}% Google says never to reach"
+        parts[-1] += "."
+        if recent <= GOOD_SPAM_RATE:
+            band = ", still under that line"
+        elif recent < BAD_SPAM_RATE:
+            band = f", above that line but under the {BAD_SPAM_RATE * 100:.2f}% Google treats as a real problem"
+        else:
+            band = f", above the {BAD_SPAM_RATE * 100:.2f}% Google treats as a real problem"
+        tail = {"better": ", a little better than the few months before",
+                "higher": ", a little higher than the few months before",
+                "same": ", about the same as the few months before"}.get(trend, "")
+        parts.append(f"Over the last few months as a whole that averages out to about {recent_pct:.2f}%"
+                     f"{band}{tail}.")
+        return " ".join(parts)
 
     if recent <= GOOD_SPAM_RATE:
         story = (f"Google's own numbers show very few people are marking your mail as spam, averaging about "
@@ -1262,14 +1345,12 @@ def _spam_rate_trend(conn, domain_id: int, now: datetime.datetime):
     else:
         story = (f"Google's own numbers show about {recent_pct:.2f}% of people are marking your mail as spam "
                  f"over the last few months, within a normal range but worth keeping an eye on.")
-    if prior is not None:
-        prior_pct = prior * 100
-        if recent_pct < prior_pct - 0.01:
-            story += " That's an improvement from a few months ago."
-        elif recent_pct > prior_pct + 0.01:
-            story += " That's a bit higher than it was a few months ago."
-        else:
-            story += " That's steady, same as a few months ago."
+    if trend == "better":
+        story += " That's an improvement from a few months ago."
+    elif trend == "higher":
+        story += " That's a bit higher than it was a few months ago."
+    elif trend == "same":
+        story += " That's steady, same as a few months ago."
     return story
 
 
@@ -1385,6 +1466,37 @@ def _chronic_bounce_count_in_period(conn, domain_id: int, start_str: str, end_st
     return int(m.group(1)) if m else 0
 
 
+# bounce_reasons' categories are the dashboard's (and PERMANENT_/SKIPPED_
+# CATEGORIES') keys, so the report relabels instead of renaming them. The
+# first three were on the public sample report as "Suppressed pre-emptively by
+# SES (address-quality check)" etc.; Jev-picked 2026-11-13 (DECISIONS_LOG).
+# Categories already in plain words ("No such user / invalid address") pass
+# through unchanged.
+_BOUNCE_REASON_LABELS = {
+    "Suppressed pre-emptively by SES (not a real mailbox bounce)": "Skipped, because an earlier email to it had already failed",
+    "Already suppressed by Mailgun (remove from your sending list, not a fresh bounce)": "Skipped, because an earlier email to it had already failed",
+    "Already suppressed by Mailgun (recipient unsubscribed)": "Skipped, because the person had unsubscribed",
+    "Suppressed pre-emptively by SES (address-quality check)": "Not sent: a check said the address probably doesn't exist",
+    "Other permanent failure (see raw reason)": "Turned away for some other reason",
+    "Other / unrecognized": "Turned away for some other reason",
+    "Unknown (no diagnostic text captured)": "Turned away for some other reason",
+    "Bad address syntax": "Address has a typo in it",
+    "STARTTLS/TLS required by recipient server": "Their mail server wanted a more secure connection",
+    "SMTP protocol error": "A technical hiccup between the two mail servers",
+    "Message integrity/authentication failure": "Their mail server couldn't confirm the email was really from you",
+    "Delivery time expired (retries exhausted)": "Gave up after hours of retrying",
+    "Temporary delivery failure / timed out": "Gave up after hours of retrying",
+    "No answer from recipient's mail server": "Their mail server didn't answer",
+    "Network or routing problem": "Their mail server couldn't be reached",
+    "Receiving mail system problem": "A fault at their mail server",
+    "Message loop detected": "A fault at their mail server",
+    "Mailing list expansion problem": "A fault at their mail server",
+}
+
+
+_SPAM_COMPLAINT_LABEL = "Marked one of your emails as spam"
+
+
 def _bounce_reason_breakdown(conn, domain_id: int, start_str: str, end_str: str, limit: int = 5, min_volume: int = 5):
     """Real bounce reasons for this period, categorized via
     app.bounce_reasons.categorize_bounce and ranked most-common first, as
@@ -1415,10 +1527,40 @@ def _bounce_reason_breakdown(conn, domain_id: int, start_str: str, end_str: str,
         (domain_id, start_str, end_str),
     ):
         counts[categorize_bounce(row["reason"])] += 1
+    # _list_hygiene's count includes spam complaints, so the bars must too or
+    # they add up to one less than the sentence above them (pattic.org: 20
+    # addresses, 19 in the bars, 2026-11-13).
+    complaints = conn.execute(
+        """SELECT (SELECT COUNT(*) FROM mailgun_suppressions
+                   WHERE domain_id=? AND kind='complaint' AND first_seen_at BETWEEN ? AND ?)
+                + (SELECT COUNT(*) FROM ses_suppressions
+                   WHERE domain_id=? AND kind='complaint' AND first_seen_at BETWEEN ? AND ?) AS n""",
+        (domain_id, start_str, end_str, domain_id, start_str, end_str),
+    ).fetchone()["n"]
+    if complaints:
+        counts[_SPAM_COMPLAINT_LABEL] += complaints
 
     if sum(counts.values()) < min_volume:
         return None
-    return counts.most_common(limit)
+    plain = Counter()
+    for category, n in counts.items():
+        plain[_BOUNCE_REASON_LABELS.get(category, category)] += n
+    return plain.most_common(limit)
+
+
+def _list_hygiene_addresses(conn, domain_id: int, start_str: str, end_str: str):
+    """(blocked addresses, chronic count) behind _list_hygiene's sentence --
+    shared with the headline's optional-jobs count so the two always agree."""
+    emails = [x["email"] for x in conn.execute(
+        """SELECT email FROM mailgun_suppressions
+           WHERE domain_id=? AND kind IN ('bounce', 'complaint') AND first_seen_at BETWEEN ? AND ?
+           UNION ALL
+           SELECT email FROM ses_suppressions
+           WHERE domain_id=? AND (kind = 'complaint' OR (kind = 'bounce' AND bounce_type = 'Permanent'))
+             AND first_seen_at BETWEEN ? AND ?""",
+        (domain_id, start_str, end_str, domain_id, start_str, end_str),
+    ).fetchall()]
+    return emails, _chronic_bounce_count_in_period(conn, domain_id, start_str, end_str)
 
 
 def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
@@ -1445,17 +1587,7 @@ def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
     # were "automatically skipped" and should be removed was wrong on both
     # counts. Repeat temporary failures reach the client through the chronic
     # sentence below instead. Unsubscribes aren't "stopped accepting mail".
-    emails = [x["email"] for x in conn.execute(
-        """SELECT email FROM mailgun_suppressions
-           WHERE domain_id=? AND kind IN ('bounce', 'complaint') AND first_seen_at BETWEEN ? AND ?
-           UNION ALL
-           SELECT email FROM ses_suppressions
-           WHERE domain_id=? AND (kind = 'complaint' OR (kind = 'bounce' AND bounce_type = 'Permanent'))
-             AND first_seen_at BETWEEN ? AND ?""",
-        (domain_id, start_str, end_str, domain_id, start_str, end_str),
-    ).fetchall()]
-
-    chronic_count = _chronic_bounce_count_in_period(conn, domain_id, start_str, end_str)
+    emails, chronic_count = _list_hygiene_addresses(conn, domain_id, start_str, end_str)
 
     if not emails and not chronic_count:
         return None
@@ -1468,7 +1600,7 @@ def _list_hygiene(conn, domain_id: int, start_str: str, end_str: str):
         # generated_boilerplate, the biggest single natural_voice gain of
         # this round.
         parts.append(
-            f"We also found {chronic_count} email address{'es' if chronic_count != 1 else ''} that had been "
+            f"We also found {chronic_count:,} email address{'es' if chronic_count != 1 else ''} that had been "
             f"quietly failing to receive your mail for months without ever fully bouncing (a full inbox that "
             f"never clears, for example). Worth removing from your own list too, same as the ones above"
         )
@@ -1524,7 +1656,7 @@ def _blocklist_split(conn, domain_id: int, domain_name: str, start_str: str, end
         sample_orgs = [org for ip in good_ips[:2] if (org := cached_whois_org(conn, ip, allow_live=False))]
         example = f", for example one came from \"{sample_orgs[0]}\"" if sample_orgs else ""
         good_story = (
-            f"We caught {n} attempt{'s' if n != 1 else ''} to send fake email pretending to be your "
+            f"We caught {n:,} attempt{'s' if n != 1 else ''} to send fake email pretending to be your "
             f"organization{example}. Each one was already on a public \"known troublemaker\" list and came from "
             f"an ordinary home/business internet connection, not any platform you actually use. It was never "
             f"a real risk to your reputation. This is exactly what your email protection is for."
@@ -1567,22 +1699,22 @@ def _impersonation_good_news(conn, domain_id: int, domain_name: str, start_epoch
     if countries:
         names = [_COUNTRY_NAMES.get(c, c) for c in countries[:2]]
         where = f", one of them from {names[0]}" if len(names) == 1 else f", from places like {names[0]} and {names[1]}"
-    base = (f"We caught {n} attempt{'s' if n != 1 else ''} to send email pretending to be your "
+    base = (f"We caught {n:,} attempt{'s' if n != 1 else ''} to send email pretending to be your "
             f"organization{where}.")
     example = data["examples"][0] if data["examples"] else None
     detail = ""
     if example and example.get("identity") and example.get("date"):
-        detail = (f' The most recent, on {example["date"]}, used the made-up address '
+        detail = (f' The most recent, on {day_label(example["date"])}, used the made-up address '
                    f'"{example["identity"]}" to try to pass as you.')
     if data["all_blocked"]:
-        outcome = " Not one reached anyone -- your protection blocked them all. This is exactly what it's there for."
+        outcome = " Your protection blocked every one of them, so not one reached anyone. That's exactly what it's there for."
     elif data["blocked"]:
-        outcome = (f" {data['blocked']} {'was' if data['blocked'] == 1 else 'were'} stopped cold before it "
+        outcome = (f" {data['blocked']:,} {'was' if data['blocked'] == 1 else 'were'} stopped cold before it "
                    f"reached anyone, and the rest were seen and logged. Finishing the upgrade to your "
                    f"protection is what stops the rest the same way.")
     else:
         outcome = (" We saw and logged every one, but your protection isn't turned up far enough yet to stop "
-                   "them before they arrive -- turning it up further is what will.")
+                   "them before they arrive. Turning it up further is what will.")
     return base + detail + outcome
 
 
@@ -1615,7 +1747,7 @@ def _standout_campaign_note(conn, period_campaigns: list, settings: dict):
     worst_score, _ = scored[0]
     if best_score - worst_score < 8:
         return None
-    return (f" Your best-performing send this period was on {best_c['send_day']}, which got noticeably "
+    return (f" Your best-performing send this period was on {day_label(best_c['send_day'])}, which got noticeably "
             f"more people to click through than the rest.")
 
 
@@ -1730,8 +1862,8 @@ def _newsletter_quality_summary(conn, domain_id: int, start_date: str, end_date:
         status = "ok"
         if clean_count == total:
             verdict_text = (
-                f"Your {noun} this period came back clean -- nothing worth flagging right now." if total == 1
-                else f"All {total} of your {noun} this period came back clean -- nothing worth flagging right now."
+                f"Your {noun} this period came back clean. Nothing worth flagging right now." if total == 1
+                else f"All {total} of your {noun} this period came back clean. Nothing worth flagging right now."
             )
         elif total == 1:  # "0 of your 1 newsletter... The rest" (aikyamjobs, 2026-11-11)
             verdict_text = "Your newsletter this period had nothing serious, just a small thing covered below."
@@ -1751,7 +1883,7 @@ def _newsletter_quality_summary(conn, domain_id: int, start_date: str, end_date:
         status = "bad"
         verdict_text = (
             "Your newsletter this period has real things worth fixing, covered below." if total == 1
-            else f"Just {clean_count} of your {total} {noun} this period came back clean -- the other "
+            else f"Just {clean_count} of your {total} {noun} this period came back clean. The other "
                  f"{total - clean_count} have real things worth fixing, covered below."
         )
 
@@ -1811,7 +1943,7 @@ def _newsletter_reach(conn, domain_id: int, domain_name: str, start_date: str, e
     this_open, this_click, this_bounce, this_complaint = _newsletter_rates(this_period)
     prev_open, prev_click, prev_bounce, prev_complaint = _newsletter_rates(prev_period)
     count = len(this_period)
-    story = f"You sent {count} newsletter{'s' if count != 1 else ''} this time."
+    story = f"You sent {count:,} newsletter{'s' if count != 1 else ''} this time."
 
     if this_open is not None:
         story += f" Out of every 100 people who received one, about {round(this_open * 100)} opened it"
@@ -1927,12 +2059,12 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         if prev_total and prev_total >= 20 and total >= 20:
             growth = (total - prev_total) / prev_total
             if growth > 0.15:
-                deliverability += (f" You also sent more email this time -- about {total}, up from about "
-                                    f"{prev_total} last time. That's just extra context for the number above, "
+                deliverability += (f" You also sent more email this time, about {total:,}, up from about "
+                                    f"{prev_total:,} last time. That's just extra context for the number above, "
                                     f"not something you need to do anything about.")
             elif growth < -0.15:
-                deliverability += (f" You sent less email this time -- about {total}, down from about "
-                                    f"{prev_total} last time. That's just extra context for the number above, "
+                deliverability += (f" You sent less email this time, about {total:,}, down from about "
+                                    f"{prev_total:,} last time. That's just extra context for the number above, "
                                     f"not something you need to do anything about.")
     else:
         deliverability = "We didn't get enough information about your emails this time to say how they're doing. Nothing to worry about, we'll know more next time."
@@ -1960,12 +2092,10 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         conn, domain_id, period_start.date().isoformat(), period_end.date().isoformat(),
     )
 
-    headline = _headline_verdict(conn, domain_id, still_open_categories, _risk_warning(conn, domain_id, period_end),
-                                  period_start)
     whats_working = _whats_working(conn, domain_id, still_open_categories, rate, total, period_end,
                                     start_str, end_str)
-    health_trend = _health_trend(conn, domain_id, period_start)
-    health_timeline = _health_timeline(conn, domain_id)
+    health_trend = _health_trend(conn, domain_id, period_start, period_end)
+    health_timeline = _health_timeline(conn, domain_id, as_of=period_end)
     list_hygiene = _list_hygiene(conn, domain_id, start_str, end_str)
     bounce_reasons = _bounce_reason_breakdown(conn, domain_id, start_str, end_str)
     protection_tightened = _protection_tightened(conn, domain_id, period_start)
@@ -1975,6 +2105,9 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     cadence = sending_cadence(conn, domain_id)
     tips = _tips_for_domain(still_open_categories, cadence["irregular"])
     care_ledger = _care_ledger(conn, domain_id, open_items=len(still_open))
+    headline = _headline_verdict(conn, domain_id, still_open_categories, risk_warning, period_start,
+                                  optional_jobs=_optional_jobs(conn, domain_id, start_str, end_str,
+                                                               newsletter_quality, tips))
 
     # KPI-strip numbers for the email report's stat tiles. Deliberately
     # re-derived from the same locals the prose above already computed
@@ -1982,11 +2115,24 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
     # prose, so a tile and its matching sentence can never disagree -- same
     # discipline as every _xxx_detail() helper elsewhere in this file.
     delivery_rate_pct = round(rate * 100) if total else None
-    health_score_value = _latest_health_score(conn, domain_id)
-    health_score_points = _health_score_trail(conn, domain_id)
-    if health_score_points:
-        health_timeline_delta = health_score_points[-1][1] - health_score_points[0][1]
-        health_timeline_since = health_score_points[0][0]
+    # The tile shows the same precision as the day-by-day chart's labels: a
+    # rounded "100%" tile above a chart ending "98.1%" read as two numbers
+    # disagreeing (public sample report, 2026-11-13), when the tile is the
+    # whole period and the chart point is one day. Never "100" unless it is.
+    delivery_rate_display = None
+    if total:
+        shown = round(rate * 100, 1)
+        if shown == 100 and passed < total:
+            shown = 99.9
+        delivery_rate_display = f"{shown:g}"
+    # The "Since" tile measures from the same baseline as "Where you stand"
+    # (the score at the last update), labelled with that date, never from the
+    # first month of the trail (see _health_timeline).
+    health_score_value = _latest_health_score(conn, domain_id, period_end)
+    health_baseline = _health_baseline(conn, domain_id, period_start)
+    if health_score_value is not None and health_baseline is not None:
+        health_timeline_delta = health_score_value - health_baseline
+        health_timeline_since = day_label(period_start)
     else:
         health_timeline_delta = None
         health_timeline_since = None
@@ -2015,6 +2161,8 @@ def build_domain_report(conn, domain_id: int, domain_name: str,
         "contact_cta": contact_cta,
         "tips": tips,
         "delivery_rate_pct": delivery_rate_pct,
+        "delivery_rate": rate if total else None,
+        "delivery_rate_display": delivery_rate_display,
         "health_score_value": health_score_value,
         "health_timeline_delta": health_timeline_delta,
         "health_timeline_since": health_timeline_since,
@@ -2160,71 +2308,98 @@ def _why_it_matters(category):
     return _WHY_IT_MATTERS.get(category)
 
 
-def _health_score_trail(conn, domain_id: int, min_points: int = 3):
-    """The last health-score snapshot recorded in each calendar month, most
-    recent last, as (month_label, rounded_score) pairs -- or None until there
-    are at least `min_points` distinct months (with less history a 'trend'
-    would be drawn from two dots). Shared by _health_timeline()'s prose and
-    the email report's dormant-until-real KPI trend tile, so both read the
-    exact same underlying months. Caps at the last 6 months."""
+def _health_score_trail(conn, domain_id: int, min_points: int = 3, as_of=None):
+    """The last health-score snapshot recorded in each calendar month up to
+    `as_of` (the report's end), most recent last, as (month_date, rounded_score)
+    pairs -- or None until there are at least `min_points` distinct months
+    (with less history a 'trend' would be drawn from two dots). Caps at the
+    last 6 months."""
+    as_of_str = _as_date(as_of).isoformat() if as_of else "9999-12-31"
     rows = conn.execute(
         """SELECT substr(snapshot_date,1,7) month, health_score, snapshot_date
            FROM domain_health_snapshots
            WHERE domain_id=? AND health_score IS NOT NULL
              AND id IN (SELECT MAX(id) FROM domain_health_snapshots
-                        WHERE domain_id=? AND health_score IS NOT NULL
+                        WHERE domain_id=? AND health_score IS NOT NULL AND snapshot_date <= ?
                         GROUP BY substr(snapshot_date,1,7))
            ORDER BY snapshot_date""",
-        (domain_id, domain_id),
+        (domain_id, domain_id, as_of_str),
     ).fetchall()
     if len(rows) < min_points:
         return None
     rows = rows[-6:]
-    return [(datetime.datetime.strptime(r["month"] + "-01", "%Y-%m-%d").strftime("%b"),
-             round(r["health_score"])) for r in rows]
+    return [(datetime.date.fromisoformat(r["month"] + "-01"), round(r["health_score"])) for r in rows]
 
 
-def _health_timeline(conn, domain_id: int, min_points: int = 3):
+def _health_timeline(conn, domain_id: int, min_points: int = 3, as_of=None):
     """A multi-month view of this domain's OWN health score -- the last score
-    recorded in each calendar month, most recent last -- so improvement is
-    visible as a trajectory, not just a single now-vs-last number. Deliberately
-    dormant until there are at least `min_points` distinct months: with less
-    history it would either duplicate _health_trend() or draw a 'trend' out of
-    two dots, so it simply returns None and the section is omitted. It lights
-    up on its own once the 6-hourly snapshot job has accumulated enough months
-    (as of 2026-08 there was only ~2 weeks of data, so nothing renders yet)."""
-    points = _health_score_trail(conn, domain_id, min_points)
+    recorded in each calendar month, most recent last -- so the trajectory is
+    visible, not just a single now-vs-last number. Dormant until there are
+    `min_points` distinct months.
+
+    One baseline (2026-11-13, the public sample report): "Where you stand" and
+    the "Since" tile both measure from the last update (the period start), so
+    this line names no number of its own -- it used to add "up 6 points since
+    Sep" next to "from 69 to 80" and a "+6 since Sep" tile, three baselines on
+    one page. And it only says "steady improvement" when no month went down:
+    pattic.org's Sep 74, Oct 87, Nov 80 was called steady improvement."""
+    points = _health_score_trail(conn, domain_id, min_points, as_of)
     if not points:
         return None
-    trail = ", ".join(f"{name} {score}" for name, score in points)
-    first_score, last_score = points[0][1], points[-1][1]
-    delta = last_score - first_score
-    if delta >= 3:
-        tail = (f"That's steady improvement -- up {delta} point{'s' if delta != 1 else ''} since "
-                f"{points[0][0]}, and it's the payoff from the fixes we've made together.")
-    elif delta <= -3:
-        tail = (f"It's dipped {abs(delta)} point{'s' if abs(delta) != 1 else ''} over that stretch; "
-                f"the items below are what we're working through to turn it back up.")
-    else:
+    now_month = _as_date(as_of).replace(day=1) if as_of else None
+    labels = [f"{m.strftime('%b')} {score}" for m, score in points]
+    if now_month and points[-1][0] == now_month:
+        labels[-1] = f"and {points[-1][1]} now"
+    trail = ", ".join(labels)
+    scores = [score for _, score in points]
+    steps = [b - a for a, b in zip(scores, scores[1:])]
+    first, prev, last = scores[0], scores[-2], scores[-1]
+    first_name, prev_name = points[0][0].strftime("%B"), points[-2][0].strftime("%B")
+    if all(abs(st) <= 2 for st in steps) and abs(last - first) <= 2:
         tail = "It's held steady over these months, which is exactly what you want to see."
-    return f"Your email health month by month: {trail}. {tail}"
+    elif all(st >= 0 for st in steps) and last - first >= 3:
+        tail = "That's steady improvement, and it's the payoff from the fixes we've made together."
+    elif all(st <= 0 for st in steps) and first - last >= 3:
+        tail = f"That's down from {first_name}."
+    else:
+        vs_first = (f"up from {first_name}" if last - first >= 3 else
+                    f"below {first_name}" if first - last >= 3 else
+                    f"about where it was in {first_name}")
+        vs_prev = (f"back up from {prev_name}" if last - prev >= 3 else
+                   f"a little down from {prev_name}" if 0 < prev - last <= 7 else
+                   f"down from {prev_name}" if prev - last > 7 else
+                   f"level with {prev_name}")
+        tail = f"That's {vs_first}, and {vs_prev}."
+    return f"Your email health at the end of each month: {trail}. {tail}"
 
 
-def _latest_health_score(conn, domain_id: int):
-    """The single most recent real health-score snapshot (0-100, rounded), or
-    None if none exist yet. Shared by _health_trend()'s prose and the email
-    report's KPI-tile number so the two can never disagree about the same
-    fact."""
+def _latest_health_score(conn, domain_id: int, as_of=None):
+    """The most recent real health-score snapshot up to `as_of` (the report's
+    end; 0-100, rounded), or None if none exist yet. Shared by _health_trend()'s
+    prose and the KPI tile so the two can never disagree."""
     row = conn.execute(
         """SELECT health_score FROM domain_health_snapshots
-           WHERE domain_id=? AND health_score IS NOT NULL
+           WHERE domain_id=? AND health_score IS NOT NULL AND snapshot_date <= ?
            ORDER BY snapshot_date DESC LIMIT 1""",
-        (domain_id,),
+        (domain_id, _as_date(as_of).isoformat() if as_of else "9999-12-31"),
     ).fetchone()
     return round(row["health_score"]) if row else None
 
 
-def _health_trend(conn, domain_id: int, period_start):
+def _health_baseline(conn, domain_id: int, period_start):
+    """The score at the last update (the latest snapshot on or before the
+    period start) -- the one baseline every health number in the report
+    measures from. None without that much history."""
+    row = conn.execute(
+        """SELECT health_score FROM domain_health_snapshots
+           WHERE domain_id=? AND health_score IS NOT NULL AND snapshot_date <= ?
+           ORDER BY snapshot_date DESC LIMIT 1""",
+        (domain_id, period_start.date().isoformat()),
+    ).fetchone()
+    return round(row["health_score"]) if row else None
+
+
+def _health_trend(conn, domain_id: int, period_start, period_end=None):
     """This domain's OWN health score now vs. around the last report -- the
     single most reassuring number available, and the thing a "did it get
     better?" question actually needs, without ranking against other orgs
@@ -2235,15 +2410,10 @@ def _health_trend(conn, domain_id: int, period_start):
     domain having a hard time it reads as discouraging rather than
     reassuring). Returns None rather than inventing a trend when there isn't
     enough history yet."""
-    score = _latest_health_score(conn, domain_id)
+    score = _latest_health_score(conn, domain_id, period_end)
     if score is None:
         return None
-    prior = conn.execute(
-        """SELECT health_score FROM domain_health_snapshots
-           WHERE domain_id=? AND health_score IS NOT NULL AND snapshot_date <= ?
-           ORDER BY snapshot_date DESC LIMIT 1""",
-        (domain_id, period_start.date().isoformat()),
-    ).fetchone()
+    before = _health_baseline(conn, domain_id, period_start)
 
     band = ("in good shape" if score >= 80 else
             "holding steady, with room to improve" if score >= 50 else
@@ -2254,11 +2424,10 @@ def _health_trend(conn, domain_id: int, period_start):
     # stayed low even after (~1/4) regardless of the dash -- a deeper
     # rewrite of this whole framing is flagged in jev/DECISIONS_LOG.md
     # Chapter 16 as a follow-up, not solved here.
-    if not prior or prior["health_score"] is None:
+    if before is None:
         return (f"Overall, your email health is {band}, scoring {score} out of 100 right now. "
                 f"We'll show you how this moves each cycle, so you can see progress rather than take our word for it.")
 
-    before = round(prior["health_score"])
     delta = score - before
     if delta >= 3:
         return (f"Your overall email health has improved since the last update, from {before} to {score} out of "
@@ -2471,12 +2640,31 @@ def _whats_working(conn, domain_id: int, still_open_categories: set, rate, total
 # preview twice shows the same line both times.
 _ALL_CLEAR_PHRASES = [
     "Nothing on your domain needs your attention this time.",
-    "Everything checked out fine on your domain this time -- nothing for you to do.",
-    "No action needed from you this time -- your domain looked healthy throughout.",
+    "Everything checked out fine on your domain this time. Nothing for you to do.",
+    "Your domain looked healthy throughout, with no action needed from you this time.",
 ]
 
 
-def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_warning, period_start=None):
+_COUNT_WORD = {1: "one", 2: "two", 3: "three"}
+
+
+def _optional_jobs(conn, domain_id: int, start_str: str, end_str: str, newsletter_quality, tips) -> list:
+    """The things further down the report that ask the reader to do something
+    even when nothing is wrong: removing addresses from their own list, and
+    newsletter tips. The all-clear headline names them instead of saying
+    "nothing for you to do" above them (public sample report, 2026-11-13)."""
+    jobs = []
+    emails, chronic_count = _list_hygiene_addresses(conn, domain_id, start_str, end_str)
+    n = len(emails) + chronic_count
+    if n:
+        jobs.append(f"clearing {n:,} address{'es' if n != 1 else ''} that no longer accept your mail off your list")
+    if (newsletter_quality and newsletter_quality.get("tips")) or tips:
+        jobs.append("some tips for your newsletter")
+    return jobs
+
+
+def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_warning, period_start=None,
+                      optional_jobs=None):
     """One short, factual line orienting the reader before the detail: is
     there something here they need to know about, or not.
 
@@ -2505,6 +2693,13 @@ def _headline_verdict(conn, domain_id: int, still_open_categories: set, risk_war
     if still_open_categories & _URGENT_STILL_OPEN_CATEGORIES or risk_warning:
         return "There's one thing on this update we want to flag for you, and it's explained below."
     if not still_open_categories:
+        # Jev 2026-11-13: 63% clear_as_is, 69% accurately_calibrated, 68%
+        # reads_like_a_person (vs. 47-71% boilerplate for two other shapes).
+        if optional_jobs:
+            n = len(optional_jobs)
+            listed = optional_jobs[0] if n == 1 else ", ".join(optional_jobs[:-1]) + ", and " + optional_jobs[-1]
+            return (f"Nothing urgent this time, just {_COUNT_WORD.get(n, n)} optional "
+                    f"job{'s' if n != 1 else ''} further down: {listed}.")
         if period_start is not None:
             return _ALL_CLEAR_PHRASES[period_start.month % len(_ALL_CLEAR_PHRASES)]
         return _ALL_CLEAR_PHRASES[0]
@@ -2664,7 +2859,7 @@ def chart_data(conn, domain_id: int, period_start: datetime.datetime, period_end
         "disp_none": sum(p["disp_none"] for p in providers),
         "disp_quarantine": sum(p["disp_quarantine"] for p in providers),
         "disp_reject": sum(p["disp_reject"] for p in providers),
-        "spam_series": analysis.postmaster_daily_series(conn, domain_id, days=60),
+        "spam_series": analysis.postmaster_daily_series(conn, domain_id, days=60, end=period_end.date()),
         # Daily points only on days with enough mail to mean something. A day
         # with 1-10 messages (a few spoof attempts, a forward) all failing
         # plotted as "0% delivered" between real send days, a 100/0/100/0
@@ -2811,8 +3006,8 @@ def _group_teaser_hook(member_summaries: list) -> str:
     else:
         body = None
     if body:
-        return f"{opener}, {body} -- the full breakdown for each one is inside."
-    return f"{opener} -- nothing needs your attention right now, full details for each one are inside."
+        return f"{opener} {body}. The full breakdown for each one is inside."
+    return f"{opener}. Nothing urgent came up, and the full details for each one are inside."
 
 
 def _pdf_intro_line(pdf_intro_shown: bool) -> str:
@@ -2838,20 +3033,14 @@ def _pdf_intro_line(pdf_intro_shown: bool) -> str:
     "don't force a fix that doesn't work" discipline as Round 2 of the
     Chapter 20-22 rebuild.
 
-    Both lines below still use "--" (flagged for the paused em-dash sweep,
-    task/Chapter 36+) -- tested a naive dash-to-colon swap on the first-time
-    line specifically and it REGRESSED natural_voice from reads_like_a_person
-    to reads_like_generated_boilerplate, the same "mechanical punctuation
-    swap isn't the fix by itself" lesson Chapter 17 already found once.
-    Shipping the empirically-best-tested wording now rather than a worse
-    version just to avoid a dash; a proper full-sentence rewrite (not a
-    punctuation swap) is the right way to revisit this when that sweep
-    resumes."""
+    Both lines used "--" until 2026-11-13: a dash-to-colon swap had regressed
+    natural_voice (Chapter 17's lesson), so they waited for a full-sentence
+    rewrite. The rewrite below moved reads_like_a_person from 16% to 85%
+    (first-time line) and 14% to 44% (repeat line)."""
     if not pdf_intro_shown:
-        return ("This time we made you a proper PDF instead of just an email -- real charts, plain "
-                 "language, the full story of what happened and what we did about it, attached to this "
-                 "message.")
-    return ("Your full report is attached as a PDF, same as always -- real charts, plain language, "
+        return ("This time we made you a proper PDF instead of just an email. It's attached to this message, "
+                 "with real charts, plain language, and the full story of what happened and what we did about it.")
+    return ("Your full report is attached as a PDF, same as always, with real charts, plain language, and "
             "everything that happened and what we did about it.")
 
 
@@ -2875,6 +3064,7 @@ def _build_context(conn, domain_id: int, domain_name: str, recipient_label: str,
         "pdf_intro": pdf_intro,
         "period_start": period_start.date().isoformat(),
         "period_end": period_end.date().isoformat(),
+        "period_label": period_label(period_start, period_end),
         "signoff_name": settings["report_signoff_name"],
         "teaser_hook": teaser_hook,
         **sections,
@@ -2923,6 +3113,7 @@ def _build_group_context(conn, group_id: int, group_name: str, recipient_label: 
         "pdf_intro": _pdf_intro_line(bool(pdf_intro_row and pdf_intro_row["pdf_intro_shown"])),
         "period_start": period_start.date().isoformat(),
         "period_end": period_end.date().isoformat(),
+        "period_label": period_label(period_start, period_end),
         "signoff_name": settings["report_signoff_name"],
         "teaser_hook": _group_teaser_hook(member_summaries),
     }

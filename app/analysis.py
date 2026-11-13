@@ -2025,15 +2025,42 @@ def mailgun_daily_series(conn, domain_id: int, days: int = 60):
     return series
 
 
-def postmaster_daily_series(conn, domain_id: int, days: int = 60):
+def postmaster_domains_for(conn, domain_id: int) -> list:
+    """The Postmaster Tools domains whose data belongs to this tracked domain:
+    an exact name match, or a subdomain no closer tracked domain claims.
+
+    Not the stored domain_id: postmaster.match_tracked_domains takes the first
+    tracked suffix it finds, so ats.aikyamjobs.org's rows (67 days, all 0%) are
+    stored under aikyamjobs.org. Averaged together they roughly halved
+    aikyamjobs.org's reported spam rate, and the chart alternated between the
+    two series day by day (found 2026-11-13)."""
+    names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM domains")}
+    own = names.get(domain_id)
+    out = []
+    for r in conn.execute("SELECT DISTINCT postmaster_domain FROM postmaster_daily_stats"):
+        pm = r["postmaster_domain"]
+        best = max((n for n in names.values() if pm == n or pm.endswith("." + n)), key=len, default=None)
+        if best == own:
+            out.append(pm)
+    return out
+
+
+def postmaster_daily_series(conn, domain_id: int, days: int = 60, end=None):
     """List of (date_str, spam_rate) from our own accumulated daily Postmaster
     pulls -- Postmaster Tools itself only exposes a rolling window per query,
-    so history here only goes back to whenever this domain was first checked."""
-    since = (datetime.datetime.utcnow().date() - datetime.timedelta(days=days)).isoformat()
+    so history here only goes back to whenever this domain was first checked.
+    One point per day (days covered by two Postmaster domains are averaged),
+    ending at `end` (default today)."""
+    end_date = end or datetime.datetime.utcnow().date()
+    since = (end_date - datetime.timedelta(days=days)).isoformat()
+    pm_domains = postmaster_domains_for(conn, domain_id)
+    if not pm_domains:
+        return []
     rows = conn.execute(
-        """SELECT day, spam_rate FROM postmaster_daily_stats
-           WHERE domain_id=? AND day >= ? ORDER BY day""",
-        (domain_id, since),
+        f"""SELECT day, AVG(spam_rate) AS spam_rate FROM postmaster_daily_stats
+            WHERE postmaster_domain IN ({",".join("?" * len(pm_domains))}) AND day >= ? AND day <= ?
+            GROUP BY day ORDER BY day""",
+        (*pm_domains, since, end_date.isoformat()),
     ).fetchall()
     return [(r["day"], r["spam_rate"]) for r in rows]
 

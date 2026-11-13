@@ -15,12 +15,12 @@ def check_unsubscribe_compliance(list_unsubscribe: str, list_unsubscribe_post: s
     List-Unsubscribe-Post: List-Unsubscribe=One-Click exactly."""
     issues = []
     if not list_unsubscribe:
-        issues.append("Missing List-Unsubscribe header -- required for bulk senders (5,000+/day)")
+        issues.append("Missing List-Unsubscribe header: required for bulk senders (5,000+/day)")
     elif "https://" not in list_unsubscribe and "mailto:" not in list_unsubscribe:
         issues.append("List-Unsubscribe header doesn't contain a usable https:// or mailto: link")
 
     if not list_unsubscribe_post:
-        issues.append("Missing List-Unsubscribe-Post header -- required for one-click unsubscribe")
+        issues.append("Missing List-Unsubscribe-Post header: required for one-click unsubscribe")
     elif list_unsubscribe_post.strip() != "List-Unsubscribe=One-Click":
         issues.append(f'List-Unsubscribe-Post value looks wrong: "{list_unsubscribe_post}" (should be exactly "List-Unsubscribe=One-Click")')
 
@@ -34,5 +34,5 @@ def check_header_hygiene(message_id: str, subject: str) -> list:
     if not message_id:
         issues.append("Missing Message-ID header")
     if subject and subject.strip().lower().startswith(("re:", "fwd:", "fw:")):
-        issues.append('Subject starts with "Re:"/"Fwd:" but this is a newsletter, not an actual reply/forward -- Gmail explicitly flags this as misleading')
+        issues.append('Subject starts with "Re:"/"Fwd:" but this is a newsletter, not an actual reply/forward, which Gmail explicitly flags as misleading')
     return issues
