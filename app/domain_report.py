@@ -1773,6 +1773,26 @@ def _newsletter_rates(items: list):
     return opened / delivered, clicked / delivered, bounced / (delivered + bounced), complained / delivered
 
 
+_DANGLING_WORDS = {"a", "an", "and", "at", "for", "from", "in", "of", "on", "or", "the", "to", "with", "&", "+", "-"}
+
+
+def _short_subject(subject: str, limit: int = 48) -> str:
+    """Whole words only: the public sample showed "...a CSR boost for disa…"
+    and "...NGO documents? Re…". Drops a dangling "for"/"and" before the "…"."""
+    if len(subject) <= limit:
+        return subject
+    words = []
+    for w in subject.split():
+        if len(" ".join(words + [w])) > limit - 1:
+            break
+        words.append(w)
+    while len(words) > 1 and words[-1].lower().strip(":,;") in _DANGLING_WORDS:
+        words.pop()
+    if not words:
+        return subject[:limit - 1].rstrip() + "…"
+    return " ".join(words).rstrip(":,;-") + "…"
+
+
 def _campaign_table(conn, domain_id: int, start_date: str, end_date: str, limit: int = 8):
     """Per-newsletter real numbers for this period, most recent first --
     [{"subject", "send_day", "delivered", "open_pct", "click_pct"}, ...] or
@@ -1799,9 +1819,7 @@ def _campaign_table(conn, domain_id: int, start_date: str, end_date: str, limit:
         return None
     rows = []
     for c in this_period[:limit]:
-        subject = c["subject"]
-        if len(subject) > 52:
-            subject = subject[:51].rstrip() + "…"
+        subject = _short_subject(c["subject"])
         rows.append({
             "subject": subject,
             "send_day": c["send_day"],

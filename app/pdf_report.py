@@ -194,11 +194,22 @@ _PREAMBLE = '''
     if d.at(1) > max-val { max-val = d.at(1) }
   }
   if threshold != none and threshold > max-val { max-val = threshold }
-  // Every caller plots a share of a whole, so the scale stops at 100%: the
-  // 20% headroom used to put a "120%" gridline over a 98-100% delivery line.
-  // At exactly 100% the gridlines go in quarters so they read 0/25/50/75/100.
-  let ymax = calc.min(calc.max(max-val * 1.2, 0.001), calc.max(max-val, 1.0))
-  let steps = if ymax == 1.0 { 4 } else { 3 }
+  // Gridlines on round numbers (1, 2, 2.5 or 5 times a power of ten, in the
+  // units shown): 0/20/40/60% rather than the old 0/19.4/38.7/58.1%. Every
+  // caller plots a share of a whole, so the scale also stops at 100%: the old
+  // 20% headroom put a "120%" gridline over a 98-100% delivery line.
+  let shown-max = calc.max(max-val * scale * 1.15, 0.12)
+  let rough = shown-max / 4
+  let mag = calc.pow(10.0, calc.floor(calc.log(rough, base: 10)))
+  let f = rough / mag
+  let step = mag * (if f <= 1 { 1 } else if f <= 2 { 2 } else if f <= 2.5 { 2.5 } else if f <= 5 { 5 } else { 10 })
+  let steps = calc.ceil(shown-max / step - 0.000001)
+  let scale-top = steps * step
+  if unit == "%" and scale-top > 100 and max-val * scale <= 100 {
+    scale-top = 100
+    steps = 4
+  }
+  let ymax = scale-top / scale
   let last = data.at(n - 1)
   let fmt(v) = {
     let shown = v * scale

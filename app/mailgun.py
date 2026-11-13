@@ -34,7 +34,8 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analysis import ensure_default_settings, upsert_system_action
+from app.analysis import (ensure_default_settings, match_provider_domains, reattribute_provider_rows,
+                          upsert_system_action)
 from app.bounce_reasons import categorize_bounce
 from app.config import get_secret
 from app.db import get_connection, init_db
@@ -146,16 +147,10 @@ def match_tracked_domains(conn, mailgun_domains):
     """{mailgun_domain_name: (domain_id, tracked_domain_name)} for whichever
     Mailgun domains correspond to a domain (or subdomain of one) already in
     DMARCTool -- recomputed fresh each run, so newly ingested domains are
-    picked up automatically with no config change here.
+    picked up automatically with no config change here. Which tracked domain
+    owns a subdomain: see analysis.match_provider_domains.
     """
-    tracked = conn.execute("SELECT id, name FROM domains").fetchall()
-    matches = {}
-    for mg_name in mailgun_domains:
-        for row in tracked:
-            if mg_name == row["name"] or mg_name.endswith("." + row["name"]):
-                matches[mg_name] = (row["id"], row["name"])
-                break
-    return matches
+    return match_provider_domains(conn, mailgun_domains)
 
 
 def _bucket_totals(bucket):
@@ -487,6 +482,10 @@ def run_mailgun_checks(conn, verbose: bool = True) -> None:
     if verbose:
         print(f"[mailgun] {len(matches)} Mailgun domain(s) match a tracked domain "
               f"(of {len(mg_domains)} on the account)")
+    moved = reattribute_provider_rows(conn, matches, "mailgun")
+    conn.commit()
+    if moved and verbose:
+        print(f"[mailgun] moved {moved} stored row(s)/item(s) to the tracked domain that owns them")
 
     to_check = [mg for mg in matches if _stale(conn, mg, recheck_hours)]
     if verbose:

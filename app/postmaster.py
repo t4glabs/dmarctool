@@ -30,7 +30,8 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analysis import ensure_default_settings, likely_causal_senders, upsert_system_action
+from app.analysis import (ensure_default_settings, likely_causal_senders, match_provider_domains,
+                          reattribute_provider_rows, upsert_system_action)
 from app.config import get_secret
 from app.db import get_connection, init_db
 
@@ -171,14 +172,7 @@ def get_domain_verification_token(access_token, domain_name: str, method: str = 
 
 def match_tracked_domains(conn, pm_domains):
     """Same dynamic root-or-subdomain matching used for Mailgun."""
-    tracked = conn.execute("SELECT id, name FROM domains").fetchall()
-    matches = {}
-    for name in pm_domains:
-        for row in tracked:
-            if name == row["name"] or name.endswith("." + row["name"]):
-                matches[name] = (row["id"], row["name"])
-                break
-    return matches
+    return match_provider_domains(conn, pm_domains)
 
 
 def fetch_stats(domain, access_token, window_days):
@@ -297,10 +291,10 @@ def _check_missing_domains(conn, access_token, verified_names: set, min_volume: 
 
     `verified_names` MUST be the raw set of verified domain-name strings
     (pm_domains from list_verified_domains), checked by EXACT name -- not
-    match_tracked_domains()'s domain_id attribution, which deliberately
-    folds a verified subdomain into whichever tracked ANCESTOR domain it
-    matches first (the right behaviour for attributing traffic stats when
-    only the apex is tracked, but wrong here: it caused a real, confirmed
+    match_tracked_domains()'s domain_id attribution, which can fold a
+    verified subdomain into a tracked ANCESTOR domain (the right behaviour
+    for attributing traffic stats when the subdomain has no report of its
+    own, but wrong here: before 2026-11-13 it caused a real, confirmed
     bug where ats.aikyamjobs.org's own verification was invisible to this
     check because match_tracked_domains() had already attributed the name
     "ats.aikyamjobs.org" to the APEX domain's id instead of its own).
@@ -423,6 +417,10 @@ def run_postmaster_checks(conn, verbose: bool = True) -> None:
     if verbose:
         print(f"[postmaster] {len(matches)} verified domain(s) match a tracked domain "
               f"(of {len(pm_domains)} verified on the account)")
+    moved = reattribute_provider_rows(conn, matches, "postmaster")
+    conn.commit()
+    if moved and verbose:
+        print(f"[postmaster] moved {moved} stored row(s)/item(s) to the tracked domain that owns them")
 
     # Reminder for tracked domains with real Gmail volume that aren't verified
     # here at all -- cheap (only reads already-ingested DMARC data + the

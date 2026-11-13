@@ -2025,24 +2025,90 @@ def mailgun_daily_series(conn, domain_id: int, days: int = 60):
     return series
 
 
-def postmaster_domains_for(conn, domain_id: int) -> list:
-    """The Postmaster Tools domains whose data belongs to this tracked domain:
-    an exact name match, or a subdomain no closer tracked domain claims.
+_PROVIDER_TABLES = {
+    "mailgun": ("mailgun_domain", ("mailgun_stats", "mailgun_daily_stats", "mailgun_suppressions",
+                                   "mailgun_identity_stats", "mailgun_identity_failures", "mailgun_campaigns",
+                                   "mailgun_deferrals", "mailgun_domain_settings", "mailgun_failure_log")),
+    "postmaster": ("postmaster_domain", ("postmaster_stats", "postmaster_daily_stats", "postmaster_compliance")),
+}
+# Items whose ref_key is the provider domain (Mailgun) or "<postmaster domain>:<requirement>".
+_PROVIDER_ITEM_CATEGORIES = {
+    "mailgun": ("mailgun_new_suppressions", "mailgun_reputation", "mailgun_throttled"),
+    "postmaster": ("postmaster_compliance",),
+}
 
-    Not the stored domain_id: postmaster.match_tracked_domains takes the first
-    tracked suffix it finds, so ats.aikyamjobs.org's rows (67 days, all 0%) are
-    stored under aikyamjobs.org. Averaged together they roughly halved
-    aikyamjobs.org's reported spam rate, and the chart alternated between the
-    two series day by day (found 2026-11-13)."""
-    names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM domains")}
-    own = names.get(domain_id)
-    out = []
-    for r in conn.execute("SELECT DISTINCT postmaster_domain FROM postmaster_daily_stats"):
-        pm = r["postmaster_domain"]
-        best = max((n for n in names.values() if pm == n or pm.endswith("." + n)), key=len, default=None)
-        if best == own:
-            out.append(pm)
-    return out
+
+def match_provider_domains(conn, provider_domains) -> dict:
+    """{provider_domain: (domain_id, tracked_name)} for Mailgun/Postmaster
+    domains, shared by both matchers.
+
+    A provider domain belongs to the tracked domain it is, or sits under. When
+    it sits under more than one (ats.aikyamjobs.org under both itself and
+    aikyamjobs.org), the most specific one that has its OWN report (enabled, or
+    in a report group) wins; otherwise the outermost one does. So a tracked
+    newsletter subdomain with no report of its own (mails.arpo.in) keeps rolling
+    up into its parent's report, while ats.aikyamjobs.org's Google and Mailgun
+    data stops being counted as aikyamjobs.org's. The old rule took the first
+    tracked suffix in id order, which put ats under aikyamjobs.org and halved
+    aikyamjobs.org's reported spam rate (found 2026-11-13)."""
+    tracked = conn.execute("SELECT id, name FROM domains").fetchall()
+    reported = {r["id"] for r in conn.execute(
+        """SELECT d.id FROM domains d LEFT JOIN domain_report_settings s ON s.domain_id = d.id
+           WHERE s.enabled = 1 OR d.report_group_id IS NOT NULL""")}
+    matches = {}
+    for name in provider_domains:
+        candidates = sorted((r for r in tracked if name == r["name"] or name.endswith("." + r["name"])),
+                            key=lambda r: len(r["name"]), reverse=True)
+        if not candidates:
+            continue
+        owner = next((r for r in candidates[:-1] if r["id"] in reported), candidates[-1])
+        matches[name] = (owner["id"], owner["name"])
+    return matches
+
+
+def reattribute_provider_rows(conn, matches: dict, provider: str) -> int:
+    """Moves already-stored rows and action items for each matched provider
+    domain to the tracked domain match_provider_domains() now gives it, so a
+    change of owner (the rule above, or a subdomain getting its own report)
+    carries the history with it. Idempotent; runs before each provider check
+    writes anything. An open item that already has an open twin at the new
+    owner is closed as a duplicate instead of moved. Returns rows changed."""
+    col, tables = _PROVIDER_TABLES[provider]
+    categories = _PROVIDER_ITEM_CATEGORIES[provider]
+    changed = 0
+    for name, (owner_id, _owner_name) in matches.items():
+        for table in tables:
+            changed += conn.execute(f"UPDATE {table} SET domain_id = ? WHERE {col} = ? AND domain_id != ?",
+                                    (owner_id, name, owner_id)).rowcount
+        key_match = ("ref_key = ?" if provider == "mailgun"
+                     else "substr(ref_key, 1, length(?) + 1) = ? || ':'")
+        key_args = (name,) if provider == "mailgun" else (name, name)
+        items = conn.execute(
+            f"""SELECT id, category, ref_key, status FROM action_items
+                WHERE domain_id != ? AND category IN ({",".join("?" * len(categories))}) AND {key_match}""",
+            (owner_id, *categories, *key_args),
+        ).fetchall()
+        for item in items:
+            twin = item["status"] == "open" and conn.execute(
+                """SELECT 1 FROM action_items WHERE domain_id = ? AND category = ? AND ref_key = ?
+                   AND status = 'open'""",
+                (owner_id, item["category"], item["ref_key"]),
+            ).fetchone()
+            if twin:
+                conn.execute("UPDATE action_items SET status = 'dismissed', resolved_at = datetime('now') "
+                             "WHERE id = ?", (item["id"],))
+            else:
+                conn.execute("UPDATE action_items SET domain_id = ? WHERE id = ?", (owner_id, item["id"]))
+            changed += 1
+    return changed
+
+
+def postmaster_domains_for(conn, domain_id: int) -> list:
+    """The Postmaster Tools domains whose data belongs to this tracked domain,
+    by match_provider_domains()'s rule -- read by name so the report is right
+    even before reattribute_provider_rows() has moved the stored rows."""
+    names = [r["postmaster_domain"] for r in conn.execute("SELECT DISTINCT postmaster_domain FROM postmaster_daily_stats")]
+    return [pm for pm, (owner_id, _) in match_provider_domains(conn, names).items() if owner_id == domain_id]
 
 
 def postmaster_daily_series(conn, domain_id: int, days: int = 60, end=None):
